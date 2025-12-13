@@ -1,0 +1,21 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "BS2PRO-Controller",
+  "outputfilename": "BS2PRO-Controller",
+  "frontend:install": "bun install",
+  "frontend:build": "bun run build",
+  "frontend:dev:watcher": "bun run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "TIANLI0",
+    "email": "wutianli@tianli0.top"
+  },
+  "info": {
+    "companyName": "TIANLI0",
+    "productName": "BS2PRO-Controller",
+    "productVersion": "2.2.2",
+    "copyright": "Copyright © 2025 TIANLI0",
+    "comments": "飞智空间站的BS2/BS2PRO替代控制器"
+  },
+  "nsisType": "multiple"
+}

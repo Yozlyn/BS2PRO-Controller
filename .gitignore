@@ -1,0 +1,8 @@
+build/bin
+node_modules
+frontend/dist
+__pycache__/
+*.exe
+bridge/TempBridge/obj
+bridge/TempBridge/bin
+*.syso
