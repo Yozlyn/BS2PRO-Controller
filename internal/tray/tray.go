@@ -14,10 +14,10 @@ import (
 // Manager 系统托盘管理器
 type Manager struct {
 	logger       types.Logger
-	initialized  int32
-	ready        bool
+	initialized  int32 // atomic: 0=未初始化, 1=已初始化
+	readyState   int32 // atomic: 0=未就绪, 1=就绪
 	mutex        sync.Mutex
-	cleanupChan  chan bool
+	done         chan struct{} // 关闭此通道以通知所有 goroutine 退出
 	iconData     []byte
 	menuItems    *MenuItems
 	onShowWindow func()
@@ -26,9 +26,8 @@ type Manager struct {
 	getStatus    func() Status
 
 	// 监控托盘健康状态
-	lastIconRefresh   int64
-	iconRefreshTicker *time.Ticker
-	consecutiveFails  int32 // 连续失败计数
+	lastIconRefresh  int64
+	consecutiveFails int32 // 连续失败计数
 }
 
 // MenuItems 托盘菜单项结构
@@ -54,9 +53,9 @@ type Status struct {
 // NewManager 创建新的托盘管理器
 func NewManager(logger types.Logger, iconData []byte) *Manager {
 	return &Manager{
-		logger:      logger,
-		cleanupChan: make(chan bool),
-		iconData:    iconData,
+		logger:   logger,
+		done:     make(chan struct{}),
+		iconData: iconData,
 	}
 }
 
@@ -104,7 +103,7 @@ func (m *Manager) onTrayReady() {
 		if r := recover(); r != nil {
 			m.logError("托盘回调函数中发生panic: %v", r)
 			atomic.StoreInt32(&m.initialized, 0)
-			m.ready = false
+			atomic.StoreInt32(&m.readyState, 0)
 		}
 	}()
 
@@ -125,7 +124,7 @@ func (m *Manager) onTrayReady() {
 	}
 	m.menuItems = menuItems
 
-	m.ready = true
+	atomic.StoreInt32(&m.readyState, 1)
 	atomic.StoreInt64(&m.lastIconRefresh, time.Now().Unix())
 	atomic.StoreInt32(&m.consecutiveFails, 0)
 	m.logInfo("系统托盘初始化完成")
@@ -136,7 +135,7 @@ func (m *Manager) onTrayReady() {
 	// 定期更新托盘菜单状态
 	go m.updateMenuStatus()
 
-	// 启动托盘健康监控
+	// 启动托盘健康监控（定期刷新图标以应对 Explorer 重启等）
 	go m.startIconHealthMonitor()
 }
 
@@ -224,7 +223,7 @@ func (m *Manager) handleMenuEvents() {
 				m.onQuit()
 			}
 			return
-		case <-m.cleanupChan:
+		case <-m.done:
 			return
 		}
 	}
@@ -241,95 +240,93 @@ func (m *Manager) updateMenuStatus() {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		if !m.ready || atomic.LoadInt32(&m.initialized) == 0 {
-			m.logDebug("托盘不可用，停止更新")
-			return
-		}
+	for {
+		select {
+		case <-ticker.C:
+			// 如果托盘不可用，跳过本次更新但不退出，等待恢复
+			if atomic.LoadInt32(&m.readyState) == 0 || atomic.LoadInt32(&m.initialized) == 0 {
+				continue
+			}
 
-		// 安全地更新菜单项
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					m.logError("托盘更新时发生错误（可能是正在退出）: %v", r)
-					m.ready = false
-					atomic.StoreInt32(&m.initialized, 0)
+			// 安全地更新菜单项
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						m.logError("托盘更新时发生错误（可能是正在退出）: %v", r)
+					}
+				}()
+
+				if m.getStatus == nil || m.menuItems == nil {
+					return
+				}
+
+				status := m.getStatus()
+
+				// 更新设备状态
+				if status.Connected {
+					m.menuItems.DeviceStatus.SetTitle("设备状态: 已连接")
+				} else {
+					m.menuItems.DeviceStatus.SetTitle("设备状态: 未连接")
+				}
+
+				// 更新CPU温度信息
+				if status.CPUTemp > 0 {
+					m.menuItems.CPUTemperature.SetTitle(fmt.Sprintf("CPU温度: %d°C", status.CPUTemp))
+				} else {
+					m.menuItems.CPUTemperature.SetTitle("CPU温度: 无数据")
+				}
+
+				// 更新GPU温度信息
+				if status.GPUTemp > 0 {
+					m.menuItems.GPUTemperature.SetTitle(fmt.Sprintf("GPU温度: %d°C", status.GPUTemp))
+				} else {
+					m.menuItems.GPUTemperature.SetTitle("GPU温度: 无数据")
+				}
+
+				// 更新风扇转速信息
+				if status.CurrentRPM > 0 {
+					m.menuItems.FanSpeed.SetTitle(fmt.Sprintf("风扇转速: %d RPM", status.CurrentRPM))
+				} else {
+					m.menuItems.FanSpeed.SetTitle("风扇转速: 无数据")
+				}
+
+				// 同步智能变频状态
+				if status.AutoControlState {
+					m.menuItems.AutoControl.Check()
+				} else {
+					m.menuItems.AutoControl.Uncheck()
+				}
+
+				// 更新托盘提示
+				if status.Connected {
+					if status.AutoControlState {
+						tooltipText := fmt.Sprintf("BS2PRO 控制器 - 智能变频中\nCPU: %d°C GPU: %d°C", status.CPUTemp, status.GPUTemp)
+						if status.CurrentRPM > 0 {
+							tooltipText += fmt.Sprintf("\n风扇: %d RPM", status.CurrentRPM)
+						}
+						systray.SetTooltip(tooltipText)
+					} else {
+						tooltipText := "BS2PRO 控制器 - 手动模式"
+						if status.CurrentRPM > 0 {
+							tooltipText += fmt.Sprintf("\n风扇: %d RPM", status.CurrentRPM)
+						}
+						systray.SetTooltip(tooltipText)
+					}
+				} else {
+					systray.SetTooltip("BS2PRO 控制器 - 设备未连接")
 				}
 			}()
-
-			if m.getStatus == nil || m.menuItems == nil {
-				return
-			}
-
-			status := m.getStatus()
-
-			// 更新设备状态
-			if status.Connected {
-				m.menuItems.DeviceStatus.SetTitle("设备状态: 已连接")
-			} else {
-				m.menuItems.DeviceStatus.SetTitle("设备状态: 未连接")
-			}
-
-			// 更新CPU温度信息
-			if status.CPUTemp > 0 {
-				m.menuItems.CPUTemperature.SetTitle(fmt.Sprintf("CPU温度: %d°C", status.CPUTemp))
-			} else {
-				m.menuItems.CPUTemperature.SetTitle("CPU温度: 无数据")
-			}
-
-			// 更新GPU温度信息
-			if status.GPUTemp > 0 {
-				m.menuItems.GPUTemperature.SetTitle(fmt.Sprintf("GPU温度: %d°C", status.GPUTemp))
-			} else {
-				m.menuItems.GPUTemperature.SetTitle("GPU温度: 无数据")
-			}
-
-			// 更新风扇转速信息
-			if status.CurrentRPM > 0 {
-				m.menuItems.FanSpeed.SetTitle(fmt.Sprintf("风扇转速: %d RPM", status.CurrentRPM))
-			} else {
-				m.menuItems.FanSpeed.SetTitle("风扇转速: 无数据")
-			}
-
-			// 同步智能变频状态
-			if status.AutoControlState {
-				m.menuItems.AutoControl.Check()
-			} else {
-				m.menuItems.AutoControl.Uncheck()
-			}
-
-			// 更新托盘提示
-			if status.Connected {
-				if status.AutoControlState {
-					tooltipText := fmt.Sprintf("BS2PRO 控制器 - 智能变频中\nCPU: %d°C GPU: %d°C", status.CPUTemp, status.GPUTemp)
-					if status.CurrentRPM > 0 {
-						tooltipText += fmt.Sprintf("\n风扇: %d RPM", status.CurrentRPM)
-					}
-					systray.SetTooltip(tooltipText)
-				} else {
-					tooltipText := "BS2PRO 控制器 - 手动模式"
-					if status.CurrentRPM > 0 {
-						tooltipText += fmt.Sprintf("\n风扇: %d RPM", status.CurrentRPM)
-					}
-					systray.SetTooltip(tooltipText)
-				}
-			} else {
-				systray.SetTooltip("BS2PRO 控制器 - 设备未连接")
-			}
-		}()
+		case <-m.done:
+			return
+		}
 	}
 }
 
 // onTrayExit 托盘退出时的回调
 func (m *Manager) onTrayExit() {
 	m.logDebug("托盘退出回调被触发")
-	m.ready = false
+	atomic.StoreInt32(&m.readyState, 0)
 	atomic.StoreInt32(&m.initialized, 0)
-
-	// 停止图标刷新定时器
-	if m.iconRefreshTicker != nil {
-		m.iconRefreshTicker.Stop()
-	}
 }
 
 // startIconHealthMonitor 启动托盘图标健康监控
@@ -340,18 +337,18 @@ func (m *Manager) startIconHealthMonitor() {
 		}
 	}()
 
-	// 每60秒刷新一次托盘图标
-	m.iconRefreshTicker = time.NewTicker(60 * time.Second)
-	defer m.iconRefreshTicker.Stop()
+	// 每30秒刷新一次托盘图标，更及时地恢复 Explorer 重启后的图标
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 
 	for {
 		select {
-		case <-m.iconRefreshTicker.C:
-			if !m.ready || atomic.LoadInt32(&m.initialized) == 0 {
-				return
+		case <-ticker.C:
+			if atomic.LoadInt32(&m.readyState) == 0 || atomic.LoadInt32(&m.initialized) == 0 {
+				continue // 不退出，等待恢复
 			}
 			m.refreshTrayIcon()
-		case <-m.cleanupChan:
+		case <-m.done:
 			return
 		}
 	}
@@ -363,16 +360,12 @@ func (m *Manager) refreshTrayIcon() {
 		if r := recover(); r != nil {
 			m.logError("刷新托盘图标时发生panic: %v", r)
 			atomic.AddInt32(&m.consecutiveFails, 1)
-
-			if atomic.LoadInt32(&m.consecutiveFails) >= 3 {
-				m.logError("托盘图标刷新连续失败，标记需要重新初始化")
-				m.ready = false
-			}
 		}
 	}()
 
-	// 重新设置图标
+	// 重新设置图标和 tooltip，确保 Explorer 重启后图标恢复
 	systray.SetIcon(m.iconData)
+	systray.SetTooltip("BS2PRO 风扇控制器 - 运行中")
 
 	atomic.StoreInt32(&m.consecutiveFails, 0)
 	atomic.StoreInt64(&m.lastIconRefresh, time.Now().Unix())
@@ -382,7 +375,7 @@ func (m *Manager) refreshTrayIcon() {
 
 // IsReady 检查托盘是否就绪
 func (m *Manager) IsReady() bool {
-	return m.ready
+	return atomic.LoadInt32(&m.readyState) == 1
 }
 
 // IsInitialized 检查托盘是否已初始化
@@ -392,12 +385,25 @@ func (m *Manager) IsInitialized() bool {
 
 // Quit 退出托盘
 func (m *Manager) Quit() {
-	m.ready = false
+	atomic.StoreInt32(&m.readyState, 0)
+
+	m.mutex.Lock()
 	select {
-	case m.cleanupChan <- true:
+	case <-m.done:
+		// 已经关闭
 	default:
+		close(m.done)
 	}
-	systray.Quit()
+	m.mutex.Unlock()
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				m.logDebug("退出托盘时发生错误（可忽略）: %v", r)
+			}
+		}()
+		systray.Quit()
+	}()
 }
 
 // CheckHealth 检查托盘健康状态
@@ -408,56 +414,23 @@ func (m *Manager) CheckHealth() {
 		}
 	}()
 
-	if atomic.LoadInt32(&m.initialized) == 1 && !m.ready {
-		m.logError("检测到托盘状态异常，尝试重新初始化")
-		m.reinitializeTray()
+	// 如果托盘未初始化，无需检查
+	if atomic.LoadInt32(&m.initialized) == 0 {
 		return
 	}
 
+	// 检查图标是否长时间未刷新
 	lastRefresh := atomic.LoadInt64(&m.lastIconRefresh)
-	if lastRefresh > 0 && time.Now().Unix()-lastRefresh > 120 {
+	if lastRefresh > 0 && time.Now().Unix()-lastRefresh > 90 {
 		m.logInfo("检测到托盘图标长时间未刷新，尝试刷新")
 		m.refreshTrayIcon()
 	}
 
+	// 如果连续失败，也强制刷新图标
 	if atomic.LoadInt32(&m.consecutiveFails) >= 3 {
-		m.logError("检测到托盘连续失败，尝试重新初始化")
-		m.reinitializeTray()
+		m.logError("检测到托盘连续失败，尝试刷新图标")
+		m.refreshTrayIcon()
 	}
-}
-
-// reinitializeTray 重新初始化托盘
-func (m *Manager) reinitializeTray() {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	m.logInfo("正在重新初始化托盘...")
-
-	// 设置重置状态
-	atomic.StoreInt32(&m.initialized, 0)
-	atomic.StoreInt32(&m.consecutiveFails, 0)
-	m.ready = false
-
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				m.logDebug("退出旧托盘时发生错误（可忽略）: %v", r)
-			}
-		}()
-		systray.Quit()
-	}()
-
-	time.Sleep(2 * time.Second)
-
-	// 重新初始化
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				m.logError("重新初始化托盘时发生panic: %v", r)
-			}
-		}()
-		systray.Run(m.onTrayReady, m.onTrayExit)
-	}()
 }
 
 // 日志辅助方法
