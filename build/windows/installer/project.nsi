@@ -62,6 +62,8 @@ ManifestDPIAware true
 !define MUI_UNICON "..\icon.ico"
 # !define MUI_WELCOMEFINISHPAGE_BITMAP "resources\leftimage.bmp" #Include this to add a bitmap on the left side of the Welcome Page. Must be a size of 164x314
 !define MUI_FINISHPAGE_NOAUTOCLOSE # Wait on the INSTFILES page so the user can take a look into the details of the installation steps
+!define MUI_FINISHPAGE_RUN "$INSTDIR\${PRODUCT_EXECUTABLE}"
+!define MUI_FINISHPAGE_RUN_TEXT "安装完成后立即启动 BS2PRO 控制器"
 !define MUI_ABORTWARNING # This will warn the user if they exit from the installer.
 
 !insertmacro MUI_PAGE_WELCOME # Welcome to the installer page.
@@ -105,6 +107,7 @@ FunctionEnd
 # Function to clean up legacy/duplicate registry keys
 Function CleanLegacyRegistryKeys
     DetailPrint "正在清理历史注册表项..."
+    SetRegView 64
     
     # List of known legacy/duplicate registry key names
     # BS2PRO-controllerBS2PRO-controller (duplicate product name)
@@ -145,6 +148,7 @@ FunctionEnd
 # Function to detect existing installation and set install directory
 Function DetectExistingInstallation
     DetailPrint "正在检查已有安装..."
+    SetRegView 64
     
     Push $R0
     Push $R1
@@ -154,6 +158,20 @@ Function DetectExistingInstallation
     # DO NOT delete registry keys yet - we need them to find the install path!
     
     # Method 1: Try current/correct registry key (BS2PRO-Controller)
+    ReadRegStr $R0 HKLM "${UNINST_KEY}" "InstallLocation"
+    ${If} $R0 != ""
+        ${If} ${FileExists} "$R0\${PRODUCT_EXECUTABLE}"
+            StrCpy $INSTDIR $R0
+            DetailPrint "发现已有安装 (正确键-安装位置): $INSTDIR"
+            Goto found_installation
+        ${EndIf}
+        ${If} ${FileExists} "$R0\BS2PRO-Core.exe"
+            StrCpy $INSTDIR $R0
+            DetailPrint "发现已有安装 (正确键-安装位置-Core): $INSTDIR"
+            Goto found_installation
+        ${EndIf}
+    ${EndIf}
+
     ReadRegStr $R0 HKLM "${UNINST_KEY}" "UninstallString"
     ${If} $R0 != ""
         Push $R0
@@ -174,6 +192,20 @@ Function DetectExistingInstallation
     
     # Method 2: Check legacy/duplicate registry keys to find old installation
     # BS2PRO-controllerBS2PRO-controller (the current problematic key)
+    ReadRegStr $R0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\BS2PRO-controllerBS2PRO-controller" "InstallLocation"
+    ${If} $R0 != ""
+        ${If} ${FileExists} "$R0\${PRODUCT_EXECUTABLE}"
+            StrCpy $INSTDIR $R0
+            DetailPrint "发现旧版安装 (重复键-安装位置): $INSTDIR"
+            Goto found_installation
+        ${EndIf}
+        ${If} ${FileExists} "$R0\BS2PRO-Core.exe"
+            StrCpy $INSTDIR $R0
+            DetailPrint "发现旧版安装 (重复键-安装位置-Core): $INSTDIR"
+            Goto found_installation
+        ${EndIf}
+    ${EndIf}
+
     ReadRegStr $R0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\BS2PRO-controllerBS2PRO-controller" "UninstallString"
     ${If} $R0 != ""
         Push $R0
@@ -212,6 +244,20 @@ Function DetectExistingInstallation
     ${EndIf}
     
     # Method 3: Check TIANLI0BS2PRO-Controller (old company+product format)
+    ReadRegStr $R0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\TIANLI0BS2PRO-Controller" "InstallLocation"
+    ${If} $R0 != ""
+        ${If} ${FileExists} "$R0\${PRODUCT_EXECUTABLE}"
+            StrCpy $INSTDIR $R0
+            DetailPrint "发现旧版安装 (旧格式键-安装位置): $INSTDIR"
+            Goto found_installation
+        ${EndIf}
+        ${If} ${FileExists} "$R0\BS2PRO-Core.exe"
+            StrCpy $INSTDIR $R0
+            DetailPrint "发现旧版安装 (旧格式键-安装位置-Core): $INSTDIR"
+            Goto found_installation
+        ${EndIf}
+    ${EndIf}
+
     ReadRegStr $R0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\TIANLI0BS2PRO-Controller" "UninstallString"
     ${If} $R0 != ""
         Push $R0
@@ -231,6 +277,20 @@ Function DetectExistingInstallation
     ${EndIf}
     
     # Method 4: Check TIANLI0BS2PRO (wails.json generates this)
+    ReadRegStr $R0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\TIANLI0BS2PRO" "InstallLocation"
+    ${If} $R0 != ""
+        ${If} ${FileExists} "$R0\${PRODUCT_EXECUTABLE}"
+            StrCpy $INSTDIR $R0
+            DetailPrint "发现旧版安装 (TIANLI0BS2PRO-安装位置): $INSTDIR"
+            Goto found_installation
+        ${EndIf}
+        ${If} ${FileExists} "$R0\BS2PRO-Core.exe"
+            StrCpy $INSTDIR $R0
+            DetailPrint "发现旧版安装 (TIANLI0BS2PRO-安装位置-Core): $INSTDIR"
+            Goto found_installation
+        ${EndIf}
+    ${EndIf}
+
     ReadRegStr $R0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\TIANLI0BS2PRO" "UninstallString"
     ${If} $R0 != ""
         Push $R0
@@ -376,7 +436,7 @@ Function StopRunningInstances
     # Try to stop the core service first (it manages the fan control)
     # Use /FI with proper error handling
     ClearErrors
-    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /IM "BS2PRO-Core.exe" /T 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /IM "BS2PRO-Core.exe" /T'
     Pop $0
     Pop $1
     ${If} $0 == 0
@@ -385,13 +445,13 @@ Function StopRunningInstances
     ${EndIf}
     
     # Force kill if still running (ignore errors)
-    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO-Core.exe" /T 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO-Core.exe" /T'
     Pop $0
     Pop $1
     
     # Try to stop the main application gracefully first
     ClearErrors
-    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /T 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /T'
     Pop $0
     Pop $1
     ${If} $0 == 0
@@ -400,21 +460,35 @@ Function StopRunningInstances
     ${EndIf}
     
     # Force kill if still running (ignore errors)
-    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "${PRODUCT_EXECUTABLE}" /T 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "${PRODUCT_EXECUTABLE}" /T'
+    Pop $0
+    Pop $1
+
+    # Backward compatibility: kill legacy main executable names
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO-Controller.exe" /T'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO-controller.exe" /T'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO.exe" /T'
     Pop $0
     Pop $1
     
     # Stop any bridge processes (ignore errors)
-    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "TempBridge.exe" /T 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "TempBridge.exe" /T'
     Pop $0
     Pop $1
+
+    # Stop and remove kernel driver service that may lock TempBridge.sys
+    Call StopBridgeDriver
     
     # Remove scheduled task if exists (ignore errors)
     DetailPrint "正在清理计划任务..."
-    nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Controller" /f 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Controller" /f'
     Pop $0
     Pop $1
-    nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Core" /f 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Core" /f'
     Pop $0
     Pop $1
     
@@ -423,6 +497,90 @@ Function StopRunningInstances
     Sleep 2000
     
     DetailPrint "进程清理完成"
+FunctionEnd
+
+# Function to stop and remove TempBridge kernel driver service
+Function StopBridgeDriver
+    DetailPrint "正在停止驱动服务 R0TempBridge..."
+
+    # Stop running driver service (ignore failures if service does not exist)
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" stop "R0TempBridge"'
+    Pop $0
+    Pop $1
+    Sleep 1200
+
+    # Delete service entry to release lock for overwrite during upgrade
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" delete "R0TempBridge"'
+    Pop $0
+    Pop $1
+
+    # Compatibility: other possible driver service names used by hardware monitor libs
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" stop "R0LibreHardwareMonitor"'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" delete "R0LibreHardwareMonitor"'
+    Pop $0
+    Pop $1
+
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" stop "R0WinRing0"'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" delete "R0WinRing0"'
+    Pop $0
+    Pop $1
+
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" stop "WinRing0_1_2_0"'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" delete "WinRing0_1_2_0"'
+    Pop $0
+    Pop $1
+    Sleep 800
+
+    # Best effort delete of driver file in current install dir
+    ${If} ${FileExists} "$INSTDIR\bridge\TempBridge.sys"
+        Delete /REBOOTOK "$INSTDIR\bridge\TempBridge.sys"
+    ${EndIf}
+FunctionEnd
+
+# Uninstall-side function (NSIS requires un.* functions in uninstall section)
+Function un.StopBridgeDriver
+    DetailPrint "正在停止驱动服务 R0TempBridge..."
+
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" stop "R0TempBridge"'
+    Pop $0
+    Pop $1
+    Sleep 1200
+
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" delete "R0TempBridge"'
+    Pop $0
+    Pop $1
+
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" stop "R0LibreHardwareMonitor"'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" delete "R0LibreHardwareMonitor"'
+    Pop $0
+    Pop $1
+
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" stop "R0WinRing0"'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" delete "R0WinRing0"'
+    Pop $0
+    Pop $1
+
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" stop "WinRing0_1_2_0"'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" delete "WinRing0_1_2_0"'
+    Pop $0
+    Pop $1
+    Sleep 800
+
+    ${If} ${FileExists} "$INSTDIR\bridge\TempBridge.sys"
+        Delete /REBOOTOK "$INSTDIR\bridge\TempBridge.sys"
+    ${EndIf}
 FunctionEnd
 
 # Function to backup user data before upgrade
@@ -554,10 +712,10 @@ Section "开机自启动" SEC_AUTOSTART
     
     # First, remove any existing auto-start entries to ensure clean state
     DetailPrint "正在清理现有自启动项..."
-    nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Controller" /f 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Controller" /f'
     Pop $0
     Pop $1
-    nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Core" /f 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Core" /f'
     Pop $0
     Pop $1
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "BS2PRO-Controller"
@@ -597,42 +755,56 @@ Section "uninstall"
     
     # Stop core service first (ignore errors)
     DetailPrint "正在停止 BS2PRO-Core.exe..."
-    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /IM "BS2PRO-Core.exe" /T 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /IM "BS2PRO-Core.exe" /T'
     Pop $0
     Pop $1
     Sleep 1000
-    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO-Core.exe" /T 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO-Core.exe" /T'
     Pop $0
     Pop $1
     
     # Stop main application (ignore errors)
     DetailPrint "正在停止 ${PRODUCT_EXECUTABLE}..."
-    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /T 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /T'
     Pop $0
     Pop $1
     Sleep 1000
-    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "${PRODUCT_EXECUTABLE}" /T 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "${PRODUCT_EXECUTABLE}" /T'
+    Pop $0
+    Pop $1
+
+    # Backward compatibility: stop legacy main executable names
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO-Controller.exe" /T'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO-controller.exe" /T'
+    Pop $0
+    Pop $1
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO.exe" /T'
     Pop $0
     Pop $1
     
     # Stop bridge processes (ignore errors)
     DetailPrint "正在停止 TempBridge.exe..."
-    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /IM "TempBridge.exe" /T 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /IM "TempBridge.exe" /T'
     Pop $0
     Pop $1
     Sleep 500
-    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "TempBridge.exe" /T 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "TempBridge.exe" /T'
     Pop $0
     Pop $1
+
+    # Stop and remove kernel driver service to release TempBridge.sys lock
+    Call un.StopBridgeDriver
     
     # Remove auto-start entries
     DetailPrint "正在移除自启动项..."
     
     # Remove scheduled task (ignore errors if not exists)
-    nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Controller" /f 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Controller" /f'
     Pop $0
     Pop $1
-    nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Core" /f 2>nul'
+    nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Core" /f'
     Pop $0
     Pop $1
     
