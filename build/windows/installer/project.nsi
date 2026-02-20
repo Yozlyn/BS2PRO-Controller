@@ -674,11 +674,6 @@ Section "主程序 (必需)" SEC_MAIN
     DetailPrint "正在安装核心服务..."
     File "..\..\bin\BS2PRO-Core.exe"
     
-    # Copy bridge directory and its contents
-    DetailPrint "正在安装桥接组件..."
-    SetOutPath $INSTDIR\bridge
-    File /r "..\..\bin\bridge\*.*"
-    
     # Return to main install directory
     SetOutPath $INSTDIR
     
@@ -823,10 +818,9 @@ Section "uninstall"
 
     # Remove application data directories
     DetailPrint "正在移除应用数据..."
-    RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
+    SetShellVarContext current
     RMDir /r "$APPDATA\BS2PRO-Controller"
-    RMDir /r "$LOCALAPPDATA\BS2PRO-Controller"
-    RMDir /r "$TEMP\BS2PRO-Controller"
+    SetShellVarContext all
 
     # Remove installation directory and all contents
     DetailPrint "正在移除安装文件..."
@@ -856,8 +850,9 @@ Section "uninstall"
     DetailPrint "卸载完成"
     
     # Optional: Ask user if they want to remove configuration files
-    MessageBox MB_YESNO|MB_ICONQUESTION "是否删除所有配置文件和日志？" IDNO skip_config
-    RMDir /r "$APPDATA\BS2PRO"
-    RMDir /r "$LOCALAPPDATA\BS2PRO"
+    MessageBox MB_YESNO|MB_ICONQUESTION "是否删除所有配置文件？" IDNO skip_config
+    SetShellVarContext current
+    RMDir /r "$PROFILE\.bs2pro-controller"
+    SetShellVarContext all
     skip_config:
 SectionEnd

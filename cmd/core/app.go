@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/TIANLI0/BS2PRO-Controller/internal/asus"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/autostart"
-	"github.com/TIANLI0/BS2PRO-Controller/internal/bridge"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/config"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/device"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/ipc"
@@ -34,7 +34,7 @@ type CoreApp struct {
 
 	// 管理器
 	deviceManager    *device.Manager
-	bridgeManager    *bridge.Manager
+	asusClient       *asus.Client
 	tempReader       *temperature.Reader
 	configManager    *config.Manager
 	trayManager      *tray.Manager
@@ -80,9 +80,14 @@ func NewCoreApp(debugMode, isAutoStart bool) *CoreApp {
 	}
 
 	// 创建管理器
-	bridgeMgr := bridge.NewManager(customLogger)
+	// 初始化 ASUS ACPI 客户端
+	asusClient, err := asus.NewClient()
+	if err != nil {
+		customLogger.Warn("ASUS ACPI 客户端初始化失败: %v", err)
+	}
+
 	deviceMgr := device.NewManager(customLogger)
-	tempReader := temperature.NewReader(bridgeMgr, customLogger)
+	tempReader := temperature.NewReader(asusClient, customLogger)
 	configMgr := config.NewManager(installDir, customLogger)
 	trayMgr := tray.NewManager(customLogger, iconData)
 	autostartMgr := autostart.NewManager(customLogger)
@@ -90,7 +95,7 @@ func NewCoreApp(debugMode, isAutoStart bool) *CoreApp {
 	app := &CoreApp{
 		ctx:                context.Background(),
 		deviceManager:      deviceMgr,
-		bridgeManager:      bridgeMgr,
+		asusClient:         asusClient,
 		tempReader:         tempReader,
 		currentTemp:        types.TemperatureData{BridgeOk: true},
 		configManager:      configMgr,
@@ -202,8 +207,11 @@ func (a *CoreApp) Stop() {
 	// 停止所有监控
 	a.DisconnectDevice()
 
-	// 停止桥接程序
-	a.bridgeManager.Stop()
+	// 关闭 ASUS ACPI 客户端
+	if a.asusClient != nil {
+		a.asusClient.Close()
+		a.logger.Info("ASUS ACPI客户端已安全关闭")
+	}
 
 	// 停止 IPC 服务器
 	if a.ipcServer != nil {
@@ -406,11 +414,50 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) ipc.Response {
 		return a.dataResponse(temp)
 
 	case ipc.ReqTestBridgeProgram:
-		data := a.bridgeManager.GetTemperature()
+		// 测试 ASUS ACPI 接口
+		var data types.BridgeTemperatureData
+		if a.asusClient != nil {
+			// 尝试读取 CPU 温度来测试接口
+			cpuTemp, err := a.asusClient.GetCPUTemperature()
+			if err == nil && cpuTemp > 0 && cpuTemp < 150 {
+				data = types.BridgeTemperatureData{
+					CpuTemp:    cpuTemp,
+					GpuTemp:    0, // GPU 温度由其他方式读取
+					MaxTemp:    cpuTemp,
+					UpdateTime: time.Now().Unix(),
+					Success:    true,
+					Error:      "",
+				}
+			} else {
+				data = types.BridgeTemperatureData{
+					Success: false,
+					Error:   fmt.Sprintf("ASUS ACPI接口测试失败: %v", err),
+				}
+			}
+		} else {
+			data = types.BridgeTemperatureData{
+				Success: false,
+				Error:   "ASUS ACPI客户端未初始化",
+			}
+		}
 		return a.dataResponse(data)
 
 	case ipc.ReqGetBridgeProgramStatus:
-		status := a.bridgeManager.GetStatus()
+		// 返回 ASUS 客户端状态
+		var status map[string]interface{}
+		if a.asusClient != nil {
+			status = map[string]interface{}{
+				"running": true,
+				"status":  "ASUS ACPI接口运行中",
+				"type":    "asus_acpi",
+			}
+		} else {
+			status = map[string]interface{}{
+				"running": false,
+				"status":  "ASUS ACPI接口未初始化",
+				"type":    "none",
+			}
+		}
 		return a.dataResponse(status)
 
 	// 自启动相关

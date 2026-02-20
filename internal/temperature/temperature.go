@@ -2,28 +2,29 @@
 package temperature
 
 import (
+	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/TIANLI0/BS2PRO-Controller/internal/bridge"
+	"github.com/TIANLI0/BS2PRO-Controller/internal/asus"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
 	"github.com/shirou/gopsutil/v4/sensors"
 )
 
 // Reader 温度读取器
 type Reader struct {
-	bridgeManager *bridge.Manager
-	logger        types.Logger
+	asusClient *asus.Client
+	logger     types.Logger
 }
 
 // NewReader 创建新的温度读取器
-func NewReader(bridgeManager *bridge.Manager, logger types.Logger) *Reader {
+func NewReader(asusClient *asus.Client, logger types.Logger) *Reader {
 	return &Reader{
-		bridgeManager: bridgeManager,
-		logger:        logger,
+		asusClient: asusClient,
+		logger:     logger,
 	}
 }
 
@@ -34,30 +35,36 @@ func (r *Reader) Read() types.TemperatureData {
 		BridgeOk:   true,
 	}
 
-	// 优先使用桥接程序读取温度
-	bridgeTemp := r.bridgeManager.GetTemperature()
-	if bridgeTemp.Success {
-		temp.CPUTemp = bridgeTemp.CpuTemp
-		temp.GPUTemp = bridgeTemp.GpuTemp
-		temp.MaxTemp = bridgeTemp.MaxTemp
-		temp.BridgeOk = true
-		temp.BridgeMsg = ""
-		return temp
+	// 使用 ASUS 接口读取 CPU 温度
+	var cpuTemp int
+	var err error
+
+	if r.asusClient != nil {
+		cpuTemp, err = r.asusClient.GetCPUTemperature()
+	} else {
+		err = fmt.Errorf("ASUS客户端未初始化")
 	}
 
-	// 如果桥接程序失败，使用备用方法
-	r.logger.Warn("桥接程序读取温度失败: %s, 使用备用方法", bridgeTemp.Error)
-	temp.BridgeOk = false
-	temp.BridgeMsg = "CPU/GPU 温度获取失败，可能被安全软件拦截，请将 TempBridge.exe 加入白名单或重新安装后再试。"
+	if err == nil && cpuTemp > 0 && cpuTemp < 150 {
+		temp.CPUTemp = cpuTemp
+		temp.BridgeMsg = "使用ASUS ACPI接口"
+	} else {
+		// 降级方案
+		temp.BridgeOk = false
+		temp.BridgeMsg = "ASUS 接口异常或不支持，已切换至备用WMI/传感器读取模式"
+		r.logger.Debug("ASUS 读取失败: %v, 使用备用方法", err)
+		temp.CPUTemp = r.readCPUTemperature()
+	}
 
-	// 读取CPU温度
-	temp.CPUTemp = r.readCPUTemperature()
-
-	// 读取GPU温度
+	// 读取 GPU 温度
 	temp.GPUTemp = r.readGPUTemperature()
 
 	// 计算最高温度
-	temp.MaxTemp = max(temp.CPUTemp, temp.GPUTemp)
+	if temp.CPUTemp > temp.GPUTemp {
+		temp.MaxTemp = temp.CPUTemp
+	} else {
+		temp.MaxTemp = temp.GPUTemp
+	}
 
 	return temp
 }

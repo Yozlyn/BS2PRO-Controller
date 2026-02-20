@@ -22,6 +22,9 @@ echo Building core service...
 go-winres make --in cmd/core/winres/winres.json --out cmd/core/rsrc
 go build -ldflags "!LDFLAGS!" -o build/bin/BS2PRO-Core.exe ./cmd/core/
 
+REM Add NSIS to PATH for installer creation
+set PATH=%PATH%;C:\Program Files (x86)\NSIS\Bin
+
 REM Build main application with wails
 echo Building main application...
 wails build -nsis -ldflags "!LDFLAGS!"

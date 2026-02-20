@@ -29,6 +29,17 @@ func init() {
 	mainLogger = logger.Sugar()
 }
 
+// getWebView2DataPath 获取WebView2用户数据目录路径
+func getWebView2DataPath() string {
+	appData, err := os.UserConfigDir()
+	if err != nil {
+		homeDir, _ := os.UserHomeDir()
+		appData = filepath.Join(homeDir, "AppData", "Roaming")
+	}
+
+	return filepath.Join(appData, "BS2PRO-Controller")
+}
+
 var wailsContext *context.Context
 
 // onSecondInstanceLaunch 当第二个实例启动时的回调函数
@@ -151,6 +162,7 @@ func main() {
 		},
 		Windows: &windows.Options{
 			WindowIsTranslucent: true,
+			WebviewUserDataPath: getWebView2DataPath(),
 		},
 		Bind: []any{
 			app,
