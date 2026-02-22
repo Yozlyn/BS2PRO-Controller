@@ -22,7 +22,8 @@ import {
   GetDebugInfo,
   SetDebugMode,
   UpdateGuiResponseTime,
-  SetCustomSpeed
+  SetCustomSpeed,
+  SetRGBMode,
   // CheckWindowsAutoStart,
   // SetWindowsAutoStart
 } from '../../../wailsjs/go/main/App';
@@ -104,6 +105,10 @@ class ApiService {
 
   async setBrightness(percentage: number): Promise<boolean> {
     return await SetBrightness(percentage);
+  }
+
+  async setRGBMode(params: { mode: string; colors: { r: number; g: number; b: number }[]; speed: string; brightness: number }): Promise<boolean> {
+    return await SetRGBMode(params as any);
   }
 
   // Windows自启动相关

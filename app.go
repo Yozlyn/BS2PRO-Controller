@@ -32,6 +32,8 @@ type (
 	TemperatureData       = types.TemperatureData
 	BridgeTemperatureData = types.BridgeTemperatureData
 	AppConfig             = types.AppConfig
+	RGBModeParams         = ipc.SetRGBModeParams
+	RGBColorParam         = ipc.RGBColorParam
 )
 
 var guiLogger *zap.SugaredLogger
@@ -337,6 +339,18 @@ func (a *App) SetSmartStartStop(mode string) bool {
 func (a *App) SetBrightness(percentage int) bool {
 	resp, err := a.sendRequest(ipc.ReqSetBrightness, ipc.SetIntParams{Value: percentage})
 	if err != nil {
+		return false
+	}
+	var success bool
+	json.Unmarshal(resp.Data, &success)
+	return success
+}
+
+// SetRGBMode 设置RGB灯效模式
+func (a *App) SetRGBMode(params ipc.SetRGBModeParams) bool {
+	resp, err := a.sendRequest(ipc.ReqSetRGBMode, params)
+	if err != nil {
+		guiLogger.Errorf("设置RGB模式失败: %v", err)
 		return false
 	}
 	var success bool

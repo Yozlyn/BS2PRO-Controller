@@ -532,6 +532,14 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) ipc.Response {
 	case ipc.ReqIsAutoStartLaunch:
 		return a.dataResponse(a.isAutoStartLaunch)
 
+	case ipc.ReqSetRGBMode:
+		var params ipc.SetRGBModeParams
+		if err := json.Unmarshal(req.Data, &params); err != nil {
+			return a.errorResponse("解析RGB参数失败: " + err.Error())
+		}
+		success := a.SetRGBMode(params)
+		return a.successResponse(success)
+
 	default:
 		return a.errorResponse(fmt.Sprintf("未知的请求类型: %s", req.Type))
 	}
@@ -966,6 +974,96 @@ func (a *CoreApp) SetBrightness(percentage int) bool {
 		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
 	}
 	return true
+}
+
+// SetRGBMode 设置RGB灯效模式
+func (a *CoreApp) SetRGBMode(params ipc.SetRGBModeParams) bool {
+	if !a.isConnected {
+		return false
+	}
+
+	// 转换速度
+	var speed byte
+	switch params.Speed {
+	case "fast":
+		speed = device.RGBSpeedFast
+	case "slow":
+		speed = device.RGBSpeedSlow
+	default:
+		speed = device.RGBSpeedMedium
+	}
+	brightness := byte(params.Brightness)
+
+	// 转换颜色列表
+	toRGBColor := func(c ipc.RGBColorParam) device.RGBColor {
+		return device.RGBColor{R: byte(c.R), G: byte(c.G), B: byte(c.B)}
+	}
+
+	var success bool
+	switch params.Mode {
+	case "smart":
+		success = a.deviceManager.SetRGBSmartTemp()
+	case "off":
+		success = a.deviceManager.SetRGBOff()
+	case "static_single":
+		color := device.RGBColor{R: 255, G: 255, B: 255}
+		if len(params.Colors) > 0 {
+			color = toRGBColor(params.Colors[0])
+		}
+		success = a.deviceManager.SetRGBStaticSingle(color, brightness)
+	case "static_multi":
+		var colors [3]device.RGBColor
+		colors[0] = device.RGBColor{R: 255, G: 0, B: 0}
+		colors[1] = device.RGBColor{R: 0, G: 255, B: 0}
+		colors[2] = device.RGBColor{R: 0, G: 0, B: 255}
+		for i := 0; i < 3 && i < len(params.Colors); i++ {
+			colors[i] = toRGBColor(params.Colors[i])
+		}
+		success = a.deviceManager.SetRGBStaticMulti(colors, brightness)
+	case "rotation":
+		colors := make([]device.RGBColor, 0)
+		for _, c := range params.Colors {
+			colors = append(colors, toRGBColor(c))
+		}
+		if len(colors) == 0 {
+			colors = []device.RGBColor{{255, 0, 0}, {0, 255, 0}, {0, 0, 255}}
+		}
+		success = a.deviceManager.SetRGBRotation(colors, speed, brightness)
+	case "breathing":
+		colors := make([]device.RGBColor, 0)
+		for _, c := range params.Colors {
+			colors = append(colors, toRGBColor(c))
+		}
+		if len(colors) == 0 {
+			colors = []device.RGBColor{{0, 255, 0}}
+		}
+		success = a.deviceManager.SetRGBBreathing(colors, speed, brightness)
+	case "flowing":
+		success = a.deviceManager.SetRGBFlowing(speed, brightness)
+	default:
+		return false
+	}
+
+	// 保存RGB配置到持久化配置
+	if success {
+		cfg := a.configManager.Get()
+		rgbColors := make([]types.RGBColorConfig, len(params.Colors))
+		for i, c := range params.Colors {
+			rgbColors[i] = types.RGBColorConfig{R: c.R, G: c.G, B: c.B}
+		}
+		cfg.RGBConfig = &types.RGBConfig{
+			Mode:       params.Mode,
+			Colors:     rgbColors,
+			Speed:      params.Speed,
+			Brightness: params.Brightness,
+		}
+		a.configManager.Update(cfg)
+		_ = a.configManager.Save()
+		if a.ipcServer != nil {
+			a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
+		}
+	}
+	return success
 }
 
 // SetWindowsAutoStart 设置Windows自启动
