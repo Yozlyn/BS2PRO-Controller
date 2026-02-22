@@ -1,19 +1,25 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { 
-  ChartBarIcon, 
-  PresentationChartLineIcon, 
+import {
+  ChartBarIcon,
+  PresentationChartLineIcon,
   CogIcon,
   ExclamationTriangleIcon,
   XMarkIcon,
+  ComputerDesktopIcon,
+  ArrowPathIcon,
 } from '@heroicons/react/24/outline';
+import { CheckCircleIcon } from '@heroicons/react/24/solid';
 import DeviceStatus from './components/DeviceStatus';
 import FanCurve from './components/FanCurve';
 import ControlPanel from './components/ControlPanel';
+import RGBControl from './components/RGBControl';
+import { ToggleSwitch, Button } from './components/ui';
 import { apiService } from './services/api';
 import { types } from '../../wailsjs/go/models';
 import { BrowserOpenURL } from '../../wailsjs/runtime/runtime';
+import clsx from 'clsx';
 
 const BRIDGE_WARNING_MESSAGE = 'CPU/GPU 温度读取失败，可能被 Windows Defender 拦截，请将 TempBridge.exe 加入白名单或尝试重新安装后再试。';
 
@@ -199,98 +205,153 @@ export default function Home() {
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
       {/* 头部 */}
-      <header className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-md shadow-lg border-b border-gray-200/50 dark:border-gray-700/50 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4">
-              <div className="flex-shrink-0">
-                {/* Logo区域 */}
-                <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg">
-                    <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="currentColor">
-                      <circle cx="12" cy="12" r="2" />
-                      <path d="M12 6c-1.5 0-3 .5-4 1.5L6.5 6C8 4.5 10 4 12 4s4 .5 5.5 2L16 7.5C15 6.5 13.5 6 12 6z" />
-                      <path d="M18 12c0 1.5-.5 3-1.5 4l1.5 1.5c1.5-1.5 2-3.5 2-5.5s-.5-4-2-5.5L16.5 8c1 1 1.5 2.5 1.5 4z" />
-                      <path d="M12 18c1.5 0 3-.5 4-1.5l1.5 1.5c-1.5 1.5-3.5 2-5.5 2s-4-.5-5.5-2L8 16.5c1 1 2.5 1.5 4 1.5z" />
-                      <path d="M6 12c0-1.5.5-3 1.5-4L6 6.5C4.5 8 4 10 4 12s.5 4 2 5.5L7.5 16C6.5 15 6 13.5 6 12z" />
-                    </svg>
+      <header className="sticky top-0 z-50 backdrop-blur-sm bg-white/80 dark:bg-gray-900/80 border-b border-gray-200/50 dark:border-gray-700/50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className={clsx(
+            'bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 p-5 relative overflow-hidden',
+            isConnected && 'bg-gradient-to-r from-white via-white to-blue-50/50 dark:from-gray-800 dark:via-gray-800 dark:to-blue-900/20'
+          )}>
+            {/* 背景装饰 */}
+            {isConnected && (
+              <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-blue-500/10 to-purple-500/10 rounded-full blur-2xl -translate-y-1/2 translate-x-1/2" />
+            )}
+            
+            <div className="flex items-center justify-between relative">
+              {/* 左侧：设备信息 */}
+              <div className="flex items-center gap-4">
+                {/* 设备图标 */}
+                <div className="relative">
+                  <div className={clsx(
+                    'w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-300',
+                    isConnected
+                      ? 'bg-gradient-to-br from-blue-500 to-indigo-600 shadow-lg shadow-blue-500/30'
+                      : 'bg-gray-100 dark:bg-gray-700/50'
+                  )}>
+                    <ComputerDesktopIcon className={clsx(
+                      'w-7 h-7 transition-colors',
+                      isConnected ? 'text-white' : 'text-gray-500 dark:text-gray-400'
+                    )} />
                   </div>
-                  <div>
-                    <h1 className="text-xl font-bold text-gray-900 dark:text-white">
-                      BS2PRO 压风控制器
-                    </h1>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">飞智空间站替代</p>
+                  {/* 连接状态指示点 */}
+                  <div className={clsx(
+                    'absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center ring-2 ring-white dark:ring-gray-800 transition-all duration-300',
+                    isConnected
+                      ? 'bg-green-500 shadow-lg shadow-green-500/50'
+                      : 'bg-gray-400 dark:bg-gray-500'
+                  )}>
+                    {isConnected ? (
+                      <CheckCircleIcon className="w-5 h-5 text-white" />
+                    ) : (
+                      <span className="w-2 h-2 rounded-full bg-white" />
+                    )}
                   </div>
+                </div>
+
+                {/* 设备名称和状态 */}
+                <div>
+                  <h1 className="text-xl font-bold text-gray-900 dark:text-white">
+                    BS2PRO 压风控制器
+                  </h1>
+                  {/* 已连接状态 */}
+                  <div className="mt-1 flex items-center gap-2">
+                    <div className={`inline-flex items-center space-x-1 px-2 py-1 rounded-full text-xs font-medium transition-all duration-200 ${
+                      isConnected
+                        ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border border-green-200 dark:border-green-800'
+                        : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600'
+                    }`}>
+                      <div className={`w-1.5 h-1.5 rounded-full transition-all duration-200 ${
+                        isConnected ? 'bg-green-500' : 'bg-gray-400'
+                      }`}></div>
+                      <span>{isConnected ? '已连接' : '未连接'}</span>
+                    </div>
+                    
+                    {/* 最高功率状态 */}
+                    {isConnected && fanData && fanData.maxGear && (
+                      (() => {
+                        const maxGear = fanData.maxGear;
+                        let bgColor = '';
+                        let dotColor = '';
+                        let displayText = maxGear;
+                        
+                        if (typeof maxGear === 'string' && maxGear.startsWith('未知(')) {
+                          const match = maxGear.match(/未知\(0x([0-9A-Fa-f]+)\)/);
+                          if (match) {
+                            const hexValue = parseInt(match[1], 16);
+                            if (hexValue === 0x03 || hexValue === 0x0B || hexValue === 0x00 || hexValue === 0x01) {
+                              displayText = '标准';
+                            } else if (hexValue === 0x04 || hexValue === 0x0C || hexValue === 0x0D) {
+                              displayText = '强劲';
+                            } else if (hexValue === 0x06 || hexValue === 0x0E || hexValue === 0x0F) {
+                              displayText = '超频';
+                            }
+                            // 其他情况保持原样
+                          }
+                        }
+                        
+                        // 根据显示文本设置不同的颜色
+                        if (displayText === '超频') {
+                          bgColor = 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400 border border-purple-200 dark:border-purple-800';
+                          dotColor = 'bg-purple-500';
+                        } else if (displayText === '强劲') {
+                          bgColor = 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400 border border-orange-200 dark:border-orange-800';
+                          dotColor = 'bg-orange-500';
+                        } else if (displayText === '标准') {
+                          bgColor = 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600';
+                          dotColor = 'bg-gray-400';
+                        } else {
+                          // 未知状态
+                          bgColor = 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600';
+                          dotColor = 'bg-gray-400';
+                        }
+                        
+                        return (
+                          <div className={`inline-flex items-center space-x-1 px-2 py-1 rounded-full text-xs font-medium transition-all duration-200 ${bgColor}`}>
+                            <div className={`w-1.5 h-1.5 rounded-full transition-all duration-200 ${dotColor}`}></div>
+                            <span>{displayText}</span>
+                          </div>
+                        );
+                      })()
+                    )}
+                  </div>
+                  {!isConnected && (
+                    <div className="mt-1">
+                      <span className="text-sm text-gray-500 dark:text-gray-400">
+                        等待设备连接...
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
-            
-            <div className="flex items-center space-x-4">
-              {/* 快速状态显示 */}
-              {isConnected && (
-                <div className="hidden xl:flex items-center space-x-6 text-sm bg-gray-50 dark:bg-gray-700/50 rounded-xl px-4 py-2 border border-gray-200 dark:border-gray-600">
-                  <div className="flex items-center space-x-2">
-                    <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></div>
-                    <span className="text-gray-600 dark:text-gray-300">CPU:</span>
-                    <span className={`font-bold ${
-                      temperature?.maxTemp && temperature.maxTemp > 80 
-                        ? 'text-red-600 dark:text-red-400' 
-                        : temperature?.maxTemp && temperature.maxTemp > 70 
-                        ? 'text-yellow-600 dark:text-yellow-400'
-                        : 'text-green-600 dark:text-green-400'
-                    }`}>
-                      {temperature?.maxTemp || '--'}°C
-                    </span>
+
+              {/* 右侧：操作区 */}
+              <div className="flex items-center gap-4">
+                {isConnected && (
+                  <div className="flex items-center gap-3 px-4 py-2 bg-gray-50 dark:bg-gray-700/50 rounded-xl border border-gray-200 dark:border-gray-600">
+                    <ToggleSwitch
+                      enabled={config?.autoControl || false}
+                      onChange={async (enabled: boolean) => {
+                        try {
+                          await apiService.setAutoControl(enabled);
+                          const newConfig = types.AppConfig.createFrom({ ...config, autoControl: enabled });
+                          // 更新本地状态
+                          setConfig(newConfig);
+                        } catch (error) {
+                          console.error('设置智能变频失败:', error);
+                        }
+                      }}
+                      label="智能变频"
+                      color="blue"
+                    />
                   </div>
-                  
-                  <div className="w-px h-6 bg-gray-300 dark:bg-gray-600"></div>
-                  
-                  <div className="flex items-center space-x-2">
-                    <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
-                    <span className="text-gray-600 dark:text-gray-300">转速:</span>
-                    <span className="font-bold text-blue-600 dark:text-blue-400">
-                      {fanData?.currentRpm || '--'} RPM
-                    </span>
-                  </div>
-                  
-                  <div className="w-px h-6 bg-gray-300 dark:bg-gray-600"></div>
-                  
-                  <div className="flex items-center space-x-2">
-                    <div className={`w-2 h-2 rounded-full ${
-                      config?.autoControl ? 'bg-green-500' : 'bg-gray-400'
-                    }`}></div>
-                    <span className="text-gray-600 dark:text-gray-300">自动:</span>
-                    <span className={`font-bold ${
-                      config?.autoControl 
-                        ? 'text-green-600 dark:text-green-400' 
-                        : 'text-gray-600 dark:text-gray-400'
-                    }`}>
-                      {config?.autoControl ? '开启' : '关闭'}
-                    </span>
-                  </div>
-                </div>
-              )}
-              
-              {/* 错误提示 */}
-              {error && (
-                <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-lg border border-red-200 dark:border-red-800 flex items-center space-x-2">
-                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                  </svg>
-                  <span>{error}</span>
-                </div>
-              )}
-              
-              {/* 连接状态指示 */}
-              <div className={`flex items-center space-x-2 px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 ${
-                isConnected 
-                  ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border border-green-200 dark:border-green-800 shadow-lg shadow-green-100 dark:shadow-green-900/20'
-                  : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600'
-              }`}>
-                <div className={`w-2 h-2 rounded-full transition-all duration-200 ${
-                  isConnected ? 'bg-green-500 shadow-lg shadow-green-400' : 'bg-gray-400'
-                }`}></div>
-                <span>{isConnected ? '已连接' : '未连接'}</span>
+                )}
+                <Button
+                  variant={isConnected ? 'secondary' : 'primary'}
+                  size="sm"
+                  onClick={isConnected ? handleDisconnect : handleConnect}
+                  icon={isConnected ? undefined : <ArrowPathIcon className="w-4 h-4" />}
+                >
+                  {isConnected ? '断开连接' : '连接设备'}
+                </Button>
               </div>
             </div>
           </div>
@@ -366,15 +427,28 @@ export default function Home() {
         {/* 标签页内容 */}
         <div className="space-y-4 md:space-y-8">
           {activeTab === 'status' && (
-            <DeviceStatus
-              isConnected={isConnected}
-              fanData={fanData}
-              temperature={temperature}
-              config={config || new types.AppConfig()}
-              onConnect={handleConnect}
-              onDisconnect={handleDisconnect}
-              onConfigChange={handleConfigChange}
-            />
+            <div className="space-y-4">
+              <DeviceStatus
+                isConnected={isConnected}
+                fanData={fanData}
+                temperature={temperature}
+                config={config || new types.AppConfig()}
+                onConnect={handleConnect}
+                onDisconnect={handleDisconnect}
+                onConfigChange={handleConfigChange}
+              />
+              <RGBControl
+                isConnected={isConnected}
+                savedConfig={config?.rgbConfig}
+                onSetRGBMode={async (params) => {
+                  try {
+                    return await apiService.setRGBMode(params);
+                  } catch {
+                    return false;
+                  }
+                }}
+              />
+            </div>
           )}
 
           {activeTab === 'curve' && config && (

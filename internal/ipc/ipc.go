@@ -74,6 +74,9 @@ const (
 	ReqPing              RequestType = "Ping"
 	ReqIsAutoStartLaunch RequestType = "IsAutoStartLaunch"
 	ReqSubscribeEvents   RequestType = "SubscribeEvents"
+
+	// RGB 灯效控制
+	ReqSetRGBMode RequestType = "SetRGBMode"
 	ReqUnsubscribeEvents RequestType = "UnsubscribeEvents"
 )
 
@@ -535,4 +538,19 @@ type SetIntParams struct {
 type SetAutoStartWithMethodParams struct {
 	Enable bool   `json:"enable"`
 	Method string `json:"method"`
+}
+
+// RGBColorParam RGB颜色参数
+type RGBColorParam struct {
+	R int `json:"r"`
+	G int `json:"g"`
+	B int `json:"b"`
+}
+
+// SetRGBModeParams RGB灯效模式参数
+type SetRGBModeParams struct {
+	Mode       string          `json:"mode"`       // smart/rotation/breathing/static_single/static_multi/flowing/off
+	Colors     []RGBColorParam `json:"colors"`     // 颜色列表
+	Speed      string          `json:"speed"`      // fast/medium/slow
+	Brightness int             `json:"brightness"` // 0-100
 }

@@ -49,6 +49,7 @@ export interface AppConfig {
   guiMonitoring: boolean;      // GUI监控开关
   customSpeedEnabled: boolean; // 自定义转速开关
   customSpeedRPM: number;      // 自定义转速值(无上下限)
+  rgbConfig?: RGBConfig;        // RGB灯效配置
 }
 
 // 调试信息
@@ -77,6 +78,21 @@ export interface GearCommand {
   name: string;    // 挡位名称
   command: number[]; // 命令字节
   rpm: number;     // 对应转速
+}
+
+// RGB颜色配置
+export interface RGBColorConfig {
+  r: number;
+  g: number;
+  b: number;
+}
+
+// RGB灯效配置
+export interface RGBConfig {
+  mode: string;
+  colors: RGBColorConfig[];
+  speed: string;
+  brightness: number;
 }
 
 // 设备状态

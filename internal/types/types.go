@@ -63,6 +63,21 @@ type BridgeResponse struct {
 	Data    *BridgeTemperatureData `json:"data"`
 }
 
+// RGBColorConfig RGB颜色配置
+type RGBColorConfig struct {
+	R int `json:"r"`
+	G int `json:"g"`
+	B int `json:"b"`
+}
+
+// RGBConfig RGB灯效配置
+type RGBConfig struct {
+	Mode       string           `json:"mode"`
+	Colors     []RGBColorConfig `json:"colors"`
+	Speed      string           `json:"speed"`
+	Brightness int              `json:"brightness"`
+}
+
 // AppConfig 应用配置
 type AppConfig struct {
 	AutoControl             bool            `json:"autoControl"`             // 智能变频开关
@@ -82,6 +97,7 @@ type AppConfig struct {
 	CustomSpeedEnabled      bool            `json:"customSpeedEnabled"`      // 自定义转速开关
 	CustomSpeedRPM          int             `json:"customSpeedRPM"`          // 自定义转速值(无上下限)
 	IgnoreDeviceOnReconnect bool            `json:"ignoreDeviceOnReconnect"` // 断连后忽略设备状态(保持APP配置)
+	RGBConfig               *RGBConfig      `json:"rgbConfig"`               // RGB灯效配置
 }
 
 // Logger 日志记录器接口
@@ -160,5 +176,11 @@ func GetDefaultConfig(isAutoStart bool) AppConfig {
 		CustomSpeedEnabled:      false,
 		CustomSpeedRPM:          2000,
 		IgnoreDeviceOnReconnect: true, // 默认开启，防止断连后误判用户手动切换
+		RGBConfig: &RGBConfig{
+			Mode:       "smart",
+			Colors:     []RGBColorConfig{{R: 0, G: 0, B: 255}, {R: 255, G: 0, B: 0}, {R: 0, G: 255, B: 0}},
+			Speed:      "medium",
+			Brightness: 100,
+		},
 	}
 }

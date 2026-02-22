@@ -118,6 +118,10 @@ export function SetPowerOnStart(arg1) {
   return window['go']['main']['App']['SetPowerOnStart'](arg1);
 }
 
+export function SetRGBMode(arg1) {
+  return window['go']['main']['App']['SetRGBMode'](arg1);
+}
+
 export function SetSmartStartStop(arg1) {
   return window['go']['main']['App']['SetSmartStartStop'](arg1);
 }
