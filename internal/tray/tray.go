@@ -3,6 +3,7 @@ package tray
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,8 +24,11 @@ type Manager struct {
 	menuItems    *MenuItems
 	onShowWindow func()
 	onQuit       func()
+	onQuitAll    func()
 	onToggleAuto func() bool
 	getStatus    func() Status
+	menuQuitGUI  *systray.MenuItem
+	menuQuitAll  *systray.MenuItem
 
 	// 监控托盘健康状态
 	lastIconRefresh  int64
@@ -39,7 +43,6 @@ type MenuItems struct {
 	GPUTemperature *systray.MenuItem
 	FanSpeed       *systray.MenuItem
 	AutoControl    *systray.MenuItem
-	Quit           *systray.MenuItem
 }
 
 // Status 状态信息
@@ -62,13 +65,15 @@ func NewManager(logger types.Logger, iconData []byte) *Manager {
 
 // SetCallbacks 设置回调函数
 func (m *Manager) SetCallbacks(
-	onShowWindow func(),
+	onShow func(),
 	onQuit func(),
+	onQuitAll func(),
 	onToggleAuto func() bool,
 	getStatus func() Status,
 ) {
-	m.onShowWindow = onShowWindow
+	m.onShowWindow = onShow
 	m.onQuit = onQuit
+	m.onQuitAll = onQuitAll
 	m.onToggleAuto = onToggleAuto
 	m.getStatus = getStatus
 }
@@ -87,6 +92,8 @@ func (m *Manager) Init() {
 	m.logInfo("正在初始化系统托盘")
 
 	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
 		defer func() {
 			if r := recover(); r != nil {
 				m.logError("托盘初始化过程中发生panic: %v", r)
@@ -119,7 +126,6 @@ func (m *Manager) onTrayReady() {
 		return
 	}
 
-	// 左键单击托盘图标：显示主窗口；右键保持默认行为（打开托盘菜单）
 	systray.SetOnTapped(func() {
 		m.logDebug("托盘图标左键点击: 显示主窗口")
 		if m.onShowWindow != nil {
@@ -127,7 +133,6 @@ func (m *Manager) onTrayReady() {
 		}
 	})
 
-	// 创建托盘菜单
 	menuItems, err := m.createMenu()
 	if err != nil {
 		m.logError("创建托盘菜单失败: %v", err)
@@ -143,17 +148,29 @@ func (m *Manager) onTrayReady() {
 	atomic.StoreInt32(&m.consecutiveFails, 0)
 	m.logInfo("系统托盘初始化完成")
 
-	// 处理托盘菜单事件
 	go m.handleMenuEvents()
 
-	// 定期更新托盘菜单状态
-	go m.updateMenuStatus()
+	go func() {
+		for {
+			select {
+			case <-m.menuQuitGUI.ClickedCh:
+				if m.onQuit != nil {
+					m.onQuit()
+				}
+			case <-m.menuQuitAll.ClickedCh:
+				if m.onQuitAll != nil {
+					m.onQuitAll()
+				}
+			case <-m.done:
+				return
+			}
+		}
+	}()
 
-	// 启动托盘健康监控（定期刷新图标以应对 Explorer 重启等）
+	go m.updateMenuStatus()
 	go m.startIconHealthMonitor()
 }
 
-// setupIcon 设置托盘图标
 func (m *Manager) setupIcon() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -173,7 +190,6 @@ func (m *Manager) setupIcon() (err error) {
 	return nil
 }
 
-// createMenu 创建托盘菜单
 func (m *Manager) createMenu() (items *MenuItems, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -201,6 +217,9 @@ func (m *Manager) createMenu() (items *MenuItems, err error) {
 	items.FanSpeed = systray.AddMenuItem("风扇转速", "显示当前风扇转速")
 	items.FanSpeed.Disable()
 
+	m.menuQuitGUI = systray.AddMenuItem("退出GUI", "只关闭前端界面")
+	m.menuQuitAll = systray.AddMenuItem("彻底退出", "完全退出前端和底层守护服务")
+
 	// 智能变频状态 - 获取当前配置状态
 	autoControlEnabled := false
 	if m.getStatus != nil {
@@ -208,13 +227,9 @@ func (m *Manager) createMenu() (items *MenuItems, err error) {
 	}
 	items.AutoControl = systray.AddMenuItemCheckbox("智能变频", "启用/禁用智能变频", autoControlEnabled)
 
-	systray.AddSeparator()
-	items.Quit = systray.AddMenuItem("退出", "完全退出应用")
-
 	return items, nil
 }
 
-// handleMenuEvents 处理托盘菜单事件
 func (m *Manager) handleMenuEvents() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -222,7 +237,7 @@ func (m *Manager) handleMenuEvents() {
 		}
 	}()
 
-	if m.menuItems == nil || m.menuItems.Show == nil || m.menuItems.AutoControl == nil || m.menuItems.Quit == nil {
+	if m.menuItems == nil || m.menuItems.Show == nil || m.menuItems.AutoControl == nil {
 		m.logError("托盘菜单未正确初始化，无法处理菜单事件")
 		return
 	}
@@ -238,7 +253,6 @@ func (m *Manager) handleMenuEvents() {
 			m.logDebug("托盘菜单: 切换智能变频状态")
 			if m.onToggleAuto != nil {
 				newState := m.onToggleAuto()
-				// 立即更新UI状态
 				m.uiMutex.Lock()
 				if newState {
 					m.menuItems.AutoControl.Check()
@@ -247,19 +261,12 @@ func (m *Manager) handleMenuEvents() {
 				}
 				m.uiMutex.Unlock()
 			}
-		case <-m.menuItems.Quit.ClickedCh:
-			m.logInfo("托盘菜单: 用户请求退出应用")
-			if m.onQuit != nil {
-				m.onQuit()
-			}
-			return
 		case <-m.done:
 			return
 		}
 	}
 }
 
-// updateMenuStatus 定期更新托盘菜单状态
 func (m *Manager) updateMenuStatus() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -273,12 +280,10 @@ func (m *Manager) updateMenuStatus() {
 	for {
 		select {
 		case <-ticker.C:
-			// 如果托盘不可用，跳过本次更新但不退出，等待恢复
 			if atomic.LoadInt32(&m.readyState) == 0 || atomic.LoadInt32(&m.initialized) == 0 {
 				continue
 			}
 
-			// 安全地更新菜单项
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
@@ -294,42 +299,36 @@ func (m *Manager) updateMenuStatus() {
 				m.uiMutex.Lock()
 				defer m.uiMutex.Unlock()
 
-				// 更新设备状态
 				if status.Connected {
 					m.menuItems.DeviceStatus.SetTitle("设备状态: 已连接")
 				} else {
 					m.menuItems.DeviceStatus.SetTitle("设备状态: 未连接")
 				}
 
-				// 更新CPU温度信息
 				if status.CPUTemp > 0 {
 					m.menuItems.CPUTemperature.SetTitle(fmt.Sprintf("CPU温度: %d°C", status.CPUTemp))
 				} else {
 					m.menuItems.CPUTemperature.SetTitle("CPU温度: 无数据")
 				}
 
-				// 更新GPU温度信息
 				if status.GPUTemp > 0 {
 					m.menuItems.GPUTemperature.SetTitle(fmt.Sprintf("GPU温度: %d°C", status.GPUTemp))
 				} else {
 					m.menuItems.GPUTemperature.SetTitle("GPU温度: 无数据")
 				}
 
-				// 更新风扇转速信息
 				if status.CurrentRPM > 0 {
 					m.menuItems.FanSpeed.SetTitle(fmt.Sprintf("风扇转速: %d RPM", status.CurrentRPM))
 				} else {
 					m.menuItems.FanSpeed.SetTitle("风扇转速: 无数据")
 				}
 
-				// 同步智能变频状态
 				if status.AutoControlState {
 					m.menuItems.AutoControl.Check()
 				} else {
 					m.menuItems.AutoControl.Uncheck()
 				}
 
-				// 更新托盘提示
 				if status.Connected {
 					if status.AutoControlState {
 						tooltipText := fmt.Sprintf("BS2PRO 控制器 - 智能变频中\nCPU: %d°C GPU: %d°C", status.CPUTemp, status.GPUTemp)
@@ -354,14 +353,12 @@ func (m *Manager) updateMenuStatus() {
 	}
 }
 
-// onTrayExit 托盘退出时的回调
 func (m *Manager) onTrayExit() {
 	m.logDebug("托盘退出回调被触发")
 	atomic.StoreInt32(&m.readyState, 0)
 	atomic.StoreInt32(&m.initialized, 0)
 }
 
-// startIconHealthMonitor 启动托盘图标健康监控
 func (m *Manager) startIconHealthMonitor() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -369,7 +366,6 @@ func (m *Manager) startIconHealthMonitor() {
 		}
 	}()
 
-	// 每30秒刷新一次托盘图标，更及时地恢复 Explorer 重启后的图标
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -377,7 +373,7 @@ func (m *Manager) startIconHealthMonitor() {
 		select {
 		case <-ticker.C:
 			if atomic.LoadInt32(&m.readyState) == 0 || atomic.LoadInt32(&m.initialized) == 0 {
-				continue // 不退出，等待恢复
+				continue
 			}
 			m.refreshTrayIcon()
 		case <-m.done:
@@ -386,7 +382,6 @@ func (m *Manager) startIconHealthMonitor() {
 	}
 }
 
-// refreshTrayIcon 刷新托盘图标
 func (m *Manager) refreshTrayIcon() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -409,28 +404,23 @@ func (m *Manager) refreshTrayIcon() {
 
 	atomic.StoreInt32(&m.consecutiveFails, 0)
 	atomic.StoreInt64(&m.lastIconRefresh, time.Now().Unix())
-
 	m.logDebug("托盘图标已刷新")
 }
 
-// IsReady 检查托盘是否就绪
 func (m *Manager) IsReady() bool {
 	return atomic.LoadInt32(&m.readyState) == 1
 }
 
-// IsInitialized 检查托盘是否已初始化
 func (m *Manager) IsInitialized() bool {
 	return atomic.LoadInt32(&m.initialized) == 1
 }
 
-// Quit 退出托盘
 func (m *Manager) Quit() {
 	atomic.StoreInt32(&m.readyState, 0)
 
 	m.mutex.Lock()
 	select {
 	case <-m.done:
-		// 已经关闭
 	default:
 		close(m.done)
 	}
@@ -446,7 +436,6 @@ func (m *Manager) Quit() {
 	}()
 }
 
-// CheckHealth 检查托盘健康状态
 func (m *Manager) CheckHealth() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -454,26 +443,22 @@ func (m *Manager) CheckHealth() {
 		}
 	}()
 
-	// 如果托盘未初始化，无需检查
 	if atomic.LoadInt32(&m.initialized) == 0 {
 		return
 	}
 
-	// 检查图标是否长时间未刷新
 	lastRefresh := atomic.LoadInt64(&m.lastIconRefresh)
 	if lastRefresh > 0 && time.Now().Unix()-lastRefresh > 90 {
 		m.logInfo("检测到托盘图标长时间未刷新，尝试刷新")
 		m.refreshTrayIcon()
 	}
 
-	// 如果连续失败，也强制刷新图标
 	if atomic.LoadInt32(&m.consecutiveFails) >= 3 {
 		m.logError("检测到托盘连续失败，尝试刷新图标")
 		m.refreshTrayIcon()
 	}
 }
 
-// 日志辅助方法
 func (m *Manager) logInfo(format string, v ...any) {
 	if m.logger != nil {
 		m.logger.Info(format, v...)

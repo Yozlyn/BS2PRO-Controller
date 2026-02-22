@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/TIANLI0/BS2PRO-Controller/internal/ipc"
+	"github.com/TIANLI0/BS2PRO-Controller/internal/tray"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/version"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -15,16 +16,20 @@ import (
 
 // App struct - GUI 应用程序结构
 type App struct {
-	ctx       context.Context
-	ipcClient *ipc.Client
-	mutex     sync.RWMutex
+	ctx         context.Context
+	ipcClient   *ipc.Client
+	mutex       sync.RWMutex
+	trayManager *tray.Manager
+	iconData    []byte
 
-	// 缓存的状态
-	isConnected bool
-	currentTemp types.TemperatureData
+	// 缓存的状态 (托盘和前端随时读取)
+	isConnected      bool
+	currentTemp      types.TemperatureData
+	currentFan       *types.FanData
+	autoControlState bool
 }
 
-// 为了与前端 API 兼容，重新导出类型
+// 重新导出类型，供Wails生成TypeScript绑定
 type (
 	FanCurvePoint         = types.FanCurvePoint
 	FanData               = types.FanData
@@ -43,37 +48,114 @@ func init() {
 	guiLogger = logger.Sugar()
 }
 
+type trayLoggerAdapter struct {
+	sugar *zap.SugaredLogger
+}
+
+func (l *trayLoggerAdapter) Info(format string, v ...any)  { l.sugar.Infof(format, v...) }
+func (l *trayLoggerAdapter) Error(format string, v ...any) { l.sugar.Errorf(format, v...) }
+func (l *trayLoggerAdapter) Debug(format string, v ...any) { l.sugar.Debugf(format, v...) }
+func (l *trayLoggerAdapter) Warn(format string, v ...any)  { l.sugar.Warnf(format, v...) }
+func (l *trayLoggerAdapter) Close()                        { l.sugar.Sync() }
+func (l *trayLoggerAdapter) CleanOldLogs()                 {}
+func (l *trayLoggerAdapter) SetDebugMode(enabled bool)     {}
+func (l *trayLoggerAdapter) GetLogDir() string             { return "" }
+
 // NewApp 创建 GUI 应用实例
-func NewApp() *App {
+func NewApp(icon []byte) *App {
 	return &App{
 		ipcClient:   ipc.NewClient(nil),
 		currentTemp: types.TemperatureData{BridgeOk: true},
+		iconData:    icon,
 	}
 }
 
 // startup 应用启动时调用
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-
 	guiLogger.Info("=== BS2PRO GUI 启动 ===")
 
-	// 连接到核心服务
+	// 连接到后台核心服务
 	if err := a.ipcClient.Connect(); err != nil {
 		guiLogger.Errorf("连接核心服务失败: %v", err)
-		runtime.EventsEmit(ctx, "core-service-error", "无法连接到核心服务")
+		runtime.EventsEmit(ctx, "core-service-error", "无法连接到核心服务，请检查服务是否运行")
 	} else {
-		guiLogger.Info("已连接到核心服务")
-
-		// 设置事件处理器
+		guiLogger.Info("已成功连接到核心服务 IPC 管道")
 		a.ipcClient.SetEventHandler(a.handleCoreEvent)
+
+		// 启动时主动拉取一次配置，同步状态
+		go func() {
+			cfg := a.GetConfig()
+			status := a.GetDeviceStatus()
+
+			a.mutex.Lock()
+			a.autoControlState = cfg.AutoControl
+			if connected, ok := status["connected"].(bool); ok {
+				a.isConnected = connected
+			}
+			a.mutex.Unlock()
+		}()
 	}
+
+	// 初始化系统托盘
+	a.InitSystemTray()
 
 	guiLogger.Info("=== BS2PRO GUI 启动完成 ===")
 }
 
-// GetAppVersion 返回应用版本号（来自版本模块）
-func (a *App) GetAppVersion() string {
-	return version.Get()
+// InitSystemTray 初始化系统托盘
+func (a *App) InitSystemTray() {
+	adapter := &trayLoggerAdapter{sugar: guiLogger}
+	a.trayManager = tray.NewManager(adapter, a.iconData)
+
+	a.trayManager.SetCallbacks(
+		func() {
+			// 左键双击托盘：显示窗口
+			a.ShowWindow()
+		},
+		func() {
+			// 点击退出：仅退出GUI进程
+			a.QuitApp()
+		},
+		func() {
+			// 点击彻底退出：关闭GUI及服务
+			a.QuitAll()
+		},
+		func() bool {
+			// 切换智能变频
+			a.mutex.RLock()
+			currentState := a.autoControlState
+			a.mutex.RUnlock()
+
+			newState := !currentState
+			go a.SetAutoControl(newState)
+			return newState
+		},
+		func() tray.Status {
+			// 为托盘提供状态
+			a.mutex.RLock()
+			defer a.mutex.RUnlock()
+			rpm := uint16(0)
+			if a.currentFan != nil {
+				rpm = uint16(a.currentFan.CurrentRPM)
+			}
+			return tray.Status{
+				Connected:        a.isConnected,
+				CPUTemp:          a.currentTemp.CPUTemp,
+				GPUTemp:          a.currentTemp.GPUTemp,
+				CurrentRPM:       rpm,
+				AutoControlState: a.autoControlState,
+			}
+		},
+	)
+
+	a.trayManager.Init()
+}
+
+func (a *App) OnWindowClosing(ctx context.Context) bool {
+	guiLogger.Info("拦截到窗口关闭动作，隐藏至托盘...")
+	a.HideWindow()
+	return true
 }
 
 // handleCoreEvent 处理核心服务推送的事件
@@ -86,6 +168,10 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 	case ipc.EventFanDataUpdate:
 		var fanData types.FanData
 		if err := json.Unmarshal(event.Data, &fanData); err == nil {
+			a.mutex.Lock()
+			a.currentFan = &fanData
+			a.isConnected = true
+			a.mutex.Unlock()
 			runtime.EventsEmit(a.ctx, "fan-data-update", fanData)
 		}
 
@@ -120,31 +206,17 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 	case ipc.EventConfigUpdate:
 		var cfg types.AppConfig
 		if err := json.Unmarshal(event.Data, &cfg); err == nil {
+			a.mutex.Lock()
+			a.autoControlState = cfg.AutoControl
+			a.mutex.Unlock()
 			runtime.EventsEmit(a.ctx, "config-update", cfg)
 		}
-
-	case ipc.EventHealthPing:
-		var timestamp int64
-		json.Unmarshal(event.Data, &timestamp)
-		runtime.EventsEmit(a.ctx, "health-ping", timestamp)
-
-	case ipc.EventHeartbeat:
-		var timestamp int64
-		json.Unmarshal(event.Data, &timestamp)
-		runtime.EventsEmit(a.ctx, "heartbeat", timestamp)
-
-	case "show-window":
-		a.ShowWindow()
-
-	case "quit":
-		a.QuitApp()
 	}
 }
 
 // sendRequest 发送请求到核心服务
 func (a *App) sendRequest(reqType ipc.RequestType, data any) (*ipc.Response, error) {
 	if !a.ipcClient.IsConnected() {
-		// 尝试重新连接
 		if err := a.ipcClient.Connect(); err != nil {
 			return nil, fmt.Errorf("未连接到核心服务: %v", err)
 		}
@@ -153,17 +225,13 @@ func (a *App) sendRequest(reqType ipc.RequestType, data any) (*ipc.Response, err
 }
 
 // === 前端 API 方法 ===
-// 以下所有公开方法保持与原始 app.go 完全兼容
+func (a *App) GetAppVersion() string {
+	return version.Get()
+}
 
-// ConnectDevice 连接HID设备
 func (a *App) ConnectDevice() bool {
 	resp, err := a.sendRequest(ipc.ReqConnect, nil)
-	if err != nil {
-		guiLogger.Errorf("连接设备请求失败: %v", err)
-		return false
-	}
-	if !resp.Success {
-		guiLogger.Errorf("连接设备失败: %s", resp.Error)
+	if err != nil || !resp.Success {
 		return false
 	}
 	var success bool
@@ -171,34 +239,23 @@ func (a *App) ConnectDevice() bool {
 	return success
 }
 
-// DisconnectDevice 断开设备连接
 func (a *App) DisconnectDevice() {
 	a.sendRequest(ipc.ReqDisconnect, nil)
 }
 
-// GetDeviceStatus 获取设备连接状态
 func (a *App) GetDeviceStatus() map[string]any {
 	resp, err := a.sendRequest(ipc.ReqGetDeviceStatus, nil)
-	if err != nil {
-		return map[string]any{"connected": false, "error": err.Error()}
-	}
-	if !resp.Success {
-		return map[string]any{"connected": false, "error": resp.Error}
+	if err != nil || !resp.Success {
+		return map[string]any{"connected": false}
 	}
 	var status map[string]any
 	json.Unmarshal(resp.Data, &status)
 	return status
 }
 
-// GetConfig 获取当前配置
 func (a *App) GetConfig() AppConfig {
 	resp, err := a.sendRequest(ipc.ReqGetConfig, nil)
-	if err != nil {
-		guiLogger.Errorf("获取配置失败: %v", err)
-		return types.GetDefaultConfig(false)
-	}
-	if !resp.Success {
-		guiLogger.Errorf("获取配置失败: %s", resp.Error)
+	if err != nil || !resp.Success {
 		return types.GetDefaultConfig(false)
 	}
 	var cfg AppConfig
@@ -206,7 +263,6 @@ func (a *App) GetConfig() AppConfig {
 	return cfg
 }
 
-// UpdateConfig 更新配置
 func (a *App) UpdateConfig(cfg AppConfig) error {
 	resp, err := a.sendRequest(ipc.ReqUpdateConfig, cfg)
 	if err != nil {
@@ -218,7 +274,6 @@ func (a *App) UpdateConfig(cfg AppConfig) error {
 	return nil
 }
 
-// SetFanCurve 设置风扇曲线
 func (a *App) SetFanCurve(curve []FanCurvePoint) error {
 	resp, err := a.sendRequest(ipc.ReqSetFanCurve, curve)
 	if err != nil {
@@ -230,13 +285,9 @@ func (a *App) SetFanCurve(curve []FanCurvePoint) error {
 	return nil
 }
 
-// GetFanCurve 获取风扇曲线
 func (a *App) GetFanCurve() []FanCurvePoint {
 	resp, err := a.sendRequest(ipc.ReqGetFanCurve, nil)
-	if err != nil {
-		return types.GetDefaultFanCurve()
-	}
-	if !resp.Success {
+	if err != nil || !resp.Success {
 		return types.GetDefaultFanCurve()
 	}
 	var curve []FanCurvePoint
@@ -244,7 +295,6 @@ func (a *App) GetFanCurve() []FanCurvePoint {
 	return curve
 }
 
-// SetAutoControl 设置智能变频
 func (a *App) SetAutoControl(enabled bool) error {
 	resp, err := a.sendRequest(ipc.ReqSetAutoControl, ipc.SetAutoControlParams{Enabled: enabled})
 	if err != nil {
@@ -256,13 +306,9 @@ func (a *App) SetAutoControl(enabled bool) error {
 	return nil
 }
 
-// SetManualGear 设置手动挡位
 func (a *App) SetManualGear(gear, level string) bool {
 	resp, err := a.sendRequest(ipc.ReqSetManualGear, ipc.SetManualGearParams{Gear: gear, Level: level})
-	if err != nil {
-		return false
-	}
-	if !resp.Success {
+	if err != nil || !resp.Success {
 		return false
 	}
 	var success bool
@@ -270,13 +316,9 @@ func (a *App) SetManualGear(gear, level string) bool {
 	return success
 }
 
-// GetAvailableGears 获取可用挡位
 func (a *App) GetAvailableGears() map[string][]GearCommand {
 	resp, err := a.sendRequest(ipc.ReqGetAvailableGears, nil)
-	if err != nil {
-		return types.GearCommands
-	}
-	if !resp.Success {
+	if err != nil || !resp.Success {
 		return types.GearCommands
 	}
 	var gears map[string][]GearCommand
@@ -284,13 +326,6 @@ func (a *App) GetAvailableGears() map[string][]GearCommand {
 	return gears
 }
 
-// ManualSetFanSpeed 废弃方法
-func (a *App) ManualSetFanSpeed(rpm int) bool {
-	guiLogger.Warn("ManualSetFanSpeed 已废弃，请使用 SetManualGear")
-	return false
-}
-
-// SetCustomSpeed 设置自定义转速
 func (a *App) SetCustomSpeed(enabled bool, rpm int) error {
 	resp, err := a.sendRequest(ipc.ReqSetCustomSpeed, ipc.SetCustomSpeedParams{Enabled: enabled, RPM: rpm})
 	if err != nil {
@@ -302,7 +337,6 @@ func (a *App) SetCustomSpeed(enabled bool, rpm int) error {
 	return nil
 }
 
-// SetGearLight 设置挡位灯
 func (a *App) SetGearLight(enabled bool) bool {
 	resp, err := a.sendRequest(ipc.ReqSetGearLight, ipc.SetBoolParams{Enabled: enabled})
 	if err != nil {
@@ -313,7 +347,6 @@ func (a *App) SetGearLight(enabled bool) bool {
 	return success
 }
 
-// SetPowerOnStart 设置通电自启动
 func (a *App) SetPowerOnStart(enabled bool) bool {
 	resp, err := a.sendRequest(ipc.ReqSetPowerOnStart, ipc.SetBoolParams{Enabled: enabled})
 	if err != nil {
@@ -324,7 +357,6 @@ func (a *App) SetPowerOnStart(enabled bool) bool {
 	return success
 }
 
-// SetSmartStartStop 设置智能启停
 func (a *App) SetSmartStartStop(mode string) bool {
 	resp, err := a.sendRequest(ipc.ReqSetSmartStartStop, ipc.SetStringParams{Value: mode})
 	if err != nil {
@@ -335,7 +367,6 @@ func (a *App) SetSmartStartStop(mode string) bool {
 	return success
 }
 
-// SetBrightness 设置亮度
 func (a *App) SetBrightness(percentage int) bool {
 	resp, err := a.sendRequest(ipc.ReqSetBrightness, ipc.SetIntParams{Value: percentage})
 	if err != nil {
@@ -346,11 +377,9 @@ func (a *App) SetBrightness(percentage int) bool {
 	return success
 }
 
-// SetRGBMode 设置RGB灯效模式
 func (a *App) SetRGBMode(params ipc.SetRGBModeParams) bool {
 	resp, err := a.sendRequest(ipc.ReqSetRGBMode, params)
 	if err != nil {
-		guiLogger.Errorf("设置RGB模式失败: %v", err)
 		return false
 	}
 	var success bool
@@ -358,7 +387,6 @@ func (a *App) SetRGBMode(params ipc.SetRGBModeParams) bool {
 	return success
 }
 
-// GetTemperature 获取当前温度
 func (a *App) GetTemperature() TemperatureData {
 	resp, err := a.sendRequest(ipc.ReqGetTemperature, nil)
 	if err != nil {
@@ -371,7 +399,6 @@ func (a *App) GetTemperature() TemperatureData {
 	return temp
 }
 
-// GetCurrentFanData 获取当前风扇数据
 func (a *App) GetCurrentFanData() *FanData {
 	resp, err := a.sendRequest(ipc.ReqGetCurrentFanData, nil)
 	if err != nil {
@@ -384,40 +411,6 @@ func (a *App) GetCurrentFanData() *FanData {
 	return &fanData
 }
 
-// TestTemperatureReading 测试温度读取
-func (a *App) TestTemperatureReading() TemperatureData {
-	resp, err := a.sendRequest(ipc.ReqTestTemperatureReading, nil)
-	if err != nil {
-		return TemperatureData{}
-	}
-	var temp TemperatureData
-	json.Unmarshal(resp.Data, &temp)
-	return temp
-}
-
-// TestBridgeProgram 测试桥接程序
-func (a *App) TestBridgeProgram() BridgeTemperatureData {
-	resp, err := a.sendRequest(ipc.ReqTestBridgeProgram, nil)
-	if err != nil {
-		return BridgeTemperatureData{Success: false, Error: err.Error()}
-	}
-	var data BridgeTemperatureData
-	json.Unmarshal(resp.Data, &data)
-	return data
-}
-
-// GetBridgeProgramStatus 获取桥接程序状态
-func (a *App) GetBridgeProgramStatus() map[string]any {
-	resp, err := a.sendRequest(ipc.ReqGetBridgeProgramStatus, nil)
-	if err != nil {
-		return map[string]any{"error": err.Error()}
-	}
-	var status map[string]any
-	json.Unmarshal(resp.Data, &status)
-	return status
-}
-
-// SetWindowsAutoStart 设置Windows开机自启动
 func (a *App) SetWindowsAutoStart(enable bool) error {
 	resp, err := a.sendRequest(ipc.ReqSetWindowsAutoStart, ipc.SetBoolParams{Enabled: enable})
 	if err != nil {
@@ -429,41 +422,6 @@ func (a *App) SetWindowsAutoStart(enable bool) error {
 	return nil
 }
 
-// IsRunningAsAdmin 检查是否以管理员权限运行
-func (a *App) IsRunningAsAdmin() bool {
-	resp, err := a.sendRequest(ipc.ReqIsRunningAsAdmin, nil)
-	if err != nil {
-		return false
-	}
-	var isAdmin bool
-	json.Unmarshal(resp.Data, &isAdmin)
-	return isAdmin
-}
-
-// GetAutoStartMethod 获取当前的自启动方式
-func (a *App) GetAutoStartMethod() string {
-	resp, err := a.sendRequest(ipc.ReqGetAutoStartMethod, nil)
-	if err != nil {
-		return "none"
-	}
-	var method string
-	json.Unmarshal(resp.Data, &method)
-	return method
-}
-
-// SetAutoStartWithMethod 使用指定方式设置自启动
-func (a *App) SetAutoStartWithMethod(enable bool, method string) error {
-	resp, err := a.sendRequest(ipc.ReqSetAutoStartWithMethod, ipc.SetAutoStartWithMethodParams{Enable: enable, Method: method})
-	if err != nil {
-		return err
-	}
-	if !resp.Success {
-		return fmt.Errorf("%s", resp.Error)
-	}
-	return nil
-}
-
-// CheckWindowsAutoStart 检查Windows开机自启动状态
 func (a *App) CheckWindowsAutoStart() bool {
 	resp, err := a.sendRequest(ipc.ReqCheckWindowsAutoStart, nil)
 	if err != nil {
@@ -474,7 +432,6 @@ func (a *App) CheckWindowsAutoStart() bool {
 	return enabled
 }
 
-// IsAutoStartLaunch 返回当前是否为自启动启动
 func (a *App) IsAutoStartLaunch() bool {
 	resp, err := a.sendRequest(ipc.ReqIsAutoStartLaunch, nil)
 	if err != nil {
@@ -485,72 +442,71 @@ func (a *App) IsAutoStartLaunch() bool {
 	return isAutoStart
 }
 
-// ShowWindow 显示主窗口
 func (a *App) ShowWindow() {
 	if a.ctx != nil {
 		runtime.WindowShow(a.ctx)
-		runtime.WindowSetAlwaysOnTop(a.ctx, false)
 	}
 }
 
-// HideWindow 隐藏主窗口到托盘
 func (a *App) HideWindow() {
 	if a.ctx != nil {
 		runtime.WindowHide(a.ctx)
 	}
 }
 
-// QuitApp 完全退出应用
 func (a *App) QuitApp() {
 	guiLogger.Info("GUI 请求退出")
-
-	// 关闭 IPC 连接
+	if a.trayManager != nil {
+		a.trayManager.Quit()
+	}
 	if a.ipcClient != nil {
 		a.ipcClient.Close()
 	}
-
-	// 退出 GUI
 	if a.ctx != nil {
 		runtime.Quit(a.ctx)
 	}
 }
 
-// QuitAll 完全退出应用（包括核心服务）
 func (a *App) QuitAll() {
-	guiLogger.Info("GUI 请求完全退出（包括核心服务）")
-
-	// 通知核心服务退出
+	guiLogger.Info("GUI 彻底退出")
 	a.sendRequest(ipc.ReqQuitApp, nil)
+	a.QuitApp()
+}
 
-	// 关闭 IPC 连接
-	if a.ipcClient != nil {
-		a.ipcClient.Close()
+func (a *App) TestTemperatureReading() TemperatureData {
+	resp, err := a.sendRequest(ipc.ReqTestTemperatureReading, nil)
+	if err != nil {
+		return TemperatureData{}
 	}
+	var temp TemperatureData
+	json.Unmarshal(resp.Data, &temp)
+	return temp
+}
 
-	// 退出 GUI
-	if a.ctx != nil {
-		runtime.Quit(a.ctx)
+func (a *App) TestBridgeProgram() BridgeTemperatureData {
+	resp, err := a.sendRequest(ipc.ReqTestBridgeProgram, nil)
+	if err != nil {
+		return BridgeTemperatureData{Success: false, Error: err.Error()}
 	}
+	var data BridgeTemperatureData
+	json.Unmarshal(resp.Data, &data)
+	return data
 }
 
-// OnWindowClosing 窗口关闭事件处理
-func (a *App) OnWindowClosing(ctx context.Context) bool {
-	// 返回 false 允许窗口正常关闭并退出 GUI
-	// 核心服务会继续在后台运行
-	return false
+func (a *App) GetBridgeProgramStatus() map[string]any {
+	resp, err := a.sendRequest(ipc.ReqGetBridgeProgramStatus, nil)
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	var status map[string]any
+	json.Unmarshal(resp.Data, &status)
+	return status
 }
 
-// InitSystemTray 初始化系统托盘（保持API兼容，实际由核心服务处理）
-func (a *App) InitSystemTray() {
-	// 托盘由核心服务管理，GUI 不需要处理
-}
-
-// UpdateGuiResponseTime 更新GUI响应时间（供前端调用）
 func (a *App) UpdateGuiResponseTime() {
 	a.sendRequest(ipc.ReqUpdateGuiResponseTime, nil)
 }
 
-// GetDebugInfo 获取调试信息
 func (a *App) GetDebugInfo() map[string]any {
 	resp, err := a.sendRequest(ipc.ReqGetDebugInfo, nil)
 	if err != nil {
@@ -561,7 +517,6 @@ func (a *App) GetDebugInfo() map[string]any {
 	return info
 }
 
-// SetDebugMode 设置调试模式
 func (a *App) SetDebugMode(enabled bool) error {
 	resp, err := a.sendRequest(ipc.ReqSetDebugMode, ipc.SetBoolParams{Enabled: enabled})
 	if err != nil {

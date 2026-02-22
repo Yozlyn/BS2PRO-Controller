@@ -36,7 +36,6 @@ interface ControlPanelProps {
   temperature: types.TemperatureData | null;
 }
 
-// 设置项组件
 interface SettingItemProps {
   icon: React.ReactNode;
   iconBgActive: string;
@@ -93,24 +92,14 @@ function SettingItem({
 }
 
 export default function ControlPanel({ config, onConfigChange, isConnected, fanData, temperature }: ControlPanelProps) {
-  // 更新状态
   const [loadingStates, setLoadingStates] = useState<Record<string, boolean>>({});
-  
-  // 调试面板状态
   const [debugInfo, setDebugInfo] = useState<DebugInfo | null>(null);
   const [debugInfoLoading, setDebugInfoLoading] = useState(false);
-  
-  // 自定义转速相关状态
   const [showCustomSpeedWarning, setShowCustomSpeedWarning] = useState(false);
   const [customSpeedInput, setCustomSpeedInput] = useState<number>((config as any).customSpeedRPM || 2000);
-
-  // 应用版本号
   const [appVersion, setAppVersion] = useState('');
-  
-  // iframe 状态
   const [iframeLoaded, setIframeLoaded] = useState(false);
 
-  // 辅助函数
   const setLoading = (key: string, value: boolean) => {
     setLoadingStates(prev => ({ ...prev, [key]: value }));
   };
@@ -123,7 +112,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
     }
   }, []);
 
-  // 智能变频控制
   const handleAutoControlChange = useCallback(async (enabled: boolean) => {
     setLoading('autoControl', true);
     try {
@@ -136,7 +124,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
     }
   }, [config, onConfigChange]);
 
-  // 自定义转速控制
   const handleCustomSpeedApply = useCallback(async (enabled: boolean, rpm: number) => {
     setLoading('customSpeed', true);
     try {
@@ -162,7 +149,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
     }
   }, [customSpeedInput, handleCustomSpeedApply]);
 
-  // 挡位灯控制
   const handleGearLightChange = useCallback(async (enabled: boolean) => {
     if (!isConnected) return;
     setLoading('gearLight', true);
@@ -178,7 +164,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
     }
   }, [config, onConfigChange, isConnected]);
 
-  // 通电自启动控制
   const handlePowerOnStartChange = useCallback(async (enabled: boolean) => {
     if (!isConnected) return;
     setLoading('powerOnStart', true);
@@ -198,12 +183,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
   const handleWindowsAutoStartChange = useCallback(async (enabled: boolean) => {
     setLoading('windowsAutoStart', true);
     try {
-      const isAdmin = await apiService.isRunningAsAdmin();
-      if (enabled) {
-        await apiService.setAutoStartWithMethod(true, isAdmin ? 'task_scheduler' : 'registry');
-      } else {
-        await apiService.setAutoStartWithMethod(false, '');
-      }
+      await apiService.setWindowsAutoStart(enabled);
       onConfigChange(types.AppConfig.createFrom({ ...config, windowsAutoStart: enabled }));
     } catch (error) {
       console.error('设置开机自启动失败:', error);
@@ -213,7 +193,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
     }
   }, [config, onConfigChange]);
 
-  // 断连保持配置模式
   const handleIgnoreDeviceOnReconnectChange = useCallback(async (enabled: boolean) => {
     try {
       const newConfig = types.AppConfig.createFrom({ ...config, ignoreDeviceOnReconnect: enabled });
@@ -224,7 +203,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
     }
   }, [config, onConfigChange]);
 
-  // 智能启停控制
   const handleSmartStartStopChange = useCallback(async (mode: string) => {
     if (!isConnected) return;
     try {
@@ -237,7 +215,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
     }
   }, [config, onConfigChange, isConnected]);
 
-  // 调试模式
   const toggleDebugMode = useCallback(async () => {
     try {
       await apiService.setDebugMode(!config.debugMode);
@@ -247,7 +224,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
     }
   }, [config, onConfigChange]);
 
-  // GUI 监控
   const toggleGuiMonitoring = useCallback(async () => {
     try {
       const newConfig = types.AppConfig.createFrom({ ...config, guiMonitoring: !config.guiMonitoring });
@@ -258,7 +234,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
     }
   }, [config, onConfigChange]);
 
-  // 获取调试信息
   const fetchDebugInfo = useCallback(async () => {
     try {
       setDebugInfoLoading(true);
@@ -271,7 +246,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
     }
   }, []);
 
-  // 定期更新 GUI 响应时间
   useEffect(() => {
     const interval = setInterval(() => {
       apiService.updateGuiResponseTime().catch(() => {});
@@ -285,14 +259,12 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
       .catch(() => setAppVersion(''));
   }, []);
 
-  // 智能启停选项
   const smartStartStopOptions = [
     { value: 'off', label: '关闭', description: '禁用智能启停功能' },
     { value: 'immediate', label: '即时', description: '立即响应系统负载变化' },
     { value: 'delayed', label: '延时', description: '延时响应，避免频繁启停' },
   ];
 
-  // 采样率选项 (决定多少次采样取平均值)
   const sampleCountOptions = [
     { value: 1, label: '1次 (即时响应)' },
     { value: 2, label: '2次 (2秒平均)' },
@@ -301,7 +273,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
     { value: 10, label: '10次 (10秒平均)' },
   ];
 
-  // 采样率变更
   const handleSampleCountChange = useCallback(async (count: number) => {
     try {
       const newConfig = types.AppConfig.createFrom({ ...config, tempSampleCount: count });
@@ -315,7 +286,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
   return (
     <>
       <Card className="p-6">
-        {/* 标题 */}
         <div className="flex items-center gap-3 mb-6">
           <div className="p-2 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600">
             <CogIcon className="w-6 h-6 text-white" />
@@ -323,7 +293,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
           <h2 className="text-xl font-bold text-gray-900 dark:text-white">控制面板</h2>
         </div>
 
-        {/* 实时状态卡片 */}
         <div className="mb-6 p-5 rounded-2xl bg-gradient-to-r from-gray-50 via-blue-50 to-indigo-50 dark:from-gray-800 dark:via-blue-900/20 dark:to-indigo-900/20 border border-gray-200 dark:border-gray-700">
           <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-4">实时状态</h3>
           <div className="grid grid-cols-3 gap-6">
@@ -363,9 +332,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
           </div>
         </div>
 
-        {/* 设置项列表 */}
         <div className="divide-y divide-gray-100 dark:divide-gray-700/50">
-          {/* 智能变频 */}
           <SettingItem
             icon={config.autoControl ? 
               <PlayIcon className="w-5 h-5 text-green-600 dark:text-green-400" /> : 
@@ -382,7 +349,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
             color="green"
           />
 
-          {/* 温度采样平均 - 仅在开启自动温控时显示 */}
           {config.autoControl && (
             <div className="py-4 px-4 -mx-4 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-all duration-200">
               <div className="flex items-center justify-between">
@@ -407,7 +373,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
             </div>
           )}
 
-          {/* 自定义转速控制 */}
           <div className="py-4">
             <div className={clsx(
               'p-4 rounded-xl border-2 transition-all duration-300',
@@ -477,7 +442,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
             </div>
           </div>
 
-          {/* 挡位灯 */}
           <SettingItem
             icon={<LightBulbIcon className={clsx(
               'w-5 h-5 transition-colors duration-300',
@@ -494,7 +458,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
             color="blue"
           />
 
-          {/* 通电自启动 */}
           <SettingItem
             icon={<PowerIcon className={clsx(
               'w-5 h-5 transition-colors duration-300',
@@ -511,7 +474,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
             color="blue"
           />
 
-          {/* Windows 开机自启动 */}
           <div className="py-4 px-4 -mx-4 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-all duration-200">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
@@ -533,8 +495,8 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
                   <div className="text-sm text-gray-500 dark:text-gray-400">
                     Windows 启动时自动启动本程序
                   </div>
-                  <div className="text-xs text-blue-600 dark:text-blue-400 mt-0.5">
-                    💡 以管理员身份运行可避免每次UAC授权
+                  <div className="text-xs text-green-600 dark:text-green-400 mt-0.5">
+                    💡 Windows启动时静默启动GUI托盘程序
                   </div>
                 </div>
               </div>
@@ -547,7 +509,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
             </div>
           </div>
 
-          {/* 断连保持配置模式 */}
           <div className="py-4 px-4 -mx-4 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-all duration-200">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
@@ -582,7 +543,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
             </div>
           </div>
 
-          {/* 智能启停 */}
           <div className="py-4">
             <div className="flex items-center gap-4 mb-4">
               <div className="p-2.5 rounded-xl bg-purple-100 dark:bg-purple-900/30">
@@ -607,7 +567,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
           </div>
         </div>
 
-        {/* 离线提示 */}
         {!isConnected && (
           <div className="mt-6 p-4 rounded-xl bg-gray-100 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600">
             <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
@@ -617,13 +576,11 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
           </div>
         )}
 
-        {/* 版本和关于 */}
         <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
           <div className="text-center mb-4">
             <Badge variant="info" size="md">{appVersion ? `v${appVersion}` : 'v--'}</Badge>
           </div>
 
-          {/* 关于页面 iframe */}
           <div className="rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden bg-white dark:bg-gray-800">
             <div className="px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-600">
               <div className="flex items-center justify-between">
@@ -656,7 +613,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
             </div>
           </div>
 
-          {/* 开发者信息 */}
           <div className="mt-6 p-4 rounded-2xl bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 border border-gray-200 dark:border-gray-700">
             <div className="flex items-center justify-center gap-4">
               <img 
@@ -676,7 +632,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
             </div>
           </div>
 
-          {/* 调试面板 */}
           <Disclosure as="div" className="mt-6">
             {({ open }) => (
               <div className="rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -700,7 +655,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
                   leaveTo="transform scale-95 opacity-0"
                 >
                   <Disclosure.Panel className="p-4 space-y-4">
-                    {/* 调试模式 */}
                     <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-700/50">
                       <div className="flex items-center gap-3">
                         <BugAntIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
@@ -716,7 +670,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
                       />
                     </div>
 
-                    {/* GUI 监控 */}
                     <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-700/50">
                       <div className="flex items-center gap-3">
                         {config.guiMonitoring ? (
@@ -736,7 +689,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
                       />
                     </div>
 
-                    {/* 刷新调试信息 */}
                     <Button
                       variant="secondary"
                       onClick={fetchDebugInfo}
@@ -746,7 +698,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
                       刷新调试信息
                     </Button>
 
-                    {/* 调试信息显示 */}
                     {debugInfo && (
                       <pre className="p-3 rounded-xl bg-gray-900 text-green-400 text-xs overflow-auto max-h-60">
                         {JSON.stringify(debugInfo, null, 2)}
@@ -760,7 +711,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
         </div>
       </Card>
 
-      {/* 自定义转速警告对话框 */}
       {showCustomSpeedWarning && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full p-6">

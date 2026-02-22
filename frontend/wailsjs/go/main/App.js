@@ -18,10 +18,6 @@ export function GetAppVersion() {
   return window['go']['main']['App']['GetAppVersion']();
 }
 
-export function GetAutoStartMethod() {
-  return window['go']['main']['App']['GetAutoStartMethod']();
-}
-
 export function GetAvailableGears() {
   return window['go']['main']['App']['GetAvailableGears']();
 }
@@ -66,14 +62,6 @@ export function IsAutoStartLaunch() {
   return window['go']['main']['App']['IsAutoStartLaunch']();
 }
 
-export function IsRunningAsAdmin() {
-  return window['go']['main']['App']['IsRunningAsAdmin']();
-}
-
-export function ManualSetFanSpeed(arg1) {
-  return window['go']['main']['App']['ManualSetFanSpeed'](arg1);
-}
-
 export function QuitAll() {
   return window['go']['main']['App']['QuitAll']();
 }
@@ -84,10 +72,6 @@ export function QuitApp() {
 
 export function SetAutoControl(arg1) {
   return window['go']['main']['App']['SetAutoControl'](arg1);
-}
-
-export function SetAutoStartWithMethod(arg1, arg2) {
-  return window['go']['main']['App']['SetAutoStartWithMethod'](arg1, arg2);
 }
 
 export function SetBrightness(arg1) {

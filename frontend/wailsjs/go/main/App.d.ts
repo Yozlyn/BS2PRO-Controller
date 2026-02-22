@@ -11,8 +11,6 @@ export function DisconnectDevice():Promise<void>;
 
 export function GetAppVersion():Promise<string>;
 
-export function GetAutoStartMethod():Promise<string>;
-
 export function GetAvailableGears():Promise<Record<string, Array<types.GearCommand>>>;
 
 export function GetBridgeProgramStatus():Promise<Record<string, any>>;
@@ -35,17 +33,11 @@ export function InitSystemTray():Promise<void>;
 
 export function IsAutoStartLaunch():Promise<boolean>;
 
-export function IsRunningAsAdmin():Promise<boolean>;
-
-export function ManualSetFanSpeed(arg1:number):Promise<boolean>;
-
 export function QuitAll():Promise<void>;
 
 export function QuitApp():Promise<void>;
 
 export function SetAutoControl(arg1:boolean):Promise<void>;
-
-export function SetAutoStartWithMethod(arg1:boolean,arg2:string):Promise<void>;
 
 export function SetBrightness(arg1:number):Promise<boolean>;
 

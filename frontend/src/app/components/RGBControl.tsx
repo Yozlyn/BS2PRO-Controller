@@ -13,7 +13,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 
-// ============ Types ============
+// 类型定义
 export interface RGBColor {
   r: number;
   g: number;
@@ -52,90 +52,209 @@ const SPEED_OPTIONS = [
   { id: 'slow',   label: '慢' },
 ];
 
-const PRESETS: { label: string; color: RGBColor }[] = [
-  { label: '最蓝', color: { r: 0,   g: 0,   b: 255 } },
-  { label: '最红', color: { r: 255, g: 0,   b: 0   } },
-  { label: '最绿', color: { r: 0,   g: 255, b: 0   } },
-];
-
-// ============ Color Strip Picker ============
-function ColorStrip({
-  value,
-  onChange,
-}: {
-  value: RGBColor;
-  onChange: (c: RGBColor) => void;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const isDragging = useRef(false);
-
-  const drawStrip = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const w = canvas.width;
-    const h = canvas.height;
-
-    // Draw rainbow hue strip
-    const gradient = ctx.createLinearGradient(0, 0, w, 0);
-    for (let i = 0; i <= 360; i += 30) {
-      gradient.addColorStop(i / 360, `hsl(${i}, 100%, 50%)`);
+// HSV颜色计算
+function rgbToHsv(r: number, g: number, b: number): [number, number, number] {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const d = max - min;
+  let h = 0;
+  const s = max === 0 ? 0 : d / max;
+  const v = max;
+  if (d !== 0) {
+    switch (max) {
+      case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+      case g: h = ((b - r) / d + 2) / 6; break;
+      case b: h = ((r - g) / d + 4) / 6; break;
     }
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, w, h);
+  }
+  return [h * 360, s, v];
+}
 
-    // White overlay on left
-    const whiteGrad = ctx.createLinearGradient(0, 0, 0, h);
-    whiteGrad.addColorStop(0, 'rgba(255,255,255,0.8)');
-    whiteGrad.addColorStop(0.5, 'rgba(255,255,255,0)');
-    ctx.fillStyle = whiteGrad;
-    ctx.fillRect(0, 0, w, h);
+function hsvToRgb(h: number, s: number, v: number): RGBColor {
+  h /= 360;
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+  let r = 0, g = 0, b = 0;
+  switch (i % 6) {
+    case 0: r = v; g = t; b = p; break;
+    case 1: r = q; g = v; b = p; break;
+    case 2: r = p; g = v; b = t; break;
+    case 3: r = p; g = q; b = v; break;
+    case 4: r = t; g = p; b = v; break;
+    case 5: r = v; g = p; b = q; break;
+  }
+  return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
+}
 
-    // Black overlay on right
-    const blackGrad = ctx.createLinearGradient(w * 0.6, 0, w, 0);
-    blackGrad.addColorStop(0, 'rgba(0,0,0,0)');
-    blackGrad.addColorStop(1, 'rgba(0,0,0,0.8)');
-    ctx.fillStyle = blackGrad;
-    ctx.fillRect(0, 0, w, h);
-  }, []);
+function drawHueStrip(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const grad = ctx.createLinearGradient(0, 0, w, 0);
+  const stops: [number, string][] = [
+    [0,     '#ff0000'],
+    [1/6,   '#ffaa00'],
+    [2/6,   '#ffff00'],
+    [3/6,   '#00ff00'],
+    [4/6,   '#00aaff'],
+    [5/6,   '#7700ff'],
+    [1,     '#ff0000'],
+  ];
+  stops.forEach(([p, c]) => grad.addColorStop(p, c));
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+}
+
+// HSV颜色选择器
+function HSVPicker({ color, onChange }: { color: RGBColor; onChange: (c: RGBColor) => void }) {
+  const svRef  = useRef<HTMLCanvasElement>(null);
+  const hueRef = useRef<HTMLCanvasElement>(null);
+  const draggingSV  = useRef(false);
+  const draggingHue = useRef(false);
+  const prevColor = useRef<RGBColor>(color);
+
+  const [hsv, setHsv] = useState<[number, number, number]>(() => rgbToHsv(color.r, color.g, color.b));
 
   useEffect(() => {
-    drawStrip();
-  }, [drawStrip]);
+    const c = color, p = prevColor.current;
+    if (c.r !== p.r || c.g !== p.g || c.b !== p.b) {
+      prevColor.current = c;
+      setHsv(rgbToHsv(c.r, c.g, c.b));
+    }
+  }, [color]);
 
-  const pickColor = useCallback((clientX: number) => {
-    const canvas = canvasRef.current;
+  // 绘制饱和度/明度面板
+  useEffect(() => {
+    const canvas = svRef.current;
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.max(0, Math.min(clientX - rect.left, rect.width - 1));
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const scaleX = canvas.width / rect.width;
-    const pixel = ctx.getImageData(Math.floor(x * scaleX), Math.floor(canvas.height / 2), 1, 1).data;
-    onChange({ r: pixel[0], g: pixel[1], b: pixel[2] });
-  }, [onChange]);
+    const w = canvas.width, h = canvas.height;
+
+    ctx.fillStyle = `hsl(${hsv[0]},100%,50%)`;
+    ctx.fillRect(0, 0, w, h);
+
+    const satGrad = ctx.createLinearGradient(0, 0, w, 0);
+    satGrad.addColorStop(0, 'rgba(255,255,255,1)');
+    satGrad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = satGrad;
+    ctx.fillRect(0, 0, w, h);
+
+    const valGrad = ctx.createLinearGradient(0, 0, 0, h);
+    valGrad.addColorStop(0, 'rgba(0,0,0,0)');
+    valGrad.addColorStop(1, 'rgba(0,0,0,1)');
+    ctx.fillStyle = valGrad;
+    ctx.fillRect(0, 0, w, h);
+
+    // 光标
+    const cx = Math.round(hsv[1] * w);
+    const cy = Math.round((1 - hsv[2]) * h);
+    ctx.beginPath();
+    ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }, [hsv]);
+
+  // 绘制色相条
+  useEffect(() => {
+    const canvas = hueRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = canvas.width, h = canvas.height;
+
+    drawHueStrip(ctx, w, h);
+
+    // 光标
+    const cx = Math.round((hsv[0] / 360) * w);
+    ctx.beginPath();
+    ctx.roundRect(Math.max(2, Math.min(w - 5, cx - 3)), 1, 6, h - 2, 3);
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }, [hsv]);
+
+  const pickSV = useCallback((e: { clientX: number; clientY: number }) => {
+    const canvas = svRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const s = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const v = Math.max(0, Math.min(1, 1 - (e.clientY - rect.top) / rect.height));
+    const next: [number, number, number] = [hsv[0], s, v];
+    setHsv(next);
+    const rgb = hsvToRgb(next[0], next[1], next[2]);
+    prevColor.current = rgb;
+    onChange(rgb);
+  }, [hsv, onChange]);
+
+  const pickHue = useCallback((e: { clientX: number }) => {
+    const canvas = hueRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const h = Math.max(0, Math.min(360, ((e.clientX - rect.left) / rect.width) * 360));
+    const next: [number, number, number] = [h, hsv[1], hsv[2]];
+    setHsv(next);
+    const rgb = hsvToRgb(next[0], next[1], next[2]);
+    prevColor.current = rgb;
+    onChange(rgb);
+  }, [hsv, onChange]);
 
   return (
-    <div className="relative">
+    <div className="space-y-2">
       <canvas
-        ref={canvasRef}
-        width={400}
-        height={24}
-        className="w-full h-6 rounded-lg cursor-crosshair border border-gray-200 dark:border-gray-700"
-        onMouseDown={(e) => { isDragging.current = true; pickColor(e.clientX); }}
-        onMouseMove={(e) => { if (isDragging.current) pickColor(e.clientX); }}
-        onMouseUp={() => { isDragging.current = false; }}
-        onMouseLeave={() => { isDragging.current = false; }}
-        onTouchStart={(e) => { isDragging.current = true; pickColor(e.touches[0].clientX); }}
-        onTouchMove={(e) => { if (isDragging.current) pickColor(e.touches[0].clientX); }}
-        onTouchEnd={() => { isDragging.current = false; }}
+        ref={svRef}
+        width={220}
+        height={130}
+        className="w-full rounded-lg cursor-crosshair block select-none"
+        style={{ height: '110px' }}
+        onMouseDown={e => { draggingSV.current = true; pickSV(e); }}
+        onMouseMove={e => { if (draggingSV.current) pickSV(e); }}
+        onMouseUp={() => { draggingSV.current = false; }}
+        onMouseLeave={() => { draggingSV.current = false; }}
+        onTouchStart={e => { e.preventDefault(); draggingSV.current = true; pickSV(e.touches[0]); }}
+        onTouchMove={e => { e.preventDefault(); if (draggingSV.current) pickSV(e.touches[0]); }}
+        onTouchEnd={() => { draggingSV.current = false; }}
+      />
+      <canvas
+        ref={hueRef}
+        width={220}
+        height={18}
+        className="w-full rounded-md cursor-crosshair block select-none"
+        style={{ height: '14px' }}
+        onMouseDown={e => { draggingHue.current = true; pickHue(e); }}
+        onMouseMove={e => { if (draggingHue.current) pickHue(e); }}
+        onMouseUp={() => { draggingHue.current = false; }}
+        onMouseLeave={() => { draggingHue.current = false; }}
+        onTouchStart={e => { e.preventDefault(); draggingHue.current = true; pickHue(e.touches[0]); }}
+        onTouchMove={e => { e.preventDefault(); if (draggingHue.current) pickHue(e.touches[0]); }}
+        onTouchEnd={() => { draggingHue.current = false; }}
       />
     </div>
   );
 }
 
-// ============ Color Swatch with Picker ============
+function rgbSliderBg(ch: 'r' | 'g' | 'b', color: RGBColor): string {
+  const val = (v: number) => `rgb(${ch === 'r' ? v : color.r},${ch === 'g' ? v : color.g},${ch === 'b' ? v : color.b})`;
+  return `linear-gradient(to right, ${val(0)}, ${val(255)})`;
+}
+
+function toHex(color: RGBColor): string {
+  return '#' + [color.r, color.g, color.b].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+function fromHex(hex: string): RGBColor | null {
+  const m = hex.replace('#', '').match(/^([0-9a-f]{6})$/i);
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
 function ColorSwatch({
   color,
   onChange,
@@ -148,78 +267,40 @@ function ColorSwatch({
   canRemove?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [popupPosition, setPopupPosition] = useState<'top' | 'bottom'>('bottom');
+  const [hexInput, setHexInput] = useState(() => toHex(color));
   const ref = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
-
-  const [popupOffset, setPopupOffset] = useState<number>(0);
   const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({});
+
+  useEffect(() => { setHexInput(toHex(color)); }, [color]);
 
   useEffect(() => {
     if (!open) return;
-    
-    // 计算弹出窗口最佳位置
-    const updatePopupPosition = () => {
-      if (buttonRef.current) {
-        const buttonRect = buttonRef.current.getBoundingClientRect();
-        const spaceBelow = window.innerHeight - buttonRect.bottom;
-        const spaceAbove = buttonRect.top;
-        const spaceLeft = buttonRect.left;
-        const spaceRight = window.innerWidth - buttonRect.right;
-        let top = 0;
-        if (spaceBelow < 320 && spaceAbove > spaceBelow) {
-          setPopupPosition('top');
-          top = buttonRect.top - 320;
-        } else {
-          setPopupPosition('bottom');
-          top = buttonRect.bottom + 8;
-        }
-        
-        let left = buttonRect.left + buttonRect.width / 2;
-        let offset = 0;
-        
-        if (spaceLeft < 20) {
-          offset = 10;
-        }
-        else if (spaceRight < 20) {
-          offset = -10;
-        }
-        
-        setPopupOffset(offset);
-        left += offset;
-        
-        const popupWidth = 224;
-        if (left < popupWidth / 2) {
-          left = popupWidth / 2;
-        } else if (left > window.innerWidth - popupWidth / 2) {
-          left = window.innerWidth - popupWidth / 2;
-        }
-        
-        setPopupStyle({
-          position: 'fixed',
-          top: `${Math.max(8, Math.min(window.innerHeight - 320, top))}px`,
-          left: `${left}px`,
-          transform: 'translateX(-50%)',
-          zIndex: 9999,
-        });
-      }
+    const updatePos = () => {
+      if (!buttonRef.current) return;
+      const r = buttonRef.current.getBoundingClientRect();
+      const POPUP_W = 244, POPUP_H = 380;
+      const spaceBelow = window.innerHeight - r.bottom;
+      const top = spaceBelow >= POPUP_H + 8
+        ? r.bottom + 8
+        : Math.max(8, r.top - POPUP_H - 8);
+      let left = r.left + r.width / 2 - POPUP_W / 2;
+      left = Math.max(8, Math.min(window.innerWidth - POPUP_W - 8, left));
+      setPopupStyle({ position: 'fixed', top, left, width: POPUP_W, zIndex: 9999 });
     };
-    
-    updatePopupPosition();
-    window.addEventListener('resize', updatePopupPosition);
-    window.addEventListener('scroll', updatePopupPosition);
-    
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+
+    updatePos();
+    window.addEventListener('resize', updatePos);
+    window.addEventListener('scroll', updatePos, true);
+
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener('mousedown', handler);
-    
+    document.addEventListener('mousedown', onDown);
     return () => {
-      document.removeEventListener('mousedown', handler);
-      window.removeEventListener('resize', updatePopupPosition);
-      window.removeEventListener('scroll', updatePopupPosition);
+      window.removeEventListener('resize', updatePos);
+      window.removeEventListener('scroll', updatePos, true);
+      document.removeEventListener('mousedown', onDown);
     };
   }, [open]);
 
@@ -228,117 +309,114 @@ function ColorSwatch({
   return (
     <div className="relative" ref={ref}>
       <div className="flex flex-col items-center gap-2">
-        <button
-          ref={buttonRef}
-          onClick={() => setOpen(!open)}
-          className="w-10 h-10 rounded-lg border-2 border-white dark:border-gray-800 shadow-md hover:scale-105 transition-all duration-200 ring-2 ring-gray-300 dark:ring-gray-700 hover:ring-blue-400 dark:hover:ring-blue-500"
-          style={{ backgroundColor: css }}
-          title={`RGB(${color.r}, ${color.g}, ${color.b})`}
-        />
-        <div className="flex flex-col items-center gap-1.5 w-full">
-          <div className="flex items-center gap-1.5 w-full justify-center">
-            <input
-              type="text"
-              value={`${color.r},${color.g},${color.b}`}
-              onChange={(e) => {
-                const text = e.target.value;
-                const parts = text.split(',').map(part => parseInt(part.trim()) || 0);
-                if (parts.length === 3) {
-                  const [r, g, b] = parts;
-                  if (r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
-                    onChange({ r, g, b });
-                  }
-                }
-              }}
-              onBlur={(e) => {
-                const text = e.target.value;
-                const parts = text.split(',').map(part => parseInt(part.trim()) || 0);
-                if (parts.length === 3) {
-                  const [r, g, b] = parts;
-                  onChange({
-                    r: Math.min(255, Math.max(0, r)),
-                    g: Math.min(255, Math.max(0, g)),
-                    b: Math.min(255, Math.max(0, b))
-                  });
-                }
-              }}
-              className="text-xs font-medium text-gray-600 dark:text-gray-400 px-1.5 py-0.5 bg-gray-100 dark:bg-gray-700 rounded w-20 text-center"
-              placeholder="R,G,B"
-            />
-            {canRemove && onRemove && (
-              <button
-                onClick={onRemove}
-                className="w-5 h-5 rounded-md bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-red-500 hover:text-white text-xs flex items-center justify-center transition-all duration-200 hover:scale-110"
-                title="移除颜色"
-              >
-                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            )}
-          </div>
+        <div className="relative">
+          <button
+            ref={buttonRef}
+            onClick={() => setOpen(v => !v)}
+            className="w-10 h-10 rounded-xl shadow-md hover:scale-105 transition-transform duration-150 ring-2 ring-white/60 dark:ring-gray-700"
+            style={{ backgroundColor: css }}
+            title={`${toHex(color).toUpperCase()}`}
+          />
+          {canRemove && onRemove && (
+            <button
+              onClick={onRemove}
+              className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-gray-400 dark:bg-gray-500 hover:bg-red-500 text-white flex items-center justify-center transition-colors shadow-sm"
+            >
+              <svg className="w-2 h-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
         </div>
+        <span className="text-[10px] font-mono text-gray-400 dark:text-gray-500 leading-none">
+          {toHex(color).toUpperCase()}
+        </span>
       </div>
 
       {open && (
         <div
-          className="fixed bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 p-4 w-56 z-[9999]"
-          style={popupStyle}
+          className="rounded-2xl shadow-2xl border border-gray-200/80 dark:border-gray-700 overflow-hidden"
+          style={{
+            ...popupStyle,
+            background: 'var(--tw-bg, white)',
+          }}
         >
-          <div className="flex items-center justify-between mb-3">
-            <div className="text-sm font-semibold text-gray-700 dark:text-gray-300">颜色选择器</div>
-            <button
-              onClick={() => setOpen(false)}
-              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-          <div className="mb-4">
-            <div className="text-xs text-gray-500 dark:text-gray-400 mb-2 font-medium">拖动滑块选择颜色</div>
-            <ColorStrip value={color} onChange={(c) => onChange(c)} />
-          </div>
-          
-          <div className="flex gap-2 mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
-            <button
-              onClick={() => {
-                const randomColor = {
-                  r: Math.floor(Math.random() * 256),
-                  g: Math.floor(Math.random() * 256),
-                  b: Math.floor(Math.random() * 256)
-                };
-                onChange(randomColor);
-              }}
-              className="flex-1 py-1.5 text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 rounded-md font-medium hover:bg-purple-200 dark:hover:bg-purple-900/50 transition-colors"
-            >
-              随机
-            </button>
-          </div>
+          <div className="bg-white dark:bg-gray-900 p-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-600 dark:text-gray-300 tracking-wide">拾色器</span>
+              <button
+                onClick={() => setOpen(false)}
+                className="w-5 h-5 rounded-md flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
 
-          {/* RGB sliders */}
-          <div className="mt-3 space-y-2">
-            {(['r', 'g', 'b'] as const).map((ch) => (
-              <div key={ch} className="flex items-center gap-2">
-                <span className="text-xs w-3 font-bold uppercase" style={{ color: ch === 'r' ? '#ef4444' : ch === 'g' ? '#22c55e' : '#3b82f6' }}>
-                  {ch}
-                </span>
+            <HSVPicker color={color} onChange={onChange} />
+
+            <div className="flex items-center gap-2">
+              <div
+                className="w-8 h-8 rounded-lg shrink-0 shadow-inner border border-black/10 dark:border-white/10"
+                style={{ backgroundColor: css }}
+              />
+              <div className="flex-1 relative">
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-mono select-none">#</span>
                 <input
-                  type="range"
-                  min={0}
-                  max={255}
-                  value={color[ch]}
-                  onChange={(e) => onChange({ ...color, [ch]: Number(e.target.value) })}
-                  className="flex-1 h-1.5 rounded-full appearance-none cursor-pointer slider-thumb"
-                  style={{
-                    background: `linear-gradient(to right, ${
-                      ch === 'r' ? '#ef4444' : ch === 'g' ? '#22c55e' : '#3b82f6'
-                    } 0%, ${ch === 'r' ? '#ef4444' : ch === 'g' ? '#22c55e' : '#3b82f6'} ${(color[ch] / 255) * 100}%, #e5e7eb ${(color[ch] / 255) * 100}%)`
+                  type="text"
+                  value={hexInput.replace('#', '').toUpperCase()}
+                  onChange={e => {
+                    const raw = e.target.value.replace(/[^0-9a-fA-F]/g, '').slice(0, 6);
+                    setHexInput(raw);
+                    if (raw.length === 6) {
+                      const c = fromHex('#' + raw);
+                      if (c) onChange(c);
+                    }
                   }}
+                  onBlur={() => setHexInput(toHex(color))}
+                  className="w-full pl-6 pr-2 py-1.5 text-xs font-mono bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 rounded-lg border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400 uppercase"
+                  placeholder="RRGGBB"
+                  maxLength={6}
                 />
               </div>
-            ))}
+              <button
+                onClick={() => onChange({ r: Math.floor(Math.random()*256), g: Math.floor(Math.random()*256), b: Math.floor(Math.random()*256) })}
+                className="w-8 h-8 shrink-0 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 flex items-center justify-center transition-colors border border-gray-200 dark:border-gray-700"
+                title="随机颜色"
+              >
+                <svg className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="space-y-2 pt-1 border-t border-gray-100 dark:border-gray-800">
+              {(['r', 'g', 'b'] as const).map(ch => (
+                <div key={ch} className="flex items-center gap-2">
+                  <span
+                    className="text-[10px] font-bold w-3 uppercase shrink-0 text-center"
+                    style={{ color: ch === 'r' ? '#f87171' : ch === 'g' ? '#4ade80' : '#60a5fa' }}
+                  >{ch}</span>
+                  <div className="flex-1 relative h-4 flex items-center">
+                    <input
+                      type="range"
+                      min={0} max={255}
+                      value={color[ch]}
+                      onChange={e => onChange({ ...color, [ch]: Number(e.target.value) })}
+                      className="w-full h-2 rounded-full appearance-none cursor-pointer"
+                      style={{
+                        background: rgbSliderBg(ch, color),
+                      }}
+                    />
+                  </div>
+                  <span className="text-[10px] font-mono w-7 text-right text-gray-500 dark:text-gray-400 shrink-0">
+                    {color[ch]}
+                  </span>
+                </div>
+              ))}
+            </div>
+
           </div>
         </div>
       )}
@@ -364,8 +442,24 @@ export default function RGBControl({ isConnected, savedConfig, onSetRGBMode }: R
   ]);
   const [applying, setApplying] = useState(false);
   const [lastResult, setLastResult] = useState<boolean | null>(null);
-  const applyTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // 使用ref确保仅在初始化时覆盖本地状态
+  const initialized = useRef(false);
 
+  // 监听savedConfig将后端的持久化数据注入到前端面板
+  useEffect(() => {
+    if (savedConfig && !initialized.current) {
+      if (savedConfig.mode) setActiveMode(savedConfig.mode as LightMode);
+      if (savedConfig.speed) setSpeed(savedConfig.speed);
+      if (savedConfig.brightness !== undefined) setBrightness(savedConfig.brightness);
+      if (savedConfig.colors && savedConfig.colors.length > 0) {
+        setColors(savedConfig.colors);
+      }
+      initialized.current = true; // 记忆恢复完毕
+    }
+  }, [savedConfig]);
+
+  const applyTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const modeConfig = MODES.find((m) => m.id === activeMode)!;
 
   const apply = useCallback(
@@ -392,7 +486,6 @@ export default function RGBControl({ isConnected, savedConfig, onSetRGBMode }: R
     [isConnected, onSetRGBMode]
   );
 
-  // Debounced apply for sliders
   const debouncedApply = useCallback(
     (mode: LightMode, colorsArg: RGBColor[], speedArg: string, brightnessArg: number) => {
       if (applyTimeout.current) {
@@ -455,7 +548,6 @@ export default function RGBControl({ isConnected, savedConfig, onSetRGBMode }: R
 
   return (
     <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 overflow-hidden">
-      {/* Header */}
       <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-gradient-to-r from-pink-500 via-purple-500 to-blue-500 animate-pulse" />
@@ -478,7 +570,6 @@ export default function RGBControl({ isConnected, savedConfig, onSetRGBMode }: R
       </div>
 
       <div className="p-5 space-y-5">
-        {/* Mode Grid */}
         <div>
           <div className="text-xs text-gray-500 dark:text-gray-400 font-medium mb-2">灯效模式</div>
           <div className="grid grid-cols-4 gap-2">
@@ -502,7 +593,6 @@ export default function RGBControl({ isConnected, savedConfig, onSetRGBMode }: R
           </div>
         </div>
 
-        {/* Brightness (hidden for smart mode) */}
         {activeMode !== 'smart' && (
           <div>
             <div className="flex justify-between items-center mb-2">
@@ -538,7 +628,6 @@ export default function RGBControl({ isConnected, savedConfig, onSetRGBMode }: R
           </div>
         )}
 
-        {/* Speed (only for speed-enabled modes) */}
         {modeConfig.hasSpeed && (
           <div>
             <div className="text-xs text-gray-500 dark:text-gray-400 font-medium mb-2">速度</div>
@@ -563,7 +652,6 @@ export default function RGBControl({ isConnected, savedConfig, onSetRGBMode }: R
           </div>
         )}
 
-        {/* Colors (only for color-enabled modes) */}
         {modeConfig.hasColors && (
           <div>
             <div className="flex items-center justify-between mb-3">
@@ -575,7 +663,6 @@ export default function RGBControl({ isConnected, savedConfig, onSetRGBMode }: R
               </span>
             </div>
 
-            {/* Color swatches row */}
             <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700">
               <div className="flex items-center justify-between mb-3">
                 <div className="text-sm font-medium text-gray-700 dark:text-gray-300">颜色序列</div>
@@ -620,7 +707,6 @@ export default function RGBControl({ isConnected, savedConfig, onSetRGBMode }: R
           </div>
         )}
 
-        {/* Tip for smart / off / flowing modes */}
         {!modeConfig.hasColors && !modeConfig.hasSpeed && activeMode !== 'off' && (
           <div className="text-xs text-gray-400 dark:text-gray-500 bg-gray-50 dark:bg-gray-700/50 rounded-lg px-3 py-2">
             {activeMode === 'smart'

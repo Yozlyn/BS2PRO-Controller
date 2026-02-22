@@ -98,9 +98,7 @@ func (m *Manager) SetRGBOff() bool {
 	if !m.isConnected || m.device == nil {
 		return false
 	}
-	f0 := rgbMakeF0(0x00, RGBSpeedMedium, 0, RGBColor{0, 0, 0})
-	var frames [30][10]byte
-	err := m.rgbApplyFrames(f0, frames)
+	err := m.rgbSendCmd(0x46, 0x03, 0x00)
 	return err == nil
 }
 
@@ -159,7 +157,7 @@ func (m *Manager) SetRGBRotation(colors []RGBColor, speed, brightness byte) bool
 	if len(colors) > 6 {
 		colors = colors[:6]
 	}
-	f0 := rgbMakeF0(0x05, speed, brightness, RGBColor{0, 0, 0})
+	f0 := rgbMakeF0(0x05, speed, brightness, RGBColor{R: 0, G: 0, B: 0})
 	var frames [30][10]byte
 	stream := make([]byte, 304)
 	numColors := len(colors)
@@ -212,7 +210,7 @@ func (m *Manager) SetRGBFlowing(speed, brightness byte) bool {
 		{0xff, 0x00, 0x7f, 0x7f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
 		{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00},
 	}
-	f0 := rgbMakeF0(0x05, speed, brightness, RGBColor{0, 255, 0})
+	f0 := rgbMakeF0(0x05, speed, brightness, RGBColor{R: 0, G: 255, B: 0})
 	factor := float64(brightness) / 100.0
 	var frames [30][10]byte
 	for i := 0; i < 30; i++ {
@@ -240,7 +238,7 @@ func (m *Manager) SetRGBBreathing(colors []RGBColor, speed, brightness byte) boo
 		colors = colors[:5]
 	}
 	mode := byte(len(colors)*2 - 1)
-	f0 := rgbMakeF0(mode, speed, brightness, RGBColor{0, 0, 0})
+	f0 := rgbMakeF0(mode, speed, brightness, RGBColor{R: 0, G: 0, B: 0})
 	var frames [30][10]byte
 	factor := float64(brightness) / 100.0
 	var pattern [30]byte

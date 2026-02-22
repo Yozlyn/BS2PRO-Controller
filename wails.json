@@ -6,6 +6,7 @@
   "frontend:build": "bun run build",
   "frontend:dev:watcher": "bun run dev",
   "frontend:dev:serverUrl": "auto",
+  "frontend:dest": "frontend/out",
   "author": {
     "name": "TIANLI0",
     "email": "wutianli@tianli0.top"
@@ -13,7 +14,7 @@
   "info": {
     "companyName": "TIANLI0",
     "productName": "BS2PRO-Controller",
-    "productVersion": "2.5.0",
+    "productVersion": "2.6.0",
     "copyright": "Copyright © 2025 TIANLI0",
     "comments": "飞智空间站的BS2/BS2PRO替代控制器"
   },

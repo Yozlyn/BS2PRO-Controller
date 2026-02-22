@@ -15,22 +15,28 @@ if "!VERSION!"=="" (
     echo Building version: !VERSION!
 )
 
-set LDFLAGS=-X github.com/TIANLI0/BS2PRO-Controller/internal/version.BuildVersion=!VERSION! -H=windowsgui
+REM 分离前后端编译参数
+set CORE_LDFLAGS=-X github.com/TIANLI0/BS2PRO-Controller/internal/version.BuildVersion=!VERSION! -s -w
+REM Wails默认会处理GUI隐藏
+set WAILS_LDFLAGS=-X github.com/TIANLI0/BS2PRO-Controller/internal/version.BuildVersion=!VERSION!
 
 REM Build core service first
 echo Building core service...
-go-winres make --in cmd/core/winres/winres.json --out cmd/core/rsrc
-go build -ldflags "!LDFLAGS!" -o build/bin/BS2PRO-Core.exe ./cmd/core/
+if exist "cmd\core\winres\winres.json" (
+    go-winres make --in cmd/core/winres/winres.json --out cmd/core/rsrc
+)
+REM 规范命名
+go build -ldflags "!CORE_LDFLAGS!" -o build/bin/BS2PRO-CoreService.exe ./cmd/core/
 
 REM Add NSIS to PATH for installer creation
 set PATH=%PATH%;C:\Program Files (x86)\NSIS\Bin
 
 REM Build main application with wails
 echo Building main application...
-wails build -nsis -ldflags "!LDFLAGS!"
+wails build -nsis -ldflags "!WAILS_LDFLAGS!"
 
 REM Ensure core service is in the bin directory for installer
-if exist "build\bin\BS2PRO-Core.exe" (
+if exist "build\bin\BS2PRO-CoreService.exe" (
     echo Core service built successfully
 ) else (
     echo ERROR: Core service build failed!
@@ -38,4 +44,4 @@ if exist "build\bin\BS2PRO-Core.exe" (
 )
 
 echo Build completed successfully with version !VERSION!
-endlocal
+echo endlocal
