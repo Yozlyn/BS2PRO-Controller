@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
+	"time"
 
+	"github.com/TIANLI0/BS2PRO-Controller/internal/autostart"
+	"github.com/TIANLI0/BS2PRO-Controller/internal/config"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/ipc"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/tray"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
@@ -118,8 +122,8 @@ func (a *App) InitSystemTray() {
 			a.QuitApp()
 		},
 		func() {
-			// 点击彻底退出：关闭GUI及服务
-			a.QuitAll()
+			// 点击重启服务：重启核心服务
+			a.RestartCoreService()
 		},
 		func() bool {
 			// 切换智能变频
@@ -170,7 +174,6 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 		if err := json.Unmarshal(event.Data, &fanData); err == nil {
 			a.mutex.Lock()
 			a.currentFan = &fanData
-			a.isConnected = true
 			a.mutex.Unlock()
 			runtime.EventsEmit(a.ctx, "fan-data-update", fanData)
 		}
@@ -216,18 +219,10 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 
 // sendRequest 发送请求到核心服务
 func (a *App) sendRequest(reqType ipc.RequestType, data any) (*ipc.Response, error) {
-	if !a.ipcClient.IsConnected() {
-		if err := a.ipcClient.Connect(); err != nil {
-			return nil, fmt.Errorf("未连接到核心服务: %v", err)
-		}
-	}
 	return a.ipcClient.SendRequest(reqType, data)
 }
 
-// === 前端 API 方法 ===
-func (a *App) GetAppVersion() string {
-	return version.Get()
-}
+func (a *App) GetAppVersion() string { return version.Get() }
 
 func (a *App) ConnectDevice() bool {
 	resp, err := a.sendRequest(ipc.ReqConnect, nil)
@@ -239,9 +234,7 @@ func (a *App) ConnectDevice() bool {
 	return success
 }
 
-func (a *App) DisconnectDevice() {
-	a.sendRequest(ipc.ReqDisconnect, nil)
-}
+func (a *App) DisconnectDevice() { a.sendRequest(ipc.ReqDisconnect, nil) }
 
 func (a *App) GetDeviceStatus() map[string]any {
 	resp, err := a.sendRequest(ipc.ReqGetDeviceStatus, nil)
@@ -412,34 +405,21 @@ func (a *App) GetCurrentFanData() *FanData {
 }
 
 func (a *App) SetWindowsAutoStart(enable bool) error {
-	resp, err := a.sendRequest(ipc.ReqSetWindowsAutoStart, ipc.SetBoolParams{Enabled: enable})
-	if err != nil {
-		return err
-	}
-	if !resp.Success {
-		return fmt.Errorf("%s", resp.Error)
-	}
-	return nil
+	adapter := &trayLoggerAdapter{sugar: guiLogger}
+	installDir := config.GetInstallDir()
+	manager := autostart.NewManager(adapter, installDir)
+	return manager.SetWindowsAutoStart(enable)
 }
 
 func (a *App) CheckWindowsAutoStart() bool {
-	resp, err := a.sendRequest(ipc.ReqCheckWindowsAutoStart, nil)
-	if err != nil {
-		return false
-	}
-	var enabled bool
-	json.Unmarshal(resp.Data, &enabled)
-	return enabled
+	adapter := &trayLoggerAdapter{sugar: guiLogger}
+	installDir := config.GetInstallDir()
+	manager := autostart.NewManager(adapter, installDir)
+	return manager.CheckWindowsAutoStart()
 }
 
 func (a *App) IsAutoStartLaunch() bool {
-	resp, err := a.sendRequest(ipc.ReqIsAutoStartLaunch, nil)
-	if err != nil {
-		return false
-	}
-	var isAutoStart bool
-	json.Unmarshal(resp.Data, &isAutoStart)
-	return isAutoStart
+	return autostart.DetectAutoStartLaunch(os.Args)
 }
 
 func (a *App) ShowWindow() {
@@ -455,7 +435,7 @@ func (a *App) HideWindow() {
 }
 
 func (a *App) QuitApp() {
-	guiLogger.Info("GUI 请求退出")
+	guiLogger.Info("控制台请求退出")
 	if a.trayManager != nil {
 		a.trayManager.Quit()
 	}
@@ -465,12 +445,47 @@ func (a *App) QuitApp() {
 	if a.ctx != nil {
 		runtime.Quit(a.ctx)
 	}
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		guiLogger.Info("执行强杀...")
+		os.Exit(0)
+	}()
 }
 
 func (a *App) QuitAll() {
 	guiLogger.Info("GUI 彻底退出")
 	a.sendRequest(ipc.ReqQuitApp, nil)
 	a.QuitApp()
+}
+
+// QuitServiceOnly 只退出核心服务，不关闭GUI界面
+func (a *App) QuitServiceOnly() {
+	guiLogger.Info("GUI 请求只退出核心服务")
+	resp, err := a.sendRequest(ipc.ReqQuitApp, nil)
+	if err != nil {
+		guiLogger.Errorf("发送退出核心服务请求失败: %v", err)
+	} else if resp != nil && resp.Success {
+		guiLogger.Info("核心服务已退出")
+	} else {
+		guiLogger.Warn("退出核心服务请求未成功")
+	}
+}
+
+// RestartCoreService 重启核心服务
+func (a *App) RestartCoreService() bool {
+	guiLogger.Info("控制台请求重启核心服务")
+	resp, err := a.sendRequest(ipc.ReqRestartService, nil)
+	if err != nil {
+		guiLogger.Errorf("发送重启核心服务请求失败: %v", err)
+		return false
+	} else if resp != nil && resp.Success {
+		guiLogger.Info("核心服务重启请求已发送，服务将在后台异步重启")
+		return true
+	} else {
+		guiLogger.Warn("重启核心服务请求未成功")
+		return false
+	}
 }
 
 func (a *App) TestTemperatureReading() TemperatureData {

@@ -37,6 +37,10 @@ export function QuitAll():Promise<void>;
 
 export function QuitApp():Promise<void>;
 
+export function QuitServiceOnly():Promise<void>;
+
+export function RestartCoreService():Promise<boolean>;
+
 export function SetAutoControl(arg1:boolean):Promise<void>;
 
 export function SetBrightness(arg1:number):Promise<boolean>;

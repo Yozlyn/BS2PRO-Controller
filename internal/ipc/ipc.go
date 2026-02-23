@@ -76,8 +76,11 @@ const (
 	ReqSubscribeEvents   RequestType = "SubscribeEvents"
 
 	// RGB 灯效控制
-	ReqSetRGBMode RequestType = "SetRGBMode"
+	ReqSetRGBMode        RequestType = "SetRGBMode"
 	ReqUnsubscribeEvents RequestType = "UnsubscribeEvents"
+
+	// 服务管理
+	ReqRestartService RequestType = "RestartService"
 )
 
 // Request IPC 请求
@@ -321,8 +324,11 @@ func (c *Client) Connect() error {
 	c.connMutex.Lock()
 	defer c.connMutex.Unlock()
 
-	if c.connected {
-		return nil
+	// 如果已有连接，先关闭旧连接
+	if c.connected && c.conn != nil {
+		c.conn.Close()
+		c.conn = nil
+		c.connected = false
 	}
 
 	timeout := 5 * time.Second
@@ -402,6 +408,17 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
+	// 检查连接状态，如果未连接则尝试连接
+	c.connMutex.RLock()
+	needsConnect := !c.connected || c.conn == nil
+	c.connMutex.RUnlock()
+
+	if needsConnect {
+		if err := c.Connect(); err != nil {
+			return nil, fmt.Errorf("未连接到服务器: %v", err)
+		}
+	}
+
 	c.connMutex.RLock()
 	if !c.connected || c.conn == nil {
 		c.connMutex.RUnlock()
@@ -435,17 +452,57 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 	default:
 	}
 
-	_, err = conn.Write(append(reqBytes, '\n'))
-	if err != nil {
-		return nil, fmt.Errorf("发送请求失败: %v", err)
+	// 尝试发送请求，如果失败则重试一次
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		_, err = conn.Write(append(reqBytes, '\n'))
+		if err != nil {
+			lastErr = err
+			c.logDebug("发送请求失败 (尝试 %d): %v", attempt+1, err)
+
+			// 如果发送失败，关闭连接并尝试重新连接
+			c.connMutex.Lock()
+			c.connected = false
+			if c.conn != nil {
+				c.conn.Close()
+				c.conn = nil
+			}
+			c.connMutex.Unlock()
+
+			// 如果是最后一次尝试，直接返回错误
+			if attempt == 1 {
+				break
+			}
+
+			// 等待一小段时间后重试连接
+			time.Sleep(100 * time.Millisecond)
+			if err := c.Connect(); err != nil {
+				lastErr = fmt.Errorf("重连失败: %v", err)
+				continue
+			}
+
+			// 重新获取连接
+			c.connMutex.RLock()
+			if !c.connected || c.conn == nil {
+				c.connMutex.RUnlock()
+				continue
+			}
+			conn = c.conn
+			c.connMutex.RUnlock()
+
+			continue
+		}
+
+		// 发送成功，等待响应
+		select {
+		case resp := <-c.responseChan:
+			return resp, nil
+		case <-time.After(10 * time.Second):
+			return nil, fmt.Errorf("等待响应超时")
+		}
 	}
 
-	select {
-	case resp := <-c.responseChan:
-		return resp, nil
-	case <-time.After(10 * time.Second):
-		return nil, fmt.Errorf("等待响应超时")
-	}
+	return nil, fmt.Errorf("发送请求失败: %v", lastErr)
 }
 
 // Close 关闭连接
@@ -458,6 +515,7 @@ func (c *Client) Close() {
 		c.conn.Close()
 		c.conn = nil
 	}
+	c.reader = nil
 }
 
 // IsConnected 检查是否已连接

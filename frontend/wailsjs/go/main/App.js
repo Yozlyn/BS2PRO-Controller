@@ -70,6 +70,14 @@ export function QuitApp() {
   return window['go']['main']['App']['QuitApp']();
 }
 
+export function QuitServiceOnly() {
+  return window['go']['main']['App']['QuitServiceOnly']();
+}
+
+export function RestartCoreService() {
+  return window['go']['main']['App']['RestartCoreService']();
+}
+
 export function SetAutoControl(arg1) {
   return window['go']['main']['App']['SetAutoControl'](arg1);
 }
