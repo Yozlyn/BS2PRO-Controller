@@ -13,7 +13,7 @@
           "name": "BS2PRO-Core",
           "version": "1.0.0.0"
         },
-        "description": "BS2PRO Controller Core Service",
+        "description": "BS2PRO CoreService",
         "minimum-os": "win10",
         "execution-level": "requireAdministrator",
         "ui-access": false,
@@ -42,7 +42,7 @@
           "0409": {
             "Comments": "BS2PRO Fan Controller Core Service",
             "CompanyName": "TIANLI0",
-            "FileDescription": "BS2PRO Controller Core Service",
+            "FileDescription": "BS2PRO CoreService",
             "FileVersion": "1.0.0.0",
             "InternalName": "BS2PRO-Core",
             "LegalCopyright": "Copyright (c) 2025 TIANLI0",
