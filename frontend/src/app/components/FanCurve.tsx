@@ -2,10 +2,12 @@
 
 import React, { useState, useEffect, useCallback, memo, useMemo, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { 
-  ArrowPathIcon, 
+import {
+  ArrowPathIcon,
   CheckIcon,
   InformationCircleIcon,
+  ArrowDownTrayIcon,
+  ArrowUpTrayIcon,
 } from '@heroicons/react/24/outline';
 import { apiService } from '../services/api';
 import { types } from '../../../wailsjs/go/models';
@@ -108,35 +110,6 @@ const TemperatureIndicator = memo(function TemperatureIndicator({
   );
 });
 
-// 独立的实时状态显示组件 - 不会触发父组件重绘
-const RealtimeStatus = memo(function RealtimeStatus({
-  temperature,
-  fanData,
-}: {
-  temperature: types.TemperatureData | null;
-  fanData: types.FanData | null;
-}) {
-  return (
-    <div className="flex items-center gap-6 text-sm">
-      <div className="flex items-center gap-2">
-        <span className="text-gray-500 dark:text-gray-400">温度</span>
-        <span className={clsx(
-          'font-semibold text-lg tabular-nums',
-          (temperature?.maxTemp ?? 0) > 80 ? 'text-red-500' :
-          (temperature?.maxTemp ?? 0) > 70 ? 'text-yellow-500' : 'text-green-500'
-        )}>
-          {temperature?.maxTemp ?? '--'}°C
-        </span>
-      </div>
-      <div className="flex items-center gap-2">
-        <span className="text-gray-500 dark:text-gray-400">转速</span>
-        <span className="font-semibold text-lg text-blue-600 dark:text-blue-400 tabular-nums">
-          {fanData?.currentRpm ?? '--'} RPM
-        </span>
-      </div>
-    </div>
-  );
-});
 
 // 自定义可拖拽的点组件
 const DraggablePoint = memo(function DraggablePoint({
@@ -416,6 +389,77 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
     setHasUnsavedChanges(true);
   }, [rpmRange.max]);
 
+  // 导出风扇配置
+  const exportFanConfig = useCallback(() => {
+    const fanConfig = {
+      fanCurve: localCurve,
+      autoControl: config.autoControl,
+      manualGear: config.manualGear,
+      manualLevel: config.manualLevel,
+      exportDate: new Date().toISOString(),
+      version: '1.0'
+    };
+    
+    const jsonStr = JSON.stringify(fanConfig, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bs2pro-fan-config-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [localCurve, config]);
+
+  // 导入风扇配置
+  const importFanConfig = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const content = event.target?.result as string;
+          const fanConfig = JSON.parse(content);
+          
+          // 验证导入的数据结构
+          if (!fanConfig.fanCurve || !Array.isArray(fanConfig.fanCurve)) {
+            throw new Error('无效的风扇配置文件');
+          }
+          
+          // 更新本地曲线
+          setLocalCurve(fanConfig.fanCurve);
+          setHasUnsavedChanges(true);
+          
+          // 可选：更新其他配置
+          if (fanConfig.autoControl !== undefined) {
+            try {
+              await apiService.setAutoControl(fanConfig.autoControl);
+              const newConfig = types.AppConfig.createFrom({ ...config, autoControl: fanConfig.autoControl });
+              onConfigChange(newConfig);
+            } catch (error) {
+              console.error('设置智能变频失败:', error);
+            }
+          }
+          
+          alert('风扇配置导入成功！');
+        } catch (error) {
+          console.error('导入风扇配置失败:', error);
+          alert('导入失败：文件格式无效');
+        }
+      };
+      reader.readAsText(file);
+    };
+    
+    input.click();
+  }, [config, onConfigChange]);
+
   // 智能变频切换
   const handleAutoControlChange = useCallback(async (enabled: boolean) => {
     try {
@@ -500,23 +544,8 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
           )}
         </div>
 
-        {/* 实时状态 - 使用独立组件避免触发父组件重绘 */}
-        <div className="flex flex-wrap items-center gap-4">
-          <RealtimeStatus temperature={temperature} fanData={fanData} />
-
-          {/* 智能变频开关 */}
-          <div className="flex items-center gap-3 pl-4 border-l border-gray-200 dark:border-gray-700">
-            <ToggleSwitch
-              enabled={config.autoControl}
-              onChange={handleAutoControlChange}
-              label="智能变频"
-              color="blue"
-            />
-          </div>
-        </div>
-
-        {/* 操作按钮 */}
-        <div className="flex items-center gap-2">
+        {/* 按钮组：重置、保存、导出、导入 */}
+        <div className="flex flex-wrap items-center gap-2 justify-end">
           <Button
             variant="secondary"
             size="sm"
@@ -534,6 +563,22 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
             icon={<CheckIcon className="w-4 h-4" />}
           >
             保存
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={exportFanConfig}
+            icon={<ArrowDownTrayIcon className="w-4 h-4" />}
+          >
+            导出
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={importFanConfig}
+            icon={<ArrowUpTrayIcon className="w-4 h-4" />}
+          >
+            导入
           </Button>
         </div>
       </div>

@@ -32,8 +32,6 @@ interface ControlPanelProps {
   config: types.AppConfig;
   onConfigChange: (config: types.AppConfig) => void;
   isConnected: boolean;
-  fanData: types.FanData | null;
-  temperature: types.TemperatureData | null;
 }
 
 interface SettingItemProps {
@@ -91,7 +89,7 @@ function SettingItem({
   );
 }
 
-export default function ControlPanel({ config, onConfigChange, isConnected, fanData, temperature }: ControlPanelProps) {
+export default function ControlPanel({ config, onConfigChange, isConnected }: ControlPanelProps) {
   const [loadingStates, setLoadingStates] = useState<Record<string, boolean>>({});
   const [debugInfo, setDebugInfo] = useState<DebugInfo | null>(null);
   const [debugInfoLoading, setDebugInfoLoading] = useState(false);
@@ -286,52 +284,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
   return (
     <>
       <Card className="p-6">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="p-2 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600">
-            <CogIcon className="w-6 h-6 text-white" />
-          </div>
-          <h2 className="text-xl font-bold text-gray-900 dark:text-white">控制面板</h2>
-        </div>
-
-        <div className="mb-6 p-5 rounded-2xl bg-gradient-to-r from-gray-50 via-blue-50 to-indigo-50 dark:from-gray-800 dark:via-blue-900/20 dark:to-indigo-900/20 border border-gray-200 dark:border-gray-700">
-          <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-4">实时状态</h3>
-          <div className="grid grid-cols-3 gap-6">
-            <div className="text-center">
-              <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">当前温度</div>
-              <div className={clsx(
-                'text-2xl font-bold',
-                (temperature?.maxTemp ?? 0) > 80 ? 'text-red-500' :
-                (temperature?.maxTemp ?? 0) > 70 ? 'text-yellow-500' : 'text-green-500'
-              )}>
-                {temperature?.maxTemp ?? '--'}°C
-              </div>
-              <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                CPU {temperature?.cpuTemp ?? '--'}°C | GPU {temperature?.gpuTemp ?? '--'}°C
-              </div>
-            </div>
-            
-            <div className="text-center">
-              <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">实时转速</div>
-              <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-                {fanData?.currentRpm ?? '--'} <span className="text-sm font-normal">RPM</span>
-              </div>
-              <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                {fanData?.workMode ?? '--'}
-              </div>
-            </div>
-            
-            <div className="text-center">
-              <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">目标转速</div>
-              <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
-                {fanData?.targetRpm ?? '--'} <span className="text-sm font-normal">RPM</span>
-              </div>
-              <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                挡位: {fanData?.setGear ?? '--'}
-              </div>
-            </div>
-          </div>
-        </div>
-
         <div className="divide-y divide-gray-100 dark:divide-gray-700/50">
           <SettingItem
             icon={config.autoControl ? 
@@ -344,7 +296,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
             description="根据温度曲线自动调节风扇转速"
             enabled={config.autoControl}
             onChange={handleAutoControlChange}
-            disabled={(config as any).customSpeedEnabled}
+            disabled={!isConnected || (config as any).customSpeedEnabled}
             loading={loadingStates.autoControl}
             color="green"
           />
@@ -496,7 +448,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected, fanD
                     Windows 启动时自动启动本程序
                   </div>
                   <div className="text-xs text-green-600 dark:text-green-400 mt-0.5">
-                    💡 Windows启动时静默启动GUI托盘程序
+                    💡 静默启动控制台托盘程序
                   </div>
                 </div>
               </div>

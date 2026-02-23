@@ -466,8 +466,6 @@ export default function Home() {
               config={config}
               onConfigChange={handleConfigChange}
               isConnected={isConnected}
-              fanData={fanData}
-              temperature={temperature}
             />
           )}
 
