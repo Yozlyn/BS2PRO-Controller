@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/TIANLI0/BS2PRO-Controller/internal/asus"
-	"github.com/TIANLI0/BS2PRO-Controller/internal/autostart"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/config"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/device"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/ipc"
@@ -23,40 +23,31 @@ import (
 type CoreApp struct {
 	ctx context.Context
 
-	// 管理器
-	deviceManager    *device.Manager
-	asusClient       *asus.Client
-	tempReader       *temperature.Reader
-	configManager    *config.Manager
-	autostartManager *autostart.Manager
-	logger           *logger.CustomLogger
-	ipcServer        *ipc.Server
+	deviceManager *device.Manager
+	asusClient    *asus.Client
+	tempReader    *temperature.Reader
+	configManager *config.Manager
+	logger        *logger.CustomLogger
+	ipcServer     *ipc.Server
 
-	// 状态
 	isConnected        bool
 	monitoringTemp     bool
 	userDisconnected   bool
 	currentTemp        types.TemperatureData
 	lastDeviceMode     string
 	userSetAutoControl bool
-	isAutoStartLaunch  bool
 	debugMode          bool
 
-	// 监控相关
 	guiLastResponse   int64
 	guiMonitorEnabled bool
 	healthCheckTicker *time.Ticker
 	cleanupChan       chan bool
-	quitChan          chan bool
 
-	// 同步
 	mutex          sync.RWMutex
 	stopMonitoring chan bool
 }
 
-// NewCoreApp 创建核心应用实例
-func NewCoreApp(debugMode, isAutoStart bool) *CoreApp {
-	// 初始化日志系统
+func NewCoreApp(debugMode bool) *CoreApp {
 	installDir := config.GetInstallDir()
 	customLogger, err := logger.NewCustomLogger(debugMode, installDir)
 	if err != nil {
@@ -78,7 +69,6 @@ func NewCoreApp(debugMode, isAutoStart bool) *CoreApp {
 	deviceMgr := device.NewManager(customLogger)
 	tempReader := temperature.NewReader(asusClient, customLogger)
 	configMgr := config.NewManager(installDir, customLogger)
-	autostartMgr := autostart.NewManager(customLogger)
 
 	app := &CoreApp{
 		ctx:                context.Background(),
@@ -87,18 +77,15 @@ func NewCoreApp(debugMode, isAutoStart bool) *CoreApp {
 		tempReader:         tempReader,
 		currentTemp:        types.TemperatureData{BridgeOk: true},
 		configManager:      configMgr,
-		autostartManager:   autostartMgr,
 		logger:             customLogger,
 		isConnected:        false,
 		monitoringTemp:     false,
 		stopMonitoring:     make(chan bool, 1),
 		lastDeviceMode:     "",
 		userSetAutoControl: false,
-		isAutoStartLaunch:  isAutoStart,
 		debugMode:          debugMode,
 		guiLastResponse:    time.Now().Unix(),
 		cleanupChan:        make(chan bool, 1),
-		quitChan:           make(chan bool, 1),
 		guiMonitorEnabled:  true,
 	}
 	return app
@@ -108,7 +95,7 @@ func (a *CoreApp) Start() error {
 	a.logInfo("=== BS2PRO 核心服务(Windows Service) 启动 ===")
 	a.logInfo("版本: %s", version.Get())
 
-	cfg := a.configManager.Load(a.isAutoStartLaunch)
+	cfg := a.configManager.Load(false)
 	if cfg.DebugMode {
 		a.debugMode = true
 		if a.logger != nil {
@@ -122,7 +109,7 @@ func (a *CoreApp) Start() error {
 	}
 	a.deviceManager.SetCallbacks(a.onFanDataUpdate, a.onDeviceDisconnect)
 
-	a.logInfo("启动 IPC 服务器")
+	a.logInfo("启动 IPC 服务器 (Named Pipe)")
 	a.ipcServer = ipc.NewServer(a.handleIPCRequest, a.logger)
 	if err := a.ipcServer.Start(); err != nil {
 		a.logError("启动 IPC 服务器失败: %v", err)
@@ -174,7 +161,6 @@ func (a *CoreApp) onQuitRequest() {
 		a.ipcServer.BroadcastEvent("quit", nil)
 	}
 
-	// 启动一个协程：先延迟一秒给前端返回成功的 IPC 响应，然后主动终止进程
 	go func() {
 		time.Sleep(1 * time.Second)
 		a.Stop() // 释放硬件句柄
@@ -183,11 +169,11 @@ func (a *CoreApp) onQuitRequest() {
 	}()
 }
 
-func (a *CoreApp) handleIPCRequest(req ipc.Request) ipc.Response {
-	// 捕获 IPC 路由过程中的致命崩溃
+func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 	defer func() {
 		if r := recover(); r != nil {
-			a.logError("处理 IPC 请求时发生 Panic: %v", r)
+			a.logError("处理 IPC 请求时发生致命异常: %v", r)
+			res = a.errorResponse(fmt.Sprintf("内部异常: %v", r))
 		}
 	}()
 
@@ -320,33 +306,6 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) ipc.Response {
 			status = map[string]interface{}{"running": false, "status": "ASUS ACPI接口未初始化", "type": "none"}
 		}
 		return a.dataResponse(status)
-	case ipc.ReqSetWindowsAutoStart:
-		var params ipc.SetBoolParams
-		if err := json.Unmarshal(req.Data, &params); err != nil {
-			return a.errorResponse("解析参数失败: " + err.Error())
-		}
-		if err := a.SetWindowsAutoStart(params.Enabled); err != nil {
-			return a.errorResponse(err.Error())
-		}
-		return a.successResponse(true)
-	case ipc.ReqCheckWindowsAutoStart:
-		enabled := a.autostartManager.CheckWindowsAutoStart()
-		return a.dataResponse(enabled)
-	case ipc.ReqIsRunningAsAdmin:
-		isAdmin := a.autostartManager.IsRunningAsAdmin()
-		return a.dataResponse(isAdmin)
-	case ipc.ReqGetAutoStartMethod:
-		method := a.autostartManager.GetAutoStartMethod()
-		return a.dataResponse(method)
-	case ipc.ReqSetAutoStartWithMethod:
-		var params ipc.SetAutoStartWithMethodParams
-		if err := json.Unmarshal(req.Data, &params); err != nil {
-			return a.errorResponse("解析参数失败: " + err.Error())
-		}
-		if err := a.autostartManager.SetAutoStartWithMethod(params.Enable, params.Method); err != nil {
-			return a.errorResponse(err.Error())
-		}
-		return a.successResponse(true)
 	case ipc.ReqShowWindow:
 		a.onShowWindowRequest()
 		return a.successResponse(true)
@@ -372,14 +331,15 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) ipc.Response {
 		return a.successResponse(true)
 	case ipc.ReqPing:
 		return a.dataResponse("pong")
-	case ipc.ReqIsAutoStartLaunch:
-		return a.dataResponse(a.isAutoStartLaunch)
 	case ipc.ReqSetRGBMode:
 		var params ipc.SetRGBModeParams
 		if err := json.Unmarshal(req.Data, &params); err != nil {
 			return a.errorResponse("解析RGB参数失败: " + err.Error())
 		}
 		success := a.SetRGBMode(params)
+		return a.successResponse(success)
+	case ipc.ReqRestartService:
+		success := a.RestartService()
 		return a.successResponse(success)
 	case ipc.ReqUnsubscribeEvents:
 		return a.successResponse(true)
@@ -817,26 +777,12 @@ func (a *CoreApp) SetRGBMode(params ipc.SetRGBModeParams) bool {
 	return success
 }
 
-func (a *CoreApp) SetWindowsAutoStart(enable bool) error {
-	err := a.autostartManager.SetWindowsAutoStart(enable)
-	if err == nil {
-		cfg := a.configManager.Get()
-		cfg.WindowsAutoStart = enable
-		a.configManager.Update(cfg)
-		if a.ipcServer != nil {
-			a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-		}
-	}
-	return err
-}
-
 func (a *CoreApp) GetDebugInfo() map[string]any {
 	return map[string]any{
 		"debugMode":       a.debugMode,
 		"isConnected":     a.isConnected,
 		"guiLastResponse": time.Unix(atomic.LoadInt64(&a.guiLastResponse), 0).Format("2006-01-02 15:04:05"),
 		"monitoringTemp":  a.monitoringTemp,
-		"autoStartLaunch": a.isAutoStartLaunch,
 		"hasGUIClients":   a.ipcServer != nil && a.ipcServer.HasClients(),
 	}
 }
@@ -881,13 +827,12 @@ func (a *CoreApp) startTemperatureMonitoring() {
 	// 防止更新频率设置过低导致 CPU 被打满或底层驱动卡死
 	intervalSec := cfg.TempUpdateRate
 	if intervalSec < 1 {
-		intervalSec = 1 // 强制最低 1 秒钟 1 次
+		intervalSec = 1
 	}
 	updateInterval := time.Duration(intervalSec) * time.Second
 	ticker := time.NewTicker(updateInterval)
 
 	go func() {
-		// 捕获第三方硬件驱动(ASUS WMI/NVML) 内部发生的致命异常
 		defer func() {
 			if r := recover(); r != nil {
 				a.logError("致命错误：温度监控协程崩溃: %v", r)
@@ -904,10 +849,10 @@ func (a *CoreApp) startTemperatureMonitoring() {
 		for {
 			select {
 			case <-a.stopMonitoring:
-				return // 收到停止信号，安全退出并触发 defer
+				return
 
 			case <-ticker.C:
-				temp := a.tempReader.Read() // 如果底层驱动崩了，上面的 defer兜底
+				temp := a.tempReader.Read()
 
 				a.mutex.Lock()
 				a.currentTemp = temp
@@ -1025,4 +970,27 @@ func (a *CoreApp) logDebug(format string, v ...any) {
 	if a.logger != nil {
 		a.logger.Debug(format, v...)
 	}
+}
+
+// RestartService 重启核心服务（异步执行）
+func (a *CoreApp) RestartService() bool {
+	a.logInfo("收到重启服务请求，准备通过服务管理器重启...")
+	const serviceName = "BS2PRO_CoreService"
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		a.logInfo("执行服务重启: Restart-Service -Name %s -Force", serviceName)
+		a.Stop()
+
+		psCommand := fmt.Sprintf(`Restart-Service -Name "%s" -Force`, serviceName)
+
+		cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-Command", psCommand)
+
+		if err := cmd.Start(); err != nil {
+			a.logError("触发服务重启脚本失败: %v", err)
+			return
+		}
+	}()
+
+	return true
 }

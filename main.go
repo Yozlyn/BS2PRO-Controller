@@ -18,7 +18,7 @@ var assets embed.FS
 //go:embed build/windows/icon.ico
 var iconData []byte
 
-// 获取WebView2用户数据目录路径
+// 获取WebView2用户数据目录路径，隔离缓存以便卸载时干净清理
 func getWebView2DataPath() string {
 	appData, err := os.UserConfigDir()
 	if err != nil {
@@ -33,16 +33,37 @@ func main() {
 
 	// 启动 Wails 框架
 	err := wails.Run(&options.App{
-		Title:  "BS2PRO-控制台",
-		Width:  1024,
-		Height: 768,
+		Title:     "BS2PRO-控制台",
+		Width:     1024,
+		Height:    680,
+		MinWidth:  850,
+		MinHeight: 600,
+
+		StartHidden: false,
+
+		// 应用程序单实例锁
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId: "BS2PRO-Controller-Unique-Lock-2025",
+			OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
+				hasAutostart := false
+				for _, arg := range secondInstanceData.Args {
+					if arg == "--autostart" || arg == "-autostart" {
+						hasAutostart = true
+						break
+					}
+				}
+				if !hasAutostart {
+					app.ShowWindow()
+				}
+			},
+		},
+
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
 		OnStartup:        app.startup,
-		// 拦截窗口关闭事件，隐藏到托盘
-		OnBeforeClose: app.OnWindowClosing,
+		OnBeforeClose:    app.OnWindowClosing,
 		Bind: []interface{}{
 			app,
 		},

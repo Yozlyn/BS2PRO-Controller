@@ -24,7 +24,7 @@ func (p *program) Start(s service.Service) error {
 	}
 
 	// 实例化核心应用
-	p.app = NewCoreApp(debugMode, false)
+	p.app = NewCoreApp(debugMode)
 
 	// 在后台协程中启动核心，防止阻塞系统服务管理器
 	go func() {

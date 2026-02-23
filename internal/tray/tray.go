@@ -217,15 +217,17 @@ func (m *Manager) createMenu() (items *MenuItems, err error) {
 	items.FanSpeed = systray.AddMenuItem("风扇转速", "显示当前风扇转速")
 	items.FanSpeed.Disable()
 
-	m.menuQuitGUI = systray.AddMenuItem("退出GUI", "只关闭前端界面")
-	m.menuQuitAll = systray.AddMenuItem("彻底退出", "完全退出前端和底层守护服务")
-
 	// 智能变频状态 - 获取当前配置状态
 	autoControlEnabled := false
 	if m.getStatus != nil {
 		autoControlEnabled = m.getStatus().AutoControlState
 	}
 	items.AutoControl = systray.AddMenuItemCheckbox("智能变频", "启用/禁用智能变频", autoControlEnabled)
+
+	systray.AddSeparator()
+
+	m.menuQuitAll = systray.AddMenuItem("重启服务", "重启底层守护服务")
+	m.menuQuitGUI = systray.AddMenuItem("退出控制台", "只关闭前端界面")
 
 	return items, nil
 }
@@ -260,6 +262,30 @@ func (m *Manager) handleMenuEvents() {
 					m.menuItems.AutoControl.Uncheck()
 				}
 				m.uiMutex.Unlock()
+			}
+		case <-m.menuQuitGUI.ClickedCh:
+			m.logDebug("托盘菜单: 退出控制台")
+			if m.onQuit != nil {
+				m.onQuit()
+			}
+		case <-m.menuQuitAll.ClickedCh:
+			m.logDebug("托盘菜单: 重启服务")
+			if m.onQuitAll != nil {
+				m.onQuitAll()
+				// 更新菜单项文本，添加"（重启中）"提示
+				m.uiMutex.Lock()
+				m.menuQuitAll.SetTitle("重启服务（重启中）")
+				m.menuQuitAll.Disable() // 禁用菜单项，防止重复点击
+				m.uiMutex.Unlock()
+
+				// 5秒后恢复菜单项
+				go func() {
+					time.Sleep(5 * time.Second)
+					m.uiMutex.Lock()
+					m.menuQuitAll.SetTitle("重启服务")
+					m.menuQuitAll.Enable()
+					m.uiMutex.Unlock()
+				}()
 			}
 		case <-m.done:
 			return

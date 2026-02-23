@@ -12,19 +12,16 @@ import (
 
 // Manager 自启动管理器
 type Manager struct {
-	logger types.Logger
+	logger     types.Logger
+	installDir string // 安装目录
 }
 
 // NewManager 创建新的自启动管理器
-func NewManager(logger types.Logger) *Manager {
+func NewManager(logger types.Logger, installDir string) *Manager {
 	return &Manager{
-		logger: logger,
+		logger:     logger,
+		installDir: installDir,
 	}
-}
-
-// IsRunningAsAdmin 检查是否以管理员权限运行
-func (m *Manager) IsRunningAsAdmin() bool {
-	return true
 }
 
 // SetWindowsAutoStart 设置Windows开机自启动
@@ -36,19 +33,25 @@ func (m *Manager) SetWindowsAutoStart(enable bool) error {
 	defer key.Close()
 
 	if enable {
-		exePath, err := os.Executable()
-		if err != nil {
-			return fmt.Errorf("获取程序路径失败: %v", err)
+		// 使用安装目录来构建控制台路径
+		if m.installDir == "" {
+			return fmt.Errorf("安装目录未设置")
 		}
 
-		guiPath := filepath.Join(filepath.Dir(exePath), "BS2PRO-Controller.exe")
+		guiPath := filepath.Join(m.installDir, "BS2PRO-Controller.exe")
 
+		// 检查文件是否存在
+		if _, err := os.Stat(guiPath); os.IsNotExist(err) {
+			return fmt.Errorf("GUI程序不存在: %s", guiPath)
+		}
+
+		// -autostart，前端启动时最小化到托盘
 		val := fmt.Sprintf(`"%s" --autostart`, guiPath)
 		err = key.SetStringValue("BS2PRO-Controller", val)
 		if err != nil {
 			return fmt.Errorf("设置注册表失败: %v", err)
 		}
-		m.logger.Info("已通过注册表设置前端控制台开机自启动")
+		m.logger.Info("已通过注册表设置控制台开机自启动，路径: %s", guiPath)
 	} else {
 		err = key.DeleteValue("BS2PRO-Controller")
 		if err != nil && err != registry.ErrNotExist {
