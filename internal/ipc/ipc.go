@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	goruntime "runtime"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Microsoft/go-winio"
@@ -53,13 +56,6 @@ const (
 	ReqTestBridgeProgram      RequestType = "TestBridgeProgram"
 	ReqGetBridgeProgramStatus RequestType = "GetBridgeProgramStatus"
 
-	// 自启动相关
-	ReqSetWindowsAutoStart    RequestType = "SetWindowsAutoStart"
-	ReqCheckWindowsAutoStart  RequestType = "CheckWindowsAutoStart"
-	ReqIsRunningAsAdmin       RequestType = "IsRunningAsAdmin"
-	ReqGetAutoStartMethod     RequestType = "GetAutoStartMethod"
-	ReqSetAutoStartWithMethod RequestType = "SetAutoStartWithMethod"
-
 	// 窗口相关
 	ReqShowWindow RequestType = "ShowWindow"
 	ReqHideWindow RequestType = "HideWindow"
@@ -71,9 +67,7 @@ const (
 	ReqUpdateGuiResponseTime RequestType = "UpdateGuiResponseTime"
 
 	// 系统相关
-	ReqPing              RequestType = "Ping"
-	ReqIsAutoStartLaunch RequestType = "IsAutoStartLaunch"
-	ReqSubscribeEvents   RequestType = "SubscribeEvents"
+	ReqPing RequestType = "Ping"
 
 	// RGB 灯效控制
 	ReqSetRGBMode        RequestType = "SetRGBMode"
@@ -81,6 +75,7 @@ const (
 
 	// 服务管理
 	ReqRestartService RequestType = "RestartService"
+	ReqStopService    RequestType = "StopService"
 )
 
 // Request IPC 请求
@@ -106,14 +101,14 @@ type Event struct {
 
 // EventType 事件类型
 const (
-	EventFanDataUpdate      = "fan-data-update"
-	EventTemperatureUpdate  = "temperature-update"
-	EventDeviceConnected    = "device-connected"
-	EventDeviceDisconnected = "device-disconnected"
-	EventDeviceError        = "device-error"
-	EventConfigUpdate       = "config-update"
-	EventHealthPing         = "health-ping"
-	EventHeartbeat          = "heartbeat"
+	EventFanDataUpdate       = "fan-data-update"
+	EventTemperatureUpdate   = "temperature-update"
+	EventDeviceConnected     = "device-connected"
+	EventDeviceDisconnected  = "device-disconnected"
+	EventDeviceError         = "device-error"
+	EventConfigUpdate        = "config-update"
+	EventServiceConnected    = "service-connected"
+	EventServiceDisconnected = "service-disconnected"
 )
 
 // Server IPC 服务器
@@ -123,7 +118,7 @@ type Server struct {
 	mutex    sync.RWMutex
 	handler  RequestHandler
 	logger   types.Logger
-	running  bool
+	running  atomic.Bool
 }
 
 // RequestHandler 请求处理函数类型
@@ -151,7 +146,7 @@ func (s *Server) Start() error {
 	}
 
 	s.listener = listener
-	s.running = true
+	s.running.Store(true)
 	s.logInfo("IPC 服务器已启动: %s", PipePath)
 
 	// 接受连接
@@ -162,13 +157,19 @@ func (s *Server) Start() error {
 
 // acceptConnections 接受客户端连接
 func (s *Server) acceptConnections() {
-	for s.running {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logError("acceptConnections 发生 panic: %v", r)
+		}
+	}()
+	for s.running.Load() {
 		conn, err := s.listener.Accept()
 		if err != nil {
-			if s.running {
+			if s.running.Load() {
 				s.logError("接受连接失败: %v", err)
+				continue
 			}
-			continue
+			return
 		}
 
 		s.mutex.Lock()
@@ -183,6 +184,11 @@ func (s *Server) acceptConnections() {
 // handleClient 处理客户端连接
 func (s *Server) handleClient(conn net.Conn) {
 	defer func() {
+		if r := recover(); r != nil {
+			stack := make([]byte, 4096)
+			n := goruntime.Stack(stack, false)
+			s.logError("handleClient 发生 panic: %v\nstack:\n%s", r, stack[:n])
+		}
 		s.mutex.Lock()
 		delete(s.clients, conn)
 		s.mutex.Unlock()
@@ -192,12 +198,25 @@ func (s *Server) handleClient(conn net.Conn) {
 
 	reader := bufio.NewReader(conn)
 
-	for s.running {
+	for s.running.Load() {
+		// 设置读取deadline若客户端 30 秒内无任何数据（包括心跳），
+		// 视为僵尸连接，主动断开以释放 goroutine 和连接槽位。
+		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
-			s.logDebug("读取客户端请求失败: %v", err)
+			if s.running.Load() {
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					s.logDebug("IPC读取超时 - 类型: 客户端无响应超时, 超时阈值: 30s, 错误详情: %v", netErr)
+				} else if strings.Contains(err.Error(), "i/o timeout") {
+					s.logDebug("IPC读取超时 - 类型: I/O操作超时, 位置: 命名管道读取, 错误详情: %v", err)
+				} else {
+					s.logDebug("IPC读取失败 - 错误类型: %T, 错误详情: %v", err, err)
+				}
+			}
 			return
 		}
+		// 读到数据后清除deadline，避免影响后续正常处理耗时
+		conn.SetReadDeadline(time.Time{})
 
 		// 解析请求
 		var req Request
@@ -248,7 +267,11 @@ func (s *Server) BroadcastEvent(eventType string, data any) {
 
 	for conn := range s.clients {
 		go func(c net.Conn) {
+			defer func() { recover() }()
+			// 设置写超时：若客户端 Pipe 缓冲区满（GUI 卡死），2 秒后放弃写入，避免 goroutine 永久泄漏。
+			c.SetWriteDeadline(time.Now().Add(2 * time.Second))
 			_, err := c.Write(append(eventBytes, '\n'))
+			c.SetWriteDeadline(time.Time{}) // 写完后清除，不影响后续读 deadline
 			if err != nil {
 				s.logDebug("发送事件失败: %v", err)
 			}
@@ -258,7 +281,7 @@ func (s *Server) BroadcastEvent(eventType string, data any) {
 
 // Stop 停止服务器
 func (s *Server) Stop() {
-	s.running = false
+	s.running.Store(false)
 	if s.listener != nil {
 		s.listener.Close()
 	}
@@ -301,14 +324,15 @@ func (s *Server) logDebug(format string, v ...any) {
 
 // Client IPC 客户端
 type Client struct {
-	conn         net.Conn
-	mutex        sync.Mutex
-	reader       *bufio.Reader
-	logger       types.Logger
-	eventHandler func(Event)
-	responseChan chan *Response
-	connected    bool
-	connMutex    sync.RWMutex
+	conn           net.Conn
+	mutex          sync.Mutex
+	reader         *bufio.Reader
+	logger         types.Logger
+	eventHandler   func(Event)
+	responseChan   chan *Response
+	connected      bool
+	connMutex      sync.RWMutex
+	connGeneration int64
 }
 
 // NewClient 创建 IPC 客户端
@@ -340,20 +364,43 @@ func (c *Client) Connect() error {
 	c.conn = conn
 	c.reader = bufio.NewReader(conn)
 	c.connected = true
+	// 递增generation：旧readLoop检测到generation变化后会主动退出，
+	// 确保任意时刻只有一个readLoop goroutine在运行。
+	gen := atomic.AddInt64(&c.connGeneration, 1)
 	c.logInfo("已连接到 IPC 服务器")
 
 	// 启动消息接收循环
-	go c.readLoop()
+	go c.readLoop(gen)
+
+	// 触发服务连接事件
+	if c.eventHandler != nil {
+		event := Event{
+			IsEvent: true,
+			Type:    EventServiceConnected,
+			Data:    json.RawMessage(`{"timestamp": "` + time.Now().Format(time.RFC3339) + `"}`),
+		}
+		go c.eventHandler(event)
+	}
 
 	return nil
 }
 
 // readLoop 统一的消息读取循环
-func (c *Client) readLoop() {
+// gen是goroutine启动时的连接代数，当检测到代数变化时主动退出，
+// 确保每次Connect() 后只有最新的readLoop在运行。
+func (c *Client) readLoop(gen int64) {
+	c.logInfo("readLoop(gen=%d) 启动", gen)
 	for {
+		// 检查连接代数，若已被新连接取代则主动退出
+		if atomic.LoadInt64(&c.connGeneration) != gen {
+			c.logInfo("readLoop(gen=%d) 检测到新连接，主动退出", gen)
+			return
+		}
+
 		c.connMutex.RLock()
 		if !c.connected || c.reader == nil {
 			c.connMutex.RUnlock()
+			c.logInfo("readLoop(gen=%d) 连接已断开或reader为空，退出", gen)
 			return
 		}
 		reader := c.reader
@@ -361,10 +408,26 @@ func (c *Client) readLoop() {
 
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
-			c.logDebug("读取消息失败: %v", err)
+			// 再次检查generation，若已被新连接取代，静默退出即可
+			if atomic.LoadInt64(&c.connGeneration) != gen {
+				c.logInfo("readLoop(gen=%d) 读取失败但已有新连接，退出", gen)
+				return
+			}
+			c.logInfo("readLoop(gen=%d) 读取消息失败，连接可能已断开: %v", gen, err)
 			c.connMutex.Lock()
 			c.connected = false
 			c.connMutex.Unlock()
+			c.logInfo("readLoop(gen=%d) 已标记连接断开", gen)
+
+			// 触发服务断开事件
+			if c.eventHandler != nil {
+				event := Event{
+					IsEvent: true,
+					Type:    EventServiceDisconnected,
+					Data:    json.RawMessage(`{"reason": "` + err.Error() + `"}`),
+				}
+				go c.eventHandler(event)
+			}
 			return
 		}
 
@@ -405,27 +468,22 @@ func (c *Client) SetEventHandler(handler func(Event)) {
 
 // SendRequest 发送请求并等待响应
 func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
-	// 检查连接状态，如果未连接则尝试连接
 	c.connMutex.RLock()
 	needsConnect := !c.connected || c.conn == nil
 	c.connMutex.RUnlock()
 
+	c.logInfo("SendRequest: 类型=%v, needsConnect=%v", reqType, needsConnect)
+
 	if needsConnect {
+		// Connect() 内部持 connMutex.Lock()，最多阻塞5秒，
+		// 但此时c.mutex尚未持有，其他调用方不会被阻塞在此。
+		c.logInfo("SendRequest: 尝试连接服务器")
 		if err := c.Connect(); err != nil {
+			c.logInfo("SendRequest: 连接服务器失败: %v", err)
 			return nil, fmt.Errorf("未连接到服务器: %v", err)
 		}
+		c.logInfo("SendRequest: 连接服务器成功")
 	}
-
-	c.connMutex.RLock()
-	if !c.connected || c.conn == nil {
-		c.connMutex.RUnlock()
-		return nil, fmt.Errorf("未连接到服务器")
-	}
-	conn := c.conn
-	c.connMutex.RUnlock()
 
 	var dataBytes json.RawMessage
 	if data != nil {
@@ -435,32 +493,56 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 			return nil, fmt.Errorf("序列化请求数据失败: %v", err)
 		}
 	}
-
-	req := Request{
-		Type: reqType,
-		Data: dataBytes,
-	}
-
+	req := Request{Type: reqType, Data: dataBytes}
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("序列化请求失败: %v", err)
 	}
 
-	// 清空响应通道
-	select {
-	case <-c.responseChan:
-	default:
-	}
+	// c.mutex保证同一时刻只有一个请求在管道上传输（请求-响应配对）。
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 
-	// 尝试发送请求，如果失败则重试一次
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
+		// 获取当前连接快照（在c.mutex内，connMutex.RLock不会死锁）
+		c.connMutex.RLock()
+		connected := c.connected
+		conn := c.conn
+		c.connMutex.RUnlock()
+
+		c.logInfo("SendRequest: 尝试 %d, connected=%v, conn=%v", attempt+1, connected, conn != nil)
+
+		if !connected || conn == nil {
+			// 已断连，尝试重新建立连接
+			c.logInfo("SendRequest: 连接已断开，尝试重新连接")
+			if err := c.Connect(); err != nil {
+				lastErr = fmt.Errorf("重连失败: %v", err)
+				c.logInfo("SendRequest: 重连失败: %v", err)
+				continue
+			}
+			c.connMutex.RLock()
+			conn = c.conn
+			c.connMutex.RUnlock()
+			if conn == nil {
+				lastErr = fmt.Errorf("重连后连接仍为空")
+				c.logInfo("SendRequest: 重连后连接仍为空")
+				continue
+			}
+			c.logInfo("SendRequest: 重连成功")
+		}
+
+		// 清空可能残留的旧响应
+		select {
+		case <-c.responseChan:
+		default:
+		}
+
 		_, err = conn.Write(append(reqBytes, '\n'))
 		if err != nil {
 			lastErr = err
 			c.logDebug("发送请求失败 (尝试 %d): %v", attempt+1, err)
-
-			// 如果发送失败，关闭连接并尝试重新连接
+			// 标记断连，下次循环重连
 			c.connMutex.Lock()
 			c.connected = false
 			if c.conn != nil {
@@ -468,28 +550,10 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 				c.conn = nil
 			}
 			c.connMutex.Unlock()
-
-			// 如果是最后一次尝试，直接返回错误
 			if attempt == 1 {
 				break
 			}
-
-			// 等待一小段时间后重试连接
 			time.Sleep(100 * time.Millisecond)
-			if err := c.Connect(); err != nil {
-				lastErr = fmt.Errorf("重连失败: %v", err)
-				continue
-			}
-
-			// 重新获取连接
-			c.connMutex.RLock()
-			if !c.connected || c.conn == nil {
-				c.connMutex.RUnlock()
-				continue
-			}
-			conn = c.conn
-			c.connMutex.RUnlock()
-
 			continue
 		}
 
@@ -555,11 +619,6 @@ func GetCoreLockFilePath() string {
 	return fmt.Sprintf("%s/bs2pro-core.lock", tempDir)
 }
 
-// StartCoreRequestParams 启动核心服务的请求参数
-type StartCoreRequestParams struct {
-	ShowGUI bool `json:"showGUI"`
-}
-
 // SetAutoControlParams 设置智能变频参数
 type SetAutoControlParams struct {
 	Enabled bool `json:"enabled"`
@@ -590,12 +649,6 @@ type SetStringParams struct {
 // SetIntParams 整数参数
 type SetIntParams struct {
 	Value int `json:"value"`
-}
-
-// SetAutoStartWithMethodParams 设置自启动方式参数
-type SetAutoStartWithMethodParams struct {
-	Enable bool   `json:"enable"`
-	Method string `json:"method"`
 }
 
 // RGBColorParam RGB颜色参数

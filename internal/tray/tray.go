@@ -25,9 +25,11 @@ type Manager struct {
 	onShowWindow func()
 	onQuit       func()
 	onQuitAll    func()
+	onStopCore   func()
 	onToggleAuto func() bool
 	getStatus    func() Status
 	menuQuitGUI  *systray.MenuItem
+	menuStopCore *systray.MenuItem
 	menuQuitAll  *systray.MenuItem
 
 	// 监控托盘健康状态
@@ -68,12 +70,14 @@ func (m *Manager) SetCallbacks(
 	onShow func(),
 	onQuit func(),
 	onQuitAll func(),
+	onStopCore func(),
 	onToggleAuto func() bool,
 	getStatus func() Status,
 ) {
 	m.onShowWindow = onShow
 	m.onQuit = onQuit
 	m.onQuitAll = onQuitAll
+	m.onStopCore = onStopCore
 	m.onToggleAuto = onToggleAuto
 	m.getStatus = getStatus
 }
@@ -148,24 +152,9 @@ func (m *Manager) onTrayReady() {
 	atomic.StoreInt32(&m.consecutiveFails, 0)
 	m.logInfo("系统托盘初始化完成")
 
+	// 所有菜单事件统一由handleMenuEvents处理，
+	// 避免多个goroutine竞争同一channel导致"重启中"UI更新随机失效。
 	go m.handleMenuEvents()
-
-	go func() {
-		for {
-			select {
-			case <-m.menuQuitGUI.ClickedCh:
-				if m.onQuit != nil {
-					m.onQuit()
-				}
-			case <-m.menuQuitAll.ClickedCh:
-				if m.onQuitAll != nil {
-					m.onQuitAll()
-				}
-			case <-m.done:
-				return
-			}
-		}
-	}()
 
 	go m.updateMenuStatus()
 	go m.startIconHealthMonitor()
@@ -226,7 +215,8 @@ func (m *Manager) createMenu() (items *MenuItems, err error) {
 
 	systray.AddSeparator()
 
-	m.menuQuitAll = systray.AddMenuItem("重启服务", "重启底层守护服务")
+	m.menuStopCore = systray.AddMenuItem("关闭核心", "停止底层守护服务")
+	m.menuQuitAll = systray.AddMenuItem("重启核心", "重启底层守护服务")
 	m.menuQuitGUI = systray.AddMenuItem("退出控制台", "只关闭前端界面")
 
 	return items, nil
@@ -268,13 +258,32 @@ func (m *Manager) handleMenuEvents() {
 			if m.onQuit != nil {
 				m.onQuit()
 			}
+		case <-m.menuStopCore.ClickedCh:
+			m.logDebug("托盘菜单: 关闭核心")
+			if m.onStopCore != nil {
+				m.onStopCore()
+				// 更新菜单项文本，添加"（关闭中）"提示
+				m.uiMutex.Lock()
+				m.menuStopCore.SetTitle("关闭核心（关闭中）")
+				m.menuStopCore.Disable() // 禁用菜单项，防止重复点击
+				m.uiMutex.Unlock()
+
+				// 5秒后恢复菜单项
+				go func() {
+					time.Sleep(5 * time.Second)
+					m.uiMutex.Lock()
+					m.menuStopCore.SetTitle("关闭核心")
+					m.menuStopCore.Enable()
+					m.uiMutex.Unlock()
+				}()
+			}
 		case <-m.menuQuitAll.ClickedCh:
-			m.logDebug("托盘菜单: 重启服务")
+			m.logDebug("托盘菜单: 重启核心")
 			if m.onQuitAll != nil {
 				m.onQuitAll()
 				// 更新菜单项文本，添加"（重启中）"提示
 				m.uiMutex.Lock()
-				m.menuQuitAll.SetTitle("重启服务（重启中）")
+				m.menuQuitAll.SetTitle("重启核心（重启中）")
 				m.menuQuitAll.Disable() // 禁用菜单项，防止重复点击
 				m.uiMutex.Unlock()
 
@@ -282,7 +291,7 @@ func (m *Manager) handleMenuEvents() {
 				go func() {
 					time.Sleep(5 * time.Second)
 					m.uiMutex.Lock()
-					m.menuQuitAll.SetTitle("重启服务")
+					m.menuQuitAll.SetTitle("重启核心")
 					m.menuQuitAll.Enable()
 					m.uiMutex.Unlock()
 				}()
