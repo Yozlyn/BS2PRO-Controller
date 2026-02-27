@@ -50,19 +50,6 @@ type BridgeTemperatureData struct {
 	Error      string `json:"error"`
 }
 
-// BridgeCommand 桥接程序命令
-type BridgeCommand struct {
-	Type string `json:"type"`
-	Data string `json:"data"`
-}
-
-// BridgeResponse 桥接程序响应
-type BridgeResponse struct {
-	Success bool                   `json:"success"`
-	Error   string                 `json:"error"`
-	Data    *BridgeTemperatureData `json:"data"`
-}
-
 // RGBColorConfig RGB颜色配置
 type RGBColorConfig struct {
 	R int `json:"r"`

@@ -3,6 +3,8 @@
 import {types} from '../models';
 import {ipc} from '../models';
 
+export function CheckConnectionStatus():Promise<Record<string, any>>;
+
 export function CheckWindowsAutoStart():Promise<boolean>;
 
 export function ConnectDevice():Promise<boolean>;
@@ -33,11 +35,9 @@ export function InitSystemTray():Promise<void>;
 
 export function IsAutoStartLaunch():Promise<boolean>;
 
-export function QuitAll():Promise<void>;
+export function LogFrontendError(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
 
 export function QuitApp():Promise<void>;
-
-export function QuitServiceOnly():Promise<void>;
 
 export function RestartCoreService():Promise<boolean>;
 
@@ -64,6 +64,8 @@ export function SetSmartStartStop(arg1:string):Promise<boolean>;
 export function SetWindowsAutoStart(arg1:boolean):Promise<void>;
 
 export function ShowWindow():Promise<void>;
+
+export function StopCoreService():Promise<boolean>;
 
 export function TestBridgeProgram():Promise<types.BridgeTemperatureData>;
 
