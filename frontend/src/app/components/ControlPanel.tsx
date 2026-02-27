@@ -74,7 +74,7 @@ function SettingItem({
           {icon}
         </div>
         <div>
-          <div className="font-medium text-gray-900 dark:text-white">{title}</div>
+          <div className="font-medium text-gray-900 dark:text-gray-300">{title}</div>
           <div className="text-sm text-gray-500 dark:text-gray-400">{description}</div>
         </div>
       </div>
@@ -95,8 +95,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
   const [debugInfoLoading, setDebugInfoLoading] = useState(false);
   const [showCustomSpeedWarning, setShowCustomSpeedWarning] = useState(false);
   const [customSpeedInput, setCustomSpeedInput] = useState<number>((config as any).customSpeedRPM || 2000);
-  const [appVersion, setAppVersion] = useState('');
-  const [iframeLoaded, setIframeLoaded] = useState(false);
 
   const setLoading = (key: string, value: boolean) => {
     setLoadingStates(prev => ({ ...prev, [key]: value }));
@@ -244,18 +242,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
     }
   }, []);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      apiService.updateGuiResponseTime().catch(() => {});
-    }, 10000);
-    return () => clearInterval(interval);
-  }, []);
 
-  useEffect(() => {
-    apiService.getAppVersion()
-      .then((version) => setAppVersion(version || ''))
-      .catch(() => setAppVersion(''));
-  }, []);
 
   const smartStartStopOptions = [
     { value: 'off', label: '关闭', description: '禁用智能启停功能' },
@@ -309,7 +296,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
                     <ChartBarIcon className="w-5 h-5 text-cyan-600 dark:text-cyan-400" />
                   </div>
                   <div>
-                    <div className="font-medium text-gray-900 dark:text-white">平滑曲线模式</div>
+                    <div className="font-medium text-gray-900 dark:text-gray-300">平滑曲线模式</div>
                     <div className="text-sm text-gray-500 dark:text-gray-400">
                       通过多次采样取平均值，减少温度波动对风扇转速的影响，防止频繁调整噪音
                     </div>
@@ -348,7 +335,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
                     )} />
                   </div>
                   <div>
-                    <div className="font-medium text-gray-900 dark:text-white">自定义转速</div>
+                    <div className="font-medium text-gray-900 dark:text-gray-300">自定义转速</div>
                     <div className="text-sm text-gray-500 dark:text-gray-400">
                       固定风扇转速，适合特殊场景使用
                     </div>
@@ -373,7 +360,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
                       type="number"
                       value={customSpeedInput}
                       onChange={(e) => setCustomSpeedInput(Number(e.target.value))}
-                      className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all duration-200"
+                      className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all duration-200"
                       min={1000}
                       max={4000}
                       step={50}
@@ -443,7 +430,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
                   )} />
                 </div>
                 <div>
-                  <div className="font-medium text-gray-900 dark:text-white">开机自启动</div>
+                  <div className="font-medium text-gray-900 dark:text-gray-300">开机自启动</div>
                   <div className="text-sm text-gray-500 dark:text-gray-400">
                     Windows 启动时自动启动本程序
                   </div>
@@ -478,7 +465,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
                   )} />
                 </div>
                 <div>
-                  <div className="font-medium text-gray-900 dark:text-white">断连保持配置</div>
+                  <div className="font-medium text-gray-900 dark:text-gray-300">断连保持配置</div>
                   <div className="text-sm text-gray-500 dark:text-gray-400">
                     设备断开重连后继续使用APP配置，而不是设备默认状态
                   </div>
@@ -501,7 +488,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
                 <BoltIcon className="w-5 h-5 text-purple-600 dark:text-purple-400" />
               </div>
               <div>
-                <div className="font-medium text-gray-900 dark:text-white">智能启停</div>
+                <div className="font-medium text-gray-900 dark:text-gray-300">智能启停</div>
                 <div className="text-sm text-gray-500 dark:text-gray-400">
                   根据系统负载智能控制风扇启停
                 </div>
@@ -528,139 +515,83 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
           </div>
         )}
 
-        <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
-          <div className="text-center mb-4">
-            <Badge variant="info" size="md">{appVersion ? `v${appVersion}` : 'v--'}</Badge>
-          </div>
-
-          <div className="rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden bg-white dark:bg-gray-800">
-            <div className="px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-600">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <InformationCircleIcon className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                  <span className="font-medium text-gray-900 dark:text-white">关于 & 更新</span>
+        {/* 调试面板 */}
+        <Disclosure as="div" className="mt-6">
+          {({ open }) => (
+            <div className="rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+              <Disclosure.Button className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-600/50 transition-colors">
+                <div className="flex items-center gap-3">
+                  <BugAntIcon className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                  <span className="font-medium text-gray-900 dark:text-gray-300">调试面板</span>
                 </div>
-                <button
-                  onClick={() => handleOpenUrl('https://blog.tianli0.top/pages/bs2pro')}
-                  className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                >
-                  在浏览器中打开
-                </button>
-              </div>
-            </div>
-            <div className="relative h-80">
-              <iframe
-                src="https://blog.tianli0.top/pages/bs2pro"
-                className="w-full h-full border-0"
-                title="BS2PRO 关于页面"
-                sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-                loading="lazy"
-                onLoad={() => setIframeLoaded(true)}
-              />
-              {!iframeLoaded && (
-                <div className="absolute inset-0 flex items-center justify-center bg-gray-50 dark:bg-gray-800">
-                  <div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full" />
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-6 p-4 rounded-2xl bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 border border-gray-200 dark:border-gray-700">
-            <div className="flex items-center justify-center gap-4">
-              <img 
-                src="https://q1.qlogo.cn/g?b=qq&nk=507249007&s=640" 
-                alt="开发者头像" 
-                className="w-12 h-12 rounded-full border-2 border-white shadow-lg"
-              />
-              <div>
-                <div className="font-semibold text-gray-900 dark:text-white">TIANLI</div>
-                <button 
-                  onClick={() => handleOpenUrl('mailto:wutianli@tianli0.top')}
-                  className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
-                >
-                  wutianli@tianli0.top
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <Disclosure as="div" className="mt-6">
-            {({ open }) => (
-              <div className="rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-                <Disclosure.Button className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-600/50 transition-colors">
-                  <div className="flex items-center gap-3">
-                    <BugAntIcon className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-                    <span className="font-medium text-gray-900 dark:text-white">调试面板</span>
+                <ChevronDownIcon className={clsx(
+                  'w-5 h-5 text-gray-500 transition-transform duration-200',
+                  open && 'rotate-180'
+                )} />
+              </Disclosure.Button>
+              
+              <Transition
+                enter="transition duration-100 ease-out"
+                enterFrom="transform scale-95 opacity-0"
+                enterTo="transform scale-100 opacity-100"
+                leave="transition duration-75 ease-out"
+                leaveFrom="transform scale-100 opacity-100"
+                leaveTo="transform scale-95 opacity-0"
+              >
+                <Disclosure.Panel className="p-4 space-y-4">
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-700/50">
+                    <div className="flex items-center gap-3">
+                      <BugAntIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                      <div>
+                        <div className="font-medium text-gray-900 dark:text-gray-300">调试模式</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">启用详细日志输出</div>
+                      </div>
+                    </div>
+                    <ToggleSwitch
+                      enabled={config.debugMode}
+                      onChange={toggleDebugMode}
+                      color="purple"
+                    />
                   </div>
-                  <ChevronDownIcon className={clsx(
-                    'w-5 h-5 text-gray-500 transition-transform duration-200',
-                    open && 'rotate-180'
-                  )} />
-                </Disclosure.Button>
-                
-                <Transition
-                  enter="transition duration-100 ease-out"
-                  enterFrom="transform scale-95 opacity-0"
-                  enterTo="transform scale-100 opacity-100"
-                  leave="transition duration-75 ease-out"
-                  leaveFrom="transform scale-100 opacity-100"
-                  leaveTo="transform scale-95 opacity-0"
-                >
-                  <Disclosure.Panel className="p-4 space-y-4">
-                    <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-700/50">
-                      <div className="flex items-center gap-3">
-                        <BugAntIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                        <div>
-                          <div className="font-medium text-gray-900 dark:text-white">调试模式</div>
-                          <div className="text-xs text-gray-500 dark:text-gray-400">启用详细日志输出</div>
-                        </div>
+
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-700/50">
+                    <div className="flex items-center gap-3">
+                      {config.guiMonitoring ? (
+                        <EyeIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                      ) : (
+                        <EyeSlashIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                      )}
+                      <div>
+                        <div className="font-medium text-gray-900 dark:text-gray-300">GUI 监控</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">监控 GUI 响应状态</div>
                       </div>
-                      <ToggleSwitch
-                        enabled={config.debugMode}
-                        onChange={toggleDebugMode}
-                        color="purple"
-                      />
                     </div>
+                    <ToggleSwitch
+                      enabled={config.guiMonitoring}
+                      onChange={toggleGuiMonitoring}
+                      color="purple"
+                    />
+                  </div>
 
-                    <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-gray-700/50">
-                      <div className="flex items-center gap-3">
-                        {config.guiMonitoring ? (
-                          <EyeIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                        ) : (
-                          <EyeSlashIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                        )}
-                        <div>
-                          <div className="font-medium text-gray-900 dark:text-white">GUI 监控</div>
-                          <div className="text-xs text-gray-500 dark:text-gray-400">监控 GUI 响应状态</div>
-                        </div>
-                      </div>
-                      <ToggleSwitch
-                        enabled={config.guiMonitoring}
-                        onChange={toggleGuiMonitoring}
-                        color="purple"
-                      />
-                    </div>
+                  <Button
+                    variant="secondary"
+                    onClick={fetchDebugInfo}
+                    loading={debugInfoLoading}
+                    className="w-full"
+                  >
+                    刷新调试信息
+                  </Button>
 
-                    <Button
-                      variant="secondary"
-                      onClick={fetchDebugInfo}
-                      loading={debugInfoLoading}
-                      className="w-full"
-                    >
-                      刷新调试信息
-                    </Button>
-
-                    {debugInfo && (
-                      <pre className="p-3 rounded-xl bg-gray-900 text-green-400 text-xs overflow-auto max-h-60">
-                        {JSON.stringify(debugInfo, null, 2)}
-                      </pre>
-                    )}
-                  </Disclosure.Panel>
-                </Transition>
-              </div>
-            )}
-          </Disclosure>
-        </div>
+                  {debugInfo && (
+                    <pre className="p-3 rounded-xl bg-gray-900 text-green-400 text-xs overflow-auto max-h-60">
+                      {JSON.stringify(debugInfo, null, 2)}
+                    </pre>
+                  )}
+                </Disclosure.Panel>
+              </Transition>
+            </div>
+          )}
+        </Disclosure>
       </Card>
 
       {showCustomSpeedWarning && (
@@ -672,7 +603,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
               </div>
             </div>
 
-            <h3 className="text-xl font-bold text-gray-900 dark:text-white text-center mb-3">
+            <h3 className="text-xl font-bold text-gray-900 dark:text-gray-300 text-center mb-3">
               ⚠️ 风险提示
             </h3>
 

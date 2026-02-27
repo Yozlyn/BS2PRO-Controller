@@ -44,6 +44,52 @@ body {
   box-shadow: 0 4px 16px rgba(59, 130, 246, 0.5);
 }
 
+/* 弹跳动画 */
+@keyframes bounce-wave {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  25% {
+    transform: translateY(-6px);
+  }
+  50% {
+    transform: translateY(0);
+  }
+  75% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes bounce-wave-fast {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  25% {
+    transform: translateY(-8px);
+  }
+  50% {
+    transform: translateY(0);
+  }
+  75% {
+    transform: translateY(-4px);
+  }
+}
+
+/* 弹跳动画类 */
+.animate-bounce-wave {
+  animation: bounce-wave 1.2s ease-in-out infinite;
+}
+
+.animate-bounce-wave-fast {
+  animation: bounce-wave 0.6s ease-in-out infinite;
+}
+
+/* 确保悬停时动画加速 */
+.w-3.h-3.rounded-full:hover {
+  animation-duration: 0.6s !important;
+}
+
+
 .slider-thumb::-moz-range-thumb {
   width: 18px;
   height: 18px;
@@ -89,3 +135,10 @@ body {
   animation: pulse-ring 1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
+/* 统一全局滚动条样式 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: #64748b; }
+.dark ::-webkit-scrollbar-thumb { background: #1e293b; }
+.dark ::-webkit-scrollbar-thumb:hover { background: #334155; }

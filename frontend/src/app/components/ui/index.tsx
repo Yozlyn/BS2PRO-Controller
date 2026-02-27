@@ -141,7 +141,7 @@ export function Select<T extends string | number>({
         >
           <span className={clsx(
             'block truncate pr-6',
-            selectedOption ? 'text-gray-900 dark:text-white' : 'text-gray-400 dark:text-gray-500'
+            selectedOption ? 'text-gray-900 dark:text-gray-300' : 'text-gray-400 dark:text-gray-500'
           )}>
             {selectedOption?.label || placeholder}
           </span>
@@ -189,7 +189,7 @@ export function Select<T extends string | number>({
                   <>
                     <span className={clsx(
                       'block truncate',
-                      selected ? 'font-semibold text-blue-600 dark:text-blue-400' : 'font-normal text-gray-900 dark:text-white'
+                      selected ? 'font-semibold text-blue-600 dark:text-blue-400' : 'font-normal text-gray-900 dark:text-gray-300'
                     )}>
                       {option.label}
                     </span>
@@ -280,7 +280,7 @@ export function RadioGroup<T extends string | number>({
               <div className="flex-1 min-w-0">
                 <div className={clsx(
                   'text-sm font-medium',
-                  isSelected ? 'text-blue-900 dark:text-blue-100' : 'text-gray-900 dark:text-white'
+                  isSelected ? 'text-blue-900 dark:text-blue-100' : 'text-gray-900 dark:text-gray-300'
                 )}>
                   {option.label}
                 </div>
@@ -420,7 +420,7 @@ export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(
             disabled={disabled}
             className={clsx(
               'w-full px-3 py-2 rounded-lg border text-sm',
-              'bg-white dark:bg-gray-800 text-gray-900 dark:text-white',
+              'bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-300',
               'border-gray-300 dark:border-gray-600',
               'focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent',
               'transition-all duration-200',
