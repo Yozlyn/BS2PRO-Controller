@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/TIANLI0/BS2PRO-Controller/internal/rgb"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
 	"github.com/sstallion/go-hid"
 )
@@ -27,8 +28,13 @@ type Manager struct {
 	isConnected    bool
 	productID      uint16 // 当前连接的产品ID
 	mutex          sync.RWMutex
+	deviceOpMutex  sync.Mutex // 设备操作互斥锁，确保同一时间只有一个读/写操作
 	logger         types.Logger
 	currentFanData *types.FanData
+
+	// RGB 控制器与ACK通道
+	rgbCtrl    *rgb.Controller
+	rgbAckChan chan []byte
 
 	// 回调函数
 	onFanDataUpdate func(data *types.FanData)
@@ -37,9 +43,18 @@ type Manager struct {
 
 // NewManager 创建新的设备管理器
 func NewManager(logger types.Logger) *Manager {
-	return &Manager{
-		logger: logger,
+	m := &Manager{
+		logger:     logger,
+		rgbAckChan: make(chan []byte, 100),
 	}
+	// 注入自己作为 RGB 的底层传输通道 (实现 rgb.Transport 接口)
+	m.rgbCtrl = rgb.NewController(m)
+	return m
+}
+
+// RGB 获取 RGB 控制器实例
+func (m *Manager) RGB() *rgb.Controller {
+	return m.rgbCtrl
 }
 
 // SetCallbacks 设置回调函数
@@ -122,6 +137,14 @@ func (m *Manager) Connect() (bool, map[string]string) {
 		}
 	}
 
+	// 清空可能残留的 ACK
+	for len(m.rgbAckChan) > 0 {
+		<-m.rgbAckChan
+	}
+
+	// 通知RGB控制器开始工作
+	m.rgbCtrl.Start()
+
 	// 开始监控设备数据
 	go m.monitorDeviceData()
 
@@ -131,11 +154,14 @@ func (m *Manager) Connect() (bool, map[string]string) {
 // Disconnect 断开设备连接
 func (m *Manager) Disconnect() {
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
 
 	if !m.isConnected {
+		m.mutex.Unlock()
 		return
 	}
+
+	// 停止RGB控制器
+	m.rgbCtrl.Stop()
 
 	// 关闭设备
 	if m.device != nil {
@@ -144,11 +170,8 @@ func (m *Manager) Disconnect() {
 	}
 
 	m.isConnected = false
+	m.mutex.Unlock()
 	m.logInfo("设备连接已断开")
-
-	if m.onDisconnect != nil {
-		m.onDisconnect()
-	}
 }
 
 // IsConnected 检查设备是否已连接
@@ -174,12 +197,6 @@ func (m *Manager) monitorDeviceData() {
 	}
 	m.mutex.RUnlock()
 
-	// 设置非阻塞模式
-	err := m.device.SetNonblock(true)
-	if err != nil {
-		m.logError("设置非阻塞模式失败: %v", err)
-	}
-
 	buffer := make([]byte, 64)
 	consecutiveErrors := 0
 	const maxConsecutiveErrors = 5
@@ -191,33 +208,34 @@ func (m *Manager) monitorDeviceData() {
 		m.mutex.RUnlock()
 
 		if !connected || device == nil {
-			m.logInfo("设备已断开，停止数据监控")
 			break
 		}
 
-		n, err := device.ReadWithTimeout(buffer, 1*time.Second)
+		m.deviceOpMutex.Lock()
+		n, err := device.ReadWithTimeout(buffer, 100*time.Millisecond)
+		m.deviceOpMutex.Unlock()
+
 		if err != nil {
 			if err == hid.ErrTimeout {
-				consecutiveErrors = 0 // 超时是正常的，重置错误计数
+				consecutiveErrors = 0
 				continue
 			}
 
 			consecutiveErrors++
-			m.logError("读取设备数据失败 (%d/%d): %v", consecutiveErrors, maxConsecutiveErrors, err)
-
 			if consecutiveErrors >= maxConsecutiveErrors {
-				m.logError("连续读取失败次数过多，设备可能已断开")
+				m.logError("连续读取失败，设备断开: %v", err)
 				break
 			}
-
-			// 短暂等待后重试
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 
-		consecutiveErrors = 0 // 成功读取，重置错误计数
+		consecutiveErrors = 0
 
 		if n > 0 {
+			// 将数据抄送给RGB拦截器
+			m.extractRGBACK(buffer, n)
+
 			// 解析风扇数据
 			fanData := m.parseFanData(buffer, n)
 			if fanData != nil {
@@ -230,13 +248,101 @@ func (m *Manager) monitorDeviceData() {
 				}
 			}
 		}
-
-		// 短暂休眠，避免高CPU占用
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// 设备监控循环退出，触发断开处理
 	m.handleDeviceDisconnected()
+}
+
+// extractRGBACK 拦截提取硬件发回的RGB确认包
+func (m *Manager) extractRGBACK(buf []byte, n int) {
+	if n < 5 {
+		return
+	}
+	for i := 0; i < n-4; i++ {
+		if buf[i] == 0x5A && buf[i+1] == 0xA5 {
+			length := int(buf[i+3])
+			totalPacketLen := length + 3
+
+			if totalPacketLen > 0 && i+totalPacketLen <= n {
+				packet := make([]byte, totalPacketLen)
+				copy(packet, buf[i:i+totalPacketLen])
+
+				// 避开风扇数据帧(0xEF)，将ACK推入通道
+				if packet[2] != 0xEF {
+					select {
+					case m.rgbAckChan <- packet:
+					default:
+					}
+				}
+				i += totalPacketLen - 1
+			}
+		}
+	}
+}
+
+// ----- 实现 rgb.Transport 接口方法 -----
+
+// WritePacket 将组装好的 RGB 数据包加上 HID Report ID 并发送，不等待确认
+func (m *Manager) WritePacket(packet []byte) error {
+	m.mutex.RLock()
+	dev := m.device
+	m.mutex.RUnlock()
+
+	if dev == nil {
+		return fmt.Errorf("设备未连接")
+	}
+
+	// 封装成32字节 HID 帧，头部带 0x02
+	buf := make([]byte, 32)
+	buf[0] = 0x02
+	copy(buf[1:], packet)
+
+	m.deviceOpMutex.Lock()
+	_, err := dev.Write(buf)
+	m.deviceOpMutex.Unlock()
+	return err
+}
+
+// WritePacketAndWaitACK 发送数据并同步等待特定指令的 ACK，超时返回 false
+func (m *Manager) WritePacketAndWaitACK(cmdID byte, packet []byte, timeout time.Duration) bool {
+	// 发送前清空通道内陈旧的ACK
+	for len(m.rgbAckChan) > 0 {
+		<-m.rgbAckChan
+	}
+
+	// 写入数据
+	if err := m.WritePacket(packet); err != nil {
+		return false
+	}
+
+	// 异步等待ACK
+	go func() {
+		startTime := time.Now()
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+
+		select {
+		case resp := <-m.rgbAckChan:
+			elapsed := time.Since(startTime)
+			// 放宽检查条件：只要resp[4]==1就认为是成功ACK
+			if len(resp) >= 5 && resp[4] == 1 {
+				m.logDebug("ACK received for cmdID 0x%02X (got 0x%02X), delay: %v",
+					cmdID, resp[2], elapsed)
+				return
+			} else if len(resp) >= 5 {
+				m.logWarn("ACK failed for cmdID 0x%02X (resp[4]=0x%02X), got cmdID 0x%02X, delay: %v",
+					cmdID, resp[4], resp[2], elapsed)
+			}
+		case <-timer.C:
+			// ACK超时，记录warning日志
+			m.logWarn("ACK timeout for cmdID 0x%02X, timeout: %v", cmdID, timeout)
+			return
+		}
+	}()
+
+	// 立即返回true，不等待ACK
+	return true
 }
 
 // handleDeviceDisconnected 处理设备断开
@@ -248,7 +354,6 @@ func (m *Manager) handleDeviceDisconnected() {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					m.logError("关闭设备时发生错误: %v", r)
 				}
 			}()
 			m.device.Close()
@@ -258,6 +363,8 @@ func (m *Manager) handleDeviceDisconnected() {
 
 	m.isConnected = false
 	m.mutex.Unlock()
+
+	m.rgbCtrl.Stop()
 
 	if wasConnected {
 		m.logInfo("设备连接已断开")
@@ -272,14 +379,8 @@ func (m *Manager) parseFanData(data []byte, length int) *types.FanData {
 	if length < 11 {
 		return nil
 	}
-
-	// 检查同步头
 	magic := binary.BigEndian.Uint16(data[1:3])
-	if magic != 0x5AA5 {
-		return nil
-	}
-
-	if data[3] != 0xEF {
+	if magic != 0x5AA5 || data[3] != 0xEF {
 		return nil
 	}
 
@@ -293,7 +394,6 @@ func (m *Manager) parseFanData(data []byte, length int) *types.FanData {
 		Reserved1:    data[7],
 	}
 
-	// 解析转速 (小端序)
 	if length >= 10 {
 		fanData.CurrentRPM = binary.LittleEndian.Uint16(data[8:10])
 	}
@@ -301,33 +401,18 @@ func (m *Manager) parseFanData(data []byte, length int) *types.FanData {
 		fanData.TargetRPM = binary.LittleEndian.Uint16(data[10:12])
 	}
 
-	// 解析挡位设置
-	maxGear, setGear := m.parseGearSettings(fanData.GearSettings)
-	fanData.MaxGear = maxGear
-	fanData.SetGear = setGear
-
+	fanData.MaxGear, fanData.SetGear = m.parseGearSettings(fanData.GearSettings)
 	fanData.WorkMode = m.parseWorkMode(fanData.CurrentMode)
 
 	return fanData
 }
 
-// parseGearSettings 解析挡位设置
 func (m *Manager) parseGearSettings(gearByte uint8) (maxGear, setGear string) {
 	maxGearCode := (gearByte >> 4) & 0x0F
 	setGearCode := gearByte & 0x0F
 
-	maxGearMap := map[uint8]string{
-		0x2: "标准",
-		0x4: "强劲",
-		0x6: "超频",
-	}
-
-	setGearMap := map[uint8]string{
-		0x8: "静音",
-		0xA: "标准",
-		0xC: "强劲",
-		0xE: "超频",
-	}
+	maxGearMap := map[uint8]string{0x2: "标准", 0x4: "强劲", 0x6: "超频"}
+	setGearMap := map[uint8]string{0x8: "静音", 0xA: "标准", 0xC: "强劲", 0xE: "超频"}
 
 	if val, ok := maxGearMap[maxGearCode]; ok {
 		maxGear = val
@@ -344,7 +429,6 @@ func (m *Manager) parseGearSettings(gearByte uint8) (maxGear, setGear string) {
 	return
 }
 
-// parseWorkMode 解析工作模式
 func (m *Manager) parseWorkMode(mode uint8) string {
 	switch mode {
 	case 0x04, 0x02, 0x06, 0x0A, 0x08, 0x00:
@@ -356,184 +440,135 @@ func (m *Manager) parseWorkMode(mode uint8) string {
 	}
 }
 
-// SetFanSpeed 设置风扇转速
-func (m *Manager) SetFanSpeed(rpm int) bool {
+// validateAndGetDevice 验证转速合法性并在持锁状态下取出设备引用。
+// 返回 (nil, false) 表示验证失败，调用方应直接返回 false。
+func (m *Manager) validateAndGetDevice(rpm int, label string) (*hid.Device, bool) {
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
 	if !m.isConnected || m.device == nil {
-		return false
+		m.mutex.Unlock()
+		return nil, false
 	}
-
 	if rpm < 1000 || rpm > 4000 {
-		return false
+		m.mutex.Unlock()
+		return nil, false
 	}
-
-	// 首先进入实时转速模式
-	enterModeCmd := []byte{0x02, 0x5A, 0xA5, 0x23, 0x02, 0x25, 0x00}
-	// 补齐到23字节
-	enterModeCmd = append(enterModeCmd, make([]byte, 23-len(enterModeCmd))...)
-
-	_, err := m.device.Write(enterModeCmd)
-	if err != nil {
-		m.logError("进入实时转速模式失败: %v", err)
-		return false
+	if rpm%100 != 0 {
+		m.mutex.Unlock()
+		m.logError("%s %d 不是100的整数倍", label, rpm)
+		return nil, false
 	}
-
-	time.Sleep(50 * time.Millisecond)
-
-	// 构造转速设置命令
-	speedBytes := make([]byte, 2)
-	binary.LittleEndian.PutUint16(speedBytes, uint16(rpm))
-
-	// 计算校验和
-	checksum := (0x5A + 0xA5 + 0x21 + 0x04 + int(speedBytes[0]) + int(speedBytes[1]) + 1) & 0xFF
-
-	cmd := []byte{0x02, 0x5A, 0xA5, 0x21, 0x04}
-	cmd = append(cmd, speedBytes...)
-	cmd = append(cmd, byte(checksum))
-	// 补齐到23字节
-	cmd = append(cmd, make([]byte, 23-len(cmd))...)
-
-	_, err = m.device.Write(cmd)
-	if err != nil {
-		m.logError("设置风扇转速失败: %v", err)
-		return false
-	}
-
-	m.logDebug("已设置风扇转速: %d RPM", rpm)
-	return true
+	dev := m.device
+	m.mutex.Unlock()
+	return dev, true
 }
 
-// SetCustomFanSpeed 设置自定义风扇转速（无限制）
-func (m *Manager) SetCustomFanSpeed(rpm int) bool {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	if !m.isConnected || m.device == nil {
-		return false
-	}
-
-	m.logWarn("警告：设置自定义转速 %d RPM（无上下限限制）", rpm)
-
-	enterModeCmd := []byte{0x02, 0x5A, 0xA5, 0x23, 0x02, 0x25, 0x00}
-	enterModeCmd = append(enterModeCmd, make([]byte, 23-len(enterModeCmd))...)
-
-	_, err := m.device.Write(enterModeCmd)
-	if err != nil {
-		m.logError("进入实时转速模式失败: %v", err)
-		return false
-	}
-
-	time.Sleep(50 * time.Millisecond)
-
+// buildSpeedCmd 构建转速下发命令（带 Report ID 0x02 前缀，总长 23 字节）
+func buildSpeedCmd(rpm int) []byte {
 	speedBytes := make([]byte, 2)
 	binary.LittleEndian.PutUint16(speedBytes, uint16(rpm))
-
-	// 计算校验和
 	checksum := (0x5A + 0xA5 + 0x21 + 0x04 + int(speedBytes[0]) + int(speedBytes[1]) + 1) & 0xFF
-
 	cmd := []byte{0x02, 0x5A, 0xA5, 0x21, 0x04}
 	cmd = append(cmd, speedBytes...)
 	cmd = append(cmd, byte(checksum))
 	cmd = append(cmd, make([]byte, 23-len(cmd))...)
+	return cmd
+}
 
-	_, err = m.device.Write(cmd)
-	if err != nil {
-		m.logError("设置自定义风扇转速失败: %v", err)
+// SetFanSpeed 设置风扇转速（纯数据下发，不再带模式切换）
+func (m *Manager) SetFanSpeed(rpm int) bool {
+	dev, ok := m.validateAndGetDevice(rpm, "转速")
+	if !ok {
+		return false
+	}
+	cmd := buildSpeedCmd(rpm)
+	m.deviceOpMutex.Lock()
+	_, err := dev.Write(cmd)
+	m.deviceOpMutex.Unlock()
+	return err == nil
+}
+
+// SetCustomFanSpeed 设置自定义风扇转速（先切换至自动模式再下发转速）
+func (m *Manager) SetCustomFanSpeed(rpm int) bool {
+	dev, ok := m.validateAndGetDevice(rpm, "自定义转速")
+	if !ok {
 		return false
 	}
 
-	m.logInfo("已设置自定义风扇转速: %d RPM", rpm)
-	return true
+	enterModeCmd := []byte{0x02, 0x5A, 0xA5, 0x23, 0x02, 0x25, 0x00}
+	enterModeCmd = append(enterModeCmd, make([]byte, 23-len(enterModeCmd))...)
+	m.deviceOpMutex.Lock()
+	dev.Write(enterModeCmd)
+	m.deviceOpMutex.Unlock()
+
+	time.Sleep(50 * time.Millisecond)
+
+	cmd := buildSpeedCmd(rpm)
+	m.deviceOpMutex.Lock()
+	_, err := dev.Write(cmd)
+	m.deviceOpMutex.Unlock()
+	return err == nil
 }
 
 // EnterAutoMode 进入自动模式
 func (m *Manager) EnterAutoMode() error {
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
 	if !m.isConnected || m.device == nil {
+		m.mutex.Unlock()
 		return fmt.Errorf("设备未连接")
 	}
+	dev := m.device
+	m.mutex.Unlock()
 
-	// 发送进入实时转速模式的命令
 	enterModeCmd := []byte{0x02, 0x5A, 0xA5, 0x23, 0x02, 0x25, 0x00}
-	// 补齐到23字节
 	enterModeCmd = append(enterModeCmd, make([]byte, 23-len(enterModeCmd))...)
-
-	_, err := m.device.Write(enterModeCmd)
-	if err != nil {
-		return fmt.Errorf("进入自动模式失败: %v", err)
-	}
-
-	m.logInfo("已切换到自动模式，开始智能变频")
-	return nil
+	m.deviceOpMutex.Lock()
+	_, err := dev.Write(enterModeCmd)
+	m.deviceOpMutex.Unlock()
+	return err
 }
 
-// SetManualGear 设置手动挡位
 func (m *Manager) SetManualGear(gear, level string) bool {
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
 	if !m.isConnected || m.device == nil {
+		m.mutex.Unlock()
 		return false
 	}
+	dev := m.device
+	m.mutex.Unlock()
 
 	commands, exists := types.GearCommands[gear]
 	if !exists {
-		m.logError("未找到挡位 %s 的命令", gear)
 		return false
 	}
 
 	var selectedCommand *types.GearCommand
 	for i := range commands {
 		cmd := &commands[i]
-		switch level {
-		case "低":
-			if strings.Contains(cmd.Name, "低") {
-				selectedCommand = cmd
-			}
-		case "中":
-			if strings.Contains(cmd.Name, "中") {
-				selectedCommand = cmd
-			}
-		case "高":
-			if strings.Contains(cmd.Name, "高") {
-				selectedCommand = cmd
-			}
-		}
-		if selectedCommand != nil {
+		if strings.Contains(cmd.Name, level) {
+			selectedCommand = cmd
 			break
 		}
 	}
 
 	if selectedCommand == nil {
-		m.logError("未找到挡位 %s %s 的命令", gear, level)
 		return false
 	}
 
-	// 发送命令，确保第一个字节是ReportID
 	cmdWithReportID := append([]byte{0x02}, selectedCommand.Command...)
-
-	_, err := m.device.Write(cmdWithReportID)
-	if err != nil {
-		m.logError("设置挡位 %s %s 失败: %v", gear, level, err)
-		return false
-	}
-
-	m.logInfo("设置挡位成功: %s %s (目标转速: %d RPM)", gear, level, selectedCommand.RPM)
-	return true
+	m.deviceOpMutex.Lock()
+	_, err := dev.Write(cmdWithReportID)
+	m.deviceOpMutex.Unlock()
+	return err == nil
 }
 
-// SetGearLight 设置挡位灯
 func (m *Manager) SetGearLight(enabled bool) bool {
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
 	if !m.isConnected || m.device == nil {
+		m.mutex.Unlock()
 		return false
 	}
+	dev := m.device
+	m.mutex.Unlock()
 
 	var cmd []byte
 	if enabled {
@@ -541,27 +576,21 @@ func (m *Manager) SetGearLight(enabled bool) bool {
 	} else {
 		cmd = []byte{0x02, 0x5A, 0xA5, 0x48, 0x03, 0x00, 0x4B}
 	}
-
-	// 补齐到23字节
 	cmd = append(cmd, make([]byte, 23-len(cmd))...)
-
-	_, err := m.device.Write(cmd)
-	if err != nil {
-		m.logError("设置挡位灯失败: %v", err)
-		return false
-	}
-
-	return true
+	m.deviceOpMutex.Lock()
+	_, err := dev.Write(cmd)
+	m.deviceOpMutex.Unlock()
+	return err == nil
 }
 
-// SetPowerOnStart 设置通电自启动
 func (m *Manager) SetPowerOnStart(enabled bool) bool {
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
 	if !m.isConnected || m.device == nil {
+		m.mutex.Unlock()
 		return false
 	}
+	dev := m.device
+	m.mutex.Unlock()
 
 	var cmd []byte
 	if enabled {
@@ -569,27 +598,21 @@ func (m *Manager) SetPowerOnStart(enabled bool) bool {
 	} else {
 		cmd = []byte{0x02, 0x5A, 0xA5, 0x0C, 0x03, 0x01, 0x10}
 	}
-
-	// 补齐到23字节
 	cmd = append(cmd, make([]byte, 23-len(cmd))...)
-
-	_, err := m.device.Write(cmd)
-	if err != nil {
-		m.logError("设置通电自启动失败: %v", err)
-		return false
-	}
-
-	return true
+	m.deviceOpMutex.Lock()
+	_, err := dev.Write(cmd)
+	m.deviceOpMutex.Unlock()
+	return err == nil
 }
 
-// SetSmartStartStop 设置智能启停
 func (m *Manager) SetSmartStartStop(mode string) bool {
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
 	if !m.isConnected || m.device == nil {
+		m.mutex.Unlock()
 		return false
 	}
+	dev := m.device
+	m.mutex.Unlock()
 
 	var cmd []byte
 	switch mode {
@@ -602,56 +625,42 @@ func (m *Manager) SetSmartStartStop(mode string) bool {
 	default:
 		return false
 	}
-
-	// 补齐到23字节
 	cmd = append(cmd, make([]byte, 23-len(cmd))...)
-
-	_, err := m.device.Write(cmd)
-	if err != nil {
-		m.logError("设置智能启停失败: %v", err)
-		return false
-	}
-
-	return true
+	m.deviceOpMutex.Lock()
+	_, err := dev.Write(cmd)
+	m.deviceOpMutex.Unlock()
+	return err == nil
 }
 
-// SetBrightness 设置亮度
 func (m *Manager) SetBrightness(percentage int) bool {
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
 	if !m.isConnected || m.device == nil {
+		m.mutex.Unlock()
 		return false
 	}
-
-	if percentage < 0 || percentage > 100 {
-		return false
-	}
+	dev := m.device
+	m.mutex.Unlock()
 
 	var cmd []byte
 	switch percentage {
 	case 0:
-		cmd = []byte{0x02, 0x5A, 0xA5, 0x47, 0x0D, 0x1C, 0x00, 0xFF}
-		// 补齐到23字节
-		cmd = append(cmd, make([]byte, 23-len(cmd))...)
+		// 协议格式: [0x02][5A A5][cmdID=0x47][len=0x0D=13][payload(11字节)][CRC]
+		// len=13 = content总长(含cmdID+len自身), payload=11字节, 有效数据只有首字节0x1C
+		// CRC = sum(content) = sum(47+0D+1C+00*10) = 0x70
+		cmd = []byte{0x02, 0x5A, 0xA5, 0x47, 0x0D, 0x1C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x70}
 	case 100:
 		cmd = []byte{0x02, 0x5A, 0xA5, 0x43, 0x02, 0x45}
-		// 补齐到23字节
-		cmd = append(cmd, make([]byte, 23-len(cmd))...)
 	default:
+		m.logError("SetBrightness: 不支持的亮度值 %d，仅支持0或100", percentage)
 		return false
 	}
-
-	_, err := m.device.Write(cmd)
-	if err != nil {
-		m.logError("设置亮度失败: %v", err)
-		return false
-	}
-
-	return true
+	cmd = append(cmd, make([]byte, 23-len(cmd))...)
+	m.deviceOpMutex.Lock()
+	_, err := dev.Write(cmd)
+	m.deviceOpMutex.Unlock()
+	return err == nil
 }
 
-// 日志辅助方法
 func (m *Manager) logInfo(format string, v ...any) {
 	if m.logger != nil {
 		m.logger.Info(format, v...)
@@ -664,14 +673,14 @@ func (m *Manager) logError(format string, v ...any) {
 	}
 }
 
-func (m *Manager) logWarn(format string, v ...any) {
-	if m.logger != nil {
-		m.logger.Warn(format, v...)
-	}
-}
-
 func (m *Manager) logDebug(format string, v ...any) {
 	if m.logger != nil {
 		m.logger.Debug(format, v...)
+	}
+}
+
+func (m *Manager) logWarn(format string, v ...any) {
+	if m.logger != nil {
+		m.logger.Warn(format, v...)
 	}
 }

@@ -234,7 +234,7 @@ export default function DeviceStatus({
             <div className="w-16 h-16 mx-auto mb-4 rounded-xl bg-gray-100 dark:bg-gray-700 flex items-center justify-center">
               <WifiIcon className="w-8 h-8 text-gray-400" />
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-300 mb-2">
               设备未连接
             </h3>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-6 max-w-xs mx-auto">
