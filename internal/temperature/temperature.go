@@ -2,18 +2,13 @@
 package temperature
 
 import (
-	"context"
-	"fmt"
-	"os/exec"
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/TIANLI0/BS2PRO-Controller/internal/asus"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
-	"github.com/shirou/gopsutil/v4/sensors"
 )
 
 // Reader 温度读取器
@@ -21,8 +16,8 @@ type Reader struct {
 	asusClient *asus.Client
 	logger     types.Logger
 
-	// 缓存机制：防止无限制创建检测进程
 	gpuVendor      string
+	nvmlDevice     uintptr
 	initVendorOnce sync.Once
 }
 
@@ -42,23 +37,20 @@ func (r *Reader) Read() types.TemperatureData {
 	}
 
 	// 使用 ASUS 接口读取 CPU 温度
-	var cpuTemp int
-	var err error
-
 	if r.asusClient != nil {
-		cpuTemp, err = r.asusClient.GetCPUTemperature()
+		cpuTemp, err := r.asusClient.GetCPUTemperature()
+		if err == nil && cpuTemp > 0 && cpuTemp < 150 {
+			temp.CPUTemp = cpuTemp
+			temp.BridgeMsg = "使用ASUS ACPI接口"
+		} else {
+			temp.BridgeOk = false
+			temp.BridgeMsg = "ASUS ACPI内核驱动未就绪，读取失败"
+			temp.CPUTemp = 0
+		}
 	} else {
-		err = fmt.Errorf("ASUS客户端未初始化")
-	}
-
-	if err == nil && cpuTemp > 0 && cpuTemp < 150 {
-		temp.CPUTemp = cpuTemp
-		temp.BridgeMsg = "使用ASUS ACPI接口"
-	} else {
-		// 降级方案
 		temp.BridgeOk = false
-		temp.BridgeMsg = "ASUS 接口异常或不支持，已切换至备用WMI/传感器读取模式"
-		temp.CPUTemp = r.readCPUTemperature()
+		temp.BridgeMsg = "ASUS 客户端未初始化"
+		temp.CPUTemp = 0
 	}
 
 	// 读取 GPU 温度
@@ -74,108 +66,84 @@ func (r *Reader) Read() types.TemperatureData {
 	return temp
 }
 
-// readCPUTemperature 读取CPU温度
-func (r *Reader) readCPUTemperature() int {
-	sensorTemps, err := sensors.SensorsTemperatures()
-	if err == nil {
-		for _, sensor := range sensorTemps {
-			// 查找ACPI ThermalZone TZ00_0或类似的CPU温度传感器
-			key := strings.ToLower(sensor.SensorKey)
-			if strings.Contains(key, "tz00") || strings.Contains(key, "cpu") || strings.Contains(key, "core") {
-				return int(sensor.Temperature)
+// NVML Windows Native绑定
+var (
+	nvmlDLL                  *syscall.LazyDLL
+	nvmlInit                 *syscall.LazyProc
+	nvmlDeviceGetHandle      *syscall.LazyProc
+	nvmlDeviceGetTemperature *syscall.LazyProc
+	nvmlLoaded               bool
+)
+
+const nvmlTemperatureGPU = 0
+
+// initNVMLWindows 通过syscall本地加载 nvml.dll
+func (r *Reader) initNVMLWindows() {
+	r.initVendorOnce.Do(func() {
+		// 尝试直接加载nvml.dll
+		nvmlDLL = syscall.NewLazyDLL("nvml.dll")
+		if err := nvmlDLL.Load(); err != nil {
+			// 降级策略：尝试从 NVIDIA 默认驱动安装路径硬加载
+			nvmlDLL = syscall.NewLazyDLL("C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvml.dll")
+			if err := nvmlDLL.Load(); err != nil {
+				r.logger.Debug("未找到nvml.dll，可能未安装NVIDIA驱动")
+				r.gpuVendor = "unknown"
+				return
 			}
 		}
-	}
 
-	// 如果传感器方式失败，尝试通过WMI (Windows)
-	return r.readWindowsCPUTemp()
-}
+		// 获取所需的三个核心函数指针
+		nvmlInit = nvmlDLL.NewProc("nvmlInit_v2")
+		nvmlDeviceGetHandle = nvmlDLL.NewProc("nvmlDeviceGetHandleByIndex_v2")
+		nvmlDeviceGetTemperature = nvmlDLL.NewProc("nvmlDeviceGetTemperature")
 
-// getGPUVendor 仅检测一次GPU厂商并缓存
-func (r *Reader) getGPUVendor() string {
-	r.initVendorOnce.Do(func() {
-		// 给予 2 秒超时，只检查一次
-		if _, err := execCommandHidden(2*time.Second, "nvidia-smi", "--version"); err == nil {
+		// 调用nvmlInit_v2
+		ret, _, _ := nvmlInit.Call()
+		if ret != 0 { // 0代表NVML_SUCCESS
+			r.logger.Debug("NVML初始化失败，返回码: %d", ret)
+			r.gpuVendor = "unknown"
+			return
+		}
+
+		// 获取并缓存显卡句柄
+		var device uintptr
+		ret, _, _ = nvmlDeviceGetHandle.Call(0, uintptr(unsafe.Pointer(&device)))
+		if ret == 0 {
+			r.nvmlDevice = device
 			r.gpuVendor = "nvidia"
+			nvmlLoaded = true
+			r.logger.Debug("NVML本地DLL加载并初始化成功")
 		} else {
+			r.logger.Debug("NVML无法获取主显卡句柄，返回码: %d", ret)
 			r.gpuVendor = "unknown"
 		}
-		r.logger.Debug("初始化检测 GPU 厂商完成: %s", r.gpuVendor)
 	})
-	return r.gpuVendor
 }
 
 // readGPUTemperature 读取GPU温度
 func (r *Reader) readGPUTemperature() int {
-	vendor := r.getGPUVendor()
-	switch vendor {
-	case "nvidia":
+	r.initNVMLWindows()
+
+	if r.gpuVendor == "nvidia" && nvmlLoaded {
 		return r.readNvidiaGPUTemp()
-	default:
-		return 0
 	}
-}
-
-// readWindowsCPUTemp 通过WMI读取Windows CPU温度
-func (r *Reader) readWindowsCPUTemp() int {
-	// 增加 3 秒超时熔断，防止 WMI 服务挂起导致线程死锁
-	output, err := execCommandHidden(3*time.Second, "wmic", "/namespace:\\\\root\\wmi", "PATH", "MSAcpi_ThermalZoneTemperature", "get", "CurrentTemperature", "/value")
-	if err != nil {
-		return 0
-	}
-
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if after, ok := strings.CutPrefix(line, "CurrentTemperature="); ok {
-			tempStr := strings.TrimSpace(after)
-			if tempStr != "" {
-				if temp, err := strconv.Atoi(tempStr); err == nil {
-					celsius := (temp - 2732) / 10
-					if celsius > 0 && celsius < 150 {
-						return celsius
-					}
-				}
-			}
-		}
-	}
-
 	return 0
 }
 
 // readNvidiaGPUTemp 安全读取NVIDIA GPU温度
 func (r *Reader) readNvidiaGPUTemp() int {
-	// 增加 2 秒超时熔断，防止 nvidia-smi 驱动卡死
-	output, err := execCommandHidden(2*time.Second, "nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits")
-	if err != nil {
+	if r.nvmlDevice == 0 {
 		return 0
 	}
 
-	tempStr := strings.TrimSpace(string(output))
-	lines := strings.Split(tempStr, "\n")
-
-	if len(lines) > 0 && lines[0] != "" {
-		if temp, err := strconv.Atoi(lines[0]); err == nil {
-			return temp
-		}
+	var temp uint32
+	// 直接通过缓存读取温度
+	ret, _, _ := nvmlDeviceGetTemperature.Call(r.nvmlDevice, nvmlTemperatureGPU, uintptr(unsafe.Pointer(&temp)))
+	if ret != 0 {
+		return 0
 	}
 
-	return 0
-}
-
-// execCommandHidden 执行命令并隐藏窗口，带严格的超时与僵尸进程防范
-func execCommandHidden(timeout time.Duration, name string, args ...string) ([]byte, error) {
-	// 创建一个带有超时取消的 Context
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-	}
-
-	// 如果进程执行时间超过 timeout，ctx 会自动触发，强制 TerminateProcess 杀掉子进程
-	return cmd.Output()
+	return int(temp)
 }
 
 // CalculateTargetRPM 根据温度计算目标转速
@@ -202,7 +170,16 @@ func CalculateTargetRPM(temperature int, fanCurve []types.FanCurvePoint) int {
 			// 线性插值
 			ratio := float64(temperature-p1.Temperature) / float64(p2.Temperature-p1.Temperature)
 			rpm := float64(p1.RPM) + ratio*float64(p2.RPM-p1.RPM)
-			return int(rpm)
+			// 将转速调整为100的整数倍
+			roundedRPM := int((rpm+50)/100) * 100
+			// 确保在有效范围内
+			if roundedRPM < 1000 {
+				return 1000
+			}
+			if roundedRPM > 4000 {
+				return 4000
+			}
+			return roundedRPM
 		}
 	}
 
