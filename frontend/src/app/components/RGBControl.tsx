@@ -11,6 +11,7 @@ import {
   SwatchIcon,
   SparklesIcon,
   XMarkIcon,
+  BoltIcon,
 } from '@heroicons/react/24/outline';
 
 // 类型定义
@@ -42,7 +43,7 @@ const MODES: { id: LightMode; label: string; icon: React.ReactNode; maxColors?: 
   { id: 'breathing',     label: '呼吸',     icon: <HeartIcon className="w-5 h-5" />, hasSpeed: true, hasColors: true, minColors: 1, maxColors: 5 },
   { id: 'static_single', label: '单色常亮', icon: <LightBulbIcon className="w-5 h-5" />, hasColors: true, minColors: 1, maxColors: 1 },
   { id: 'static_multi',  label: '多色常亮', icon: <SwatchIcon className="w-5 h-5" />, hasColors: true, minColors: 3, maxColors: 3 },
-  { id: 'flowing',       label: '流光',     icon: <SparklesIcon className="w-5 h-5" />, hasSpeed: true },
+  { id: 'flowing',       label: '流光',     icon: <BoltIcon className="w-5 h-5" />, hasSpeed: true },
   { id: 'off',           label: '关闭',     icon: <XMarkIcon className="w-5 h-5" /> },
 ];
 
@@ -435,11 +436,16 @@ export default function RGBControl({ isConnected, savedConfig, onSetRGBMode }: R
   const [activeMode, setActiveMode] = useState<LightMode>('smart');
   const [speed, setSpeed] = useState<string>('slow');
   const [brightness, setBrightness] = useState(100);
-  const [colors, setColors] = useState<RGBColor[]>([
-    { r: 0, g: 0, b: 255 },
-    { r: 255, g: 0, b: 0 },
-    { r: 0, g: 255, b: 0 },
-  ]);
+  // 为每个模式存储独立的颜色配置
+  const [modeColors, setModeColors] = useState<Record<LightMode, RGBColor[]>>({
+    smart: [{ r: 255, g: 0, b: 0 }, { r: 0, g: 255, b: 0 }, { r: 0, g: 0, b: 255 }],
+    rotation: [{ r: 255, g: 0, b: 0 }, { r: 255, g: 165, b: 0 }, { r: 255, g: 255, b: 0 }, { r: 0, g: 255, b: 0 }, { r: 0, g: 0, b: 255 }, { r: 128, g: 0, b: 128 }],
+    breathing: [{ r: 0, g: 150, b: 255 }, { r: 0, g: 200, b: 200 }, { r: 0, g: 255, b: 150 }, { r: 100, g: 200, b: 255 }, { r: 150, g: 150, b: 255 }],
+    static_single: [{ r: 0, g: 0, b: 255 }],
+    static_multi: [{ r: 255, g: 0, b: 0 }, { r: 0, g: 255, b: 0 }, { r: 0, g: 0, b: 255 }],
+    flowing: [{ r: 255, g: 0, b: 0 }, { r: 0, g: 255, b: 0 }, { r: 0, g: 0, b: 255 }],
+    off: [{ r: 128, g: 128, b: 128 }, { r: 128, g: 128, b: 128 }, { r: 128, g: 128, b: 128 }],
+  });
   const [applying, setApplying] = useState(false);
   const [lastResult, setLastResult] = useState<boolean | null>(null);
   
@@ -453,11 +459,18 @@ export default function RGBControl({ isConnected, savedConfig, onSetRGBMode }: R
       if (savedConfig.speed) setSpeed(savedConfig.speed);
       if (savedConfig.brightness !== undefined) setBrightness(savedConfig.brightness);
       if (savedConfig.colors && savedConfig.colors.length > 0) {
-        setColors(savedConfig.colors);
+        // 更新当前模式的颜色配置
+        setModeColors(prev => ({
+          ...prev,
+          [savedConfig.mode as LightMode]: savedConfig.colors
+        }));
       }
       initialized.current = true; // 记忆恢复完毕
     }
   }, [savedConfig]);
+
+  // 当前模式的颜色
+  const colors = modeColors[activeMode] || modeColors.smart;
 
   const applyTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const modeConfig = MODES.find((m) => m.id === activeMode)!;
@@ -501,33 +514,45 @@ export default function RGBControl({ isConnected, savedConfig, onSetRGBMode }: R
   const handleModeClick = (mode: LightMode) => {
     setActiveMode(mode);
     const cfg = MODES.find((m) => m.id === mode)!;
-    const clampedColors = cfg.minColors
-      ? colors.slice(0, cfg.maxColors)
+    // 获取新模式的颜色配置
+    const newModeColors = modeColors[mode] || modeColors.smart;
+    // 对于不需要颜色的模式，传空数组；否则按maxColors截取
+    const effectiveColors = cfg.hasColors
+      ? newModeColors.slice(0, cfg.maxColors)
       : [];
-    const effectiveColors = cfg.minColors && clampedColors.length < cfg.minColors
-      ? [...clampedColors, ...colors.slice(clampedColors.length, cfg.minColors)]
-      : clampedColors;
     apply(mode, effectiveColors, speed, brightness);
   };
 
   const handleColorChange = (idx: number, c: RGBColor) => {
     const next = [...colors];
     next[idx] = c;
-    setColors(next);
+    // 更新当前模式的颜色配置
+    setModeColors(prev => ({
+      ...prev,
+      [activeMode]: next
+    }));
     debouncedApply(activeMode, next.slice(0, modeConfig.maxColors), speed, brightness);
   };
 
   const addColor = () => {
     if (!modeConfig.maxColors || colors.length >= modeConfig.maxColors) return;
     const next = [...colors, { r: 255, g: 255, b: 255 }];
-    setColors(next);
+    // 更新当前模式的颜色配置
+    setModeColors(prev => ({
+      ...prev,
+      [activeMode]: next
+    }));
     debouncedApply(activeMode, next.slice(0, modeConfig.maxColors), speed, brightness);
   };
 
   const removeColor = (idx: number) => {
     if (!modeConfig.minColors || colors.length <= modeConfig.minColors) return;
     const next = colors.filter((_, i) => i !== idx);
-    setColors(next);
+    // 更新当前模式的颜色配置
+    setModeColors(prev => ({
+      ...prev,
+      [activeMode]: next
+    }));
     debouncedApply(activeMode, next.slice(0, modeConfig.maxColors), speed, brightness);
   };
 
@@ -546,12 +571,85 @@ export default function RGBControl({ isConnected, savedConfig, onSetRGBMode }: R
     ? colors.slice(0, modeConfig.maxColors || 1)
     : [];
 
+  // 获取要显示的点颜色数组
+  const getDotColors = (): Array<string | RGBColor> => {
+    // 关闭模式：三个灰色点
+    if (activeMode === 'off') {
+      return ['bg-gray-400', 'bg-gray-400', 'bg-gray-400'];
+    }
+    
+    // 智能和流光模式
+    if (activeMode === 'smart' || activeMode === 'flowing') {
+      return ['bg-red-500', 'bg-green-500', 'bg-blue-500'];
+    }
+    
+    // 旋转模式
+    if (activeMode === 'rotation') {
+      if (displayColors.length > 0) {
+        return displayColors;
+      }
+      return ['bg-red-500', 'bg-orange-500', 'bg-yellow-500', 'bg-green-500', 'bg-blue-500', 'bg-purple-500'].slice(0, 6);
+    }
+    
+    // 呼吸模式
+    if (activeMode === 'breathing') {
+      if (displayColors.length > 0) {
+        return displayColors;
+      }
+      return ['bg-blue-400', 'bg-cyan-400', 'bg-emerald-400', 'bg-teal-400', 'bg-indigo-400'].slice(0, 5);
+    }
+    
+    // 其他支持颜色配置的模式：直接使用displayColors
+    if (modeConfig.hasColors && displayColors.length > 0) {
+      return displayColors;
+    }
+    
+    // 默认情况：红绿蓝
+    return ['bg-red-500', 'bg-green-500', 'bg-blue-500'];
+  };
+
+  const dotColors = getDotColors();
+
   return (
-    <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 overflow-hidden">
+    <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 h-full">
       <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-gradient-to-r from-pink-500 via-purple-500 to-blue-500 animate-pulse" />
-          <h3 className="font-semibold text-gray-900 dark:text-white text-sm">RGB 灯效</h3>
+          {dotColors.map((color, index) => {
+            const waveDelay = { animationDelay: `-${index * 0.2}s` };
+            
+            // 处理RGBColor对象
+            if (typeof color === 'object' && 'r' in color && 'g' in color && 'b' in color) {
+              return (
+                <div
+                  key={index}
+                  className="w-3 h-3 rounded-full animate-bounce-wave hover:animate-bounce-wave-fast transition-all duration-300 cursor-pointer"
+                  style={{ backgroundColor: `rgb(${color.r},${color.g},${color.b})`, ...waveDelay }}
+                />
+              );
+            }
+            // 处理字符串
+            else if (typeof color === 'string') {
+              if (color.startsWith('rgb(')) {
+                return (
+                  <div
+                    key={index}
+                    className="w-3 h-3 rounded-full animate-bounce-wave hover:animate-bounce-wave-fast transition-all duration-300 cursor-pointer"
+                    style={{ backgroundColor: color, ...waveDelay }}
+                  />
+                );
+              } else {
+                return (
+                  <div
+                    key={index}
+                    className={`w-3 h-3 rounded-full animate-bounce-wave hover:animate-bounce-wave-fast transition-all duration-300 cursor-pointer ${color}`}
+                    style={waveDelay}
+                  />
+                );
+              }
+            }
+            // 默认情况
+            return null;
+          })}
         </div>
         <div className="flex items-center gap-2">
           {applying && (
