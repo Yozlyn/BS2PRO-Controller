@@ -529,97 +529,52 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
   }, [dragIndex, handleDragStart]);
 
   return (
-    <Card className="p-6">
-      {/* 头部 */}
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-            风扇曲线设置
-          </h2>
+    <Card className="p-3">
+      {/* 头部 - 状态徽章 */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-1.5">
           {hasUnsavedChanges && (
-            <Badge variant="warning">未保存</Badge>
+            <Badge variant="warning" size="sm">未保存</Badge>
           )}
           {isInteracting && (
-            <Badge variant="info">编辑中</Badge>
+            <Badge variant="info" size="sm">编辑中</Badge>
           )}
         </div>
-
-        {/* 按钮组：重置、保存、导出、导入 */}
-        <div className="flex flex-wrap items-center gap-2 justify-end">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={resetCurve}
-            icon={<ArrowPathIcon className="w-4 h-4" />}
-          >
-            重置
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={saveCurve}
-            disabled={!hasUnsavedChanges}
-            loading={isSaving}
-            icon={<CheckIcon className="w-4 h-4" />}
-          >
-            保存
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={exportFanConfig}
-            icon={<ArrowDownTrayIcon className="w-4 h-4" />}
-          >
-            导出
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={importFanConfig}
-            icon={<ArrowUpTrayIcon className="w-4 h-4" />}
-          >
-            导入
-          </Button>
-        </div>
+        
+        {/* 手动挡位控制（仅在关闭智能变频时显示） */}
+        {!config.autoControl && isConnected && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-500 dark:text-gray-400">手动挡位</span>
+            <Select
+              value={config.manualGear || '标准'}
+              onChange={handleGearChange}
+              options={gearOptions}
+              size="sm"
+            />
+            <Select
+              value={config.manualLevel || '中'}
+              onChange={handleLevelChange}
+              options={levelOptions}
+              size="sm"
+            />
+          </div>
+        )}
       </div>
 
-      {/* 手动挡位控制（仅在关闭智能变频时显示） */}
-      {!config.autoControl && isConnected && (
-        <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl border border-gray-200 dark:border-gray-600">
-          <div className="flex flex-wrap items-center gap-4">
-            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">手动挡位</span>
-            <div className="flex items-center gap-3">
-              <Select
-                value={config.manualGear || '标准'}
-                onChange={handleGearChange}
-                options={gearOptions}
-                size="sm"
-              />
-              <Select
-                value={config.manualLevel || '中'}
-                onChange={handleLevelChange}
-                options={levelOptions}
-                size="sm"
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* 图表区域 */}
-      <div 
+      <div
         ref={chartRef}
         className={clsx(
-          'relative rounded-xl border bg-white dark:bg-gray-800 p-4 mb-6',
+          'relative rounded-xl border bg-white dark:bg-gray-800 p-2 mb-3',
           'border-gray-200 dark:border-gray-700',
           dragIndex !== null && 'ring-2 ring-blue-500 ring-opacity-50'
         )}
       >
-        <div className="h-80 md:h-96 relative">
+        <div className="h-68 md:h-76 relative">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart 
-              data={chartData} 
-              margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+            <LineChart
+              data={chartData}
+              margin={{ top: 10, right: 20, left: 10, bottom: 15 }}
             >
               <CartesianGrid 
                 strokeDasharray="3 3" 
@@ -703,35 +658,73 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
         </div>
       </div>
 
-      {/* 拖拽提示 - 移到图表外部 */}
-      <div className="text-center mb-4">
-        <span className="text-xs text-gray-400 dark:text-gray-500 px-3 py-1.5 rounded-full bg-gray-100 dark:bg-gray-700/50">
+      {/* 按钮组 */}
+      <div className="flex flex-wrap items-center justify-center gap-1.5 mb-2">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={resetCurve}
+          icon={<ArrowPathIcon className="w-3 h-3" />}
+        >
+          重置
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={saveCurve}
+          disabled={!hasUnsavedChanges}
+          loading={isSaving}
+          icon={<CheckIcon className="w-3 h-3" />}
+        >
+          保存
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={exportFanConfig}
+          icon={<ArrowDownTrayIcon className="w-3 h-3" />}
+        >
+          导出
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={importFanConfig}
+          icon={<ArrowUpTrayIcon className="w-3 h-3" />}
+        >
+          导入
+        </Button>
+      </div>
+
+      {/* 拖拽提示 */}
+      <div className="text-center mb-2">
+        <span className="text-xs text-gray-400 dark:text-gray-500 px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700/50">
           💡 拖拽图表上的蓝色圆点可直接调整转速
         </span>
       </div>
 
       {/* 控制点网格 */}
-      <div className="mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-white">控制点调节</h3>
+      <div className="mb-3">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-xs font-semibold text-gray-900 dark:text-gray-300">控制点调节</h3>
           <span className="text-xs text-gray-500 dark:text-gray-400">
             转速范围: {rpmRange.min} - {rpmRange.max} RPM
           </span>
         </div>
         
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-1.5">
           {localCurve.map((point, index) => (
-            <div 
+            <div
               key={`control-${point.temperature}`}
               className={clsx(
-                'p-3 rounded-lg border transition-all duration-200',
+                'p-1.5 rounded-md border transition-all duration-200',
                 'bg-gray-50 dark:bg-gray-700/50',
-                dragIndex === index 
-                  ? 'border-blue-500 ring-2 ring-blue-500/20' 
+                dragIndex === index
+                  ? 'border-blue-500 ring-1 ring-blue-500/20'
                   : 'border-gray-200 dark:border-gray-600 hover:border-blue-300 dark:hover:border-blue-500'
               )}
             >
-              <div className="text-center mb-2">
+              <div className="text-center mb-0.5">
                 <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
                   {point.temperature}°C
                 </span>
@@ -747,14 +740,14 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
                 max={rpmRange.max}
                 step={50}
                 className={clsx(
-                  'w-full px-2 py-1.5 text-center text-sm font-medium rounded-md',
+                  'w-full px-1 py-0.5 text-center text-xs font-medium rounded',
                   'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600',
-                  'focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent',
+                  'focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent',
                   'transition-all duration-200'
                 )}
               />
               
-              <div className="mt-2">
+              <div className="mt-0.5">
                 <input
                   type="range"
                   value={point.rpm}
@@ -766,7 +759,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
                   min={rpmRange.min}
                   max={rpmRange.max}
                   step={50}
-                  className="w-full h-1.5 rounded-full appearance-none cursor-pointer slider-thumb"
+                  className="w-full h-1 rounded-full appearance-none cursor-pointer slider-thumb"
                   style={{
                     background: `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${((point.rpm - rpmRange.min) / (rpmRange.max - rpmRange.min)) * 100}%, #e5e7eb ${((point.rpm - rpmRange.min) / (rpmRange.max - rpmRange.min)) * 100}%, #e5e7eb 100%)`
                   }}
@@ -778,18 +771,18 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
       </div>
 
       {/* 说明卡片 */}
-      <div className="p-4 rounded-xl bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border border-blue-200 dark:border-blue-800">
-        <div className="flex gap-3">
-          <InformationCircleIcon className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
-          <div className="text-sm text-blue-800 dark:text-blue-200 space-y-2">
+      <div className="p-2 rounded-md bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border border-blue-200 dark:border-blue-800">
+        <div className="flex gap-1.5">
+          <InformationCircleIcon className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+          <div className="text-xs text-blue-800 dark:text-blue-200 space-y-0.5">
             <p className="font-medium">使用说明</p>
-            <ul className="space-y-1 text-blue-700 dark:text-blue-300">
-              <li>• <strong>拖拽图表点：</strong>直接在图表上拖拽蓝色圆点调整转速</li>
-              <li>• <strong>数值输入：</strong>在下方控制点卡片中直接输入精确值</li>
-              <li>• <strong>滑块调节：</strong>使用滑块快速微调</li>
-              <li>• <strong>保存设置：</strong>修改后点击保存按钮应用更改</li>
+            <ul className="space-y-0.5 text-blue-700 dark:text-blue-300">
+              <li className="text-xs">• <strong>拖拽图表点：</strong>直接在图表上拖拽蓝色圆点调整转速</li>
+              <li className="text-xs">• <strong>数值输入：</strong>在下方控制点卡片中直接输入精确值</li>
+              <li className="text-xs">• <strong>滑块调节：</strong>使用滑块快速微调</li>
+              <li className="text-xs">• <strong>保存设置：</strong>修改后点击保存按钮应用更改</li>
             </ul>
-            <p className="text-xs text-blue-600 dark:text-blue-400 pt-2 border-t border-blue-200 dark:border-blue-700">
+            <p className="text-xs text-blue-600 dark:text-blue-400 pt-0.5 border-t border-blue-200 dark:border-blue-700">
               挡位限制：静音 ≤2000 | 标准 ≤2760 | 强劲 ≤3300 | 超频 ≤4000 RPM
             </p>
           </div>
