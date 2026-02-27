@@ -24,8 +24,8 @@ import {
   UpdateGuiResponseTime,
   SetCustomSpeed,
   SetRGBMode,
-  // CheckWindowsAutoStart,
-  // SetWindowsAutoStart
+  CheckWindowsAutoStart,
+  SetWindowsAutoStart,
 } from '../../../wailsjs/go/main/App';
 
 import { types } from '../../../wailsjs/go/models';
@@ -113,28 +113,11 @@ class ApiService {
 
   // Windows自启动相关
   async checkWindowsAutoStart(): Promise<boolean> {
-    // 临时使用window对象调用，等Wails生成绑定后更新
-    return await (window as any).go?.main?.App?.CheckWindowsAutoStart();
+    return await CheckWindowsAutoStart();
   }
 
   async setWindowsAutoStart(enabled: boolean): Promise<void> {
-    // 临时使用window对象调用，等Wails生成绑定后更新
-    return await (window as any).go?.main?.App?.SetWindowsAutoStart(enabled);
-  }
-
-  async getAutoStartMethod(): Promise<string> {
-    // 获取当前自启动方式
-    return await (window as any).go?.main?.App?.GetAutoStartMethod();
-  }
-
-  async setAutoStartWithMethod(enabled: boolean, method: string): Promise<void> {
-    // 使用指定方式设置自启动
-    return await (window as any).go?.main?.App?.SetAutoStartWithMethod(enabled, method);
-  }
-
-  async isRunningAsAdmin(): Promise<boolean> {
-    // 检查是否以管理员权限运行
-    return await (window as any).go?.main?.App?.IsRunningAsAdmin();
+    return await SetWindowsAutoStart(enabled);
   }
 
   // 数据获取
@@ -190,6 +173,17 @@ class ApiService {
     return () => EventsOff('config-update');
   }
 
+  // 核心服务连接状态事件
+  onCoreServiceError(callback: (msg: string) => void): () => void {
+    EventsOn('core-service-error', callback);
+    return () => EventsOff('core-service-error');
+  }
+
+  onCoreServiceConnected(callback: () => void): () => void {
+    EventsOn('core-service-connected', callback);
+    return () => EventsOff('core-service-connected');
+  }
+
   // 调试相关方法
   async getDebugInfo(): Promise<any> {
     return await GetDebugInfo();
@@ -201,17 +195,6 @@ class ApiService {
 
   async updateGuiResponseTime(): Promise<void> {
     return await UpdateGuiResponseTime();
-  }
-
-  // 调试事件监听
-  onHealthPing(callback: (timestamp: number) => void): () => void {
-    EventsOn('health-ping', callback);
-    return () => EventsOff('health-ping');
-  }
-
-  onHeartbeat(callback: (timestamp: number) => void): () => void {
-    EventsOn('heartbeat', callback);
-    return () => EventsOff('heartbeat');
   }
 }
 
