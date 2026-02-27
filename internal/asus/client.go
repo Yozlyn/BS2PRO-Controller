@@ -25,8 +25,12 @@ type Client struct {
 
 // NewClient 初始化并连接到 ATKACPI 设备
 func NewClient() (*Client, error) {
+	devicePath, err := syscall.UTF16PtrFromString(`\\.\ATKACPI`)
+	if err != nil {
+		return nil, err
+	}
 	h, err := syscall.CreateFile(
-		syscall.StringToUTF16Ptr(`\\.\ATKACPI`),
+		devicePath,
 		syscall.GENERIC_READ|syscall.GENERIC_WRITE,
 		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE,
 		nil,

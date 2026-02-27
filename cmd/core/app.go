@@ -43,7 +43,6 @@ type CoreApp struct {
 
 	guiLastResponse   int64
 	guiMonitorEnabled bool
-	healthCheckTicker *time.Ticker
 	cleanupChan       chan bool
 
 	mutex          sync.RWMutex
@@ -1072,7 +1071,7 @@ func (a *CoreApp) startHealthMonitoring() {
 
 	// 设备健康检查使用指数退避策略
 	baseInterval := 5 * time.Second // 基础探测频率：5秒
-	maxInterval := 60 * time.Second // 最大探测频率：60秒
+	maxInterval := 30 * time.Second // 最大探测频率：30秒
 	currentInterval := baseInterval
 
 	for {
@@ -1129,9 +1128,6 @@ func (a *CoreApp) cleanup() {
 	select {
 	case a.cleanupChan <- true:
 	default:
-	}
-	if a.healthCheckTicker != nil {
-		a.healthCheckTicker.Stop()
 	}
 	if a.logger != nil {
 		a.logger.Close()
