@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -16,6 +17,8 @@ import (
 	"github.com/TIANLI0/BS2PRO-Controller/internal/version"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // App struct - GUI 应用程序结构
@@ -31,6 +34,9 @@ type App struct {
 	currentTemp      types.TemperatureData
 	currentFan       *types.FanData
 	autoControlState bool
+
+	// 自启动管理器，启动时初始化一次
+	autostartManager *autostart.Manager
 }
 
 // 重新导出类型，供Wails生成TypeScript绑定
@@ -48,12 +54,44 @@ type (
 var guiLogger *zap.SugaredLogger
 
 func init() {
-	logger, _ := zap.NewProduction()
+	logDir := config.GetLogDir()
+	_ = os.MkdirAll(logDir, 0755)
+
+	logFilePath := filepath.Join(logDir, fmt.Sprintf("gui_%s.log", time.Now().Format("2006-01-02")))
+
+	encoderCfg := zapcore.EncoderConfig{
+		TimeKey:        "time",
+		LevelKey:       "level",
+		MessageKey:     "msg",
+		CallerKey:      "caller",
+		LineEnding:     zapcore.DefaultLineEnding,
+		EncodeLevel:    zapcore.CapitalLevelEncoder,
+		EncodeTime:     zapcore.ISO8601TimeEncoder,
+		EncodeDuration: zapcore.StringDurationEncoder,
+		EncodeCaller:   zapcore.ShortCallerEncoder,
+	}
+
+	fileWriter := zapcore.AddSync(&lumberjack.Logger{
+		Filename:   logFilePath,
+		MaxSize:    10,
+		MaxBackups: 7,
+		MaxAge:     7,
+		Compress:   true,
+	})
+
+	core := zapcore.NewCore(
+		zapcore.NewJSONEncoder(encoderCfg),
+		fileWriter,
+		zapcore.InfoLevel,
+	)
+
+	logger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
 	guiLogger = logger.Sugar()
 }
 
 type trayLoggerAdapter struct {
-	sugar *zap.SugaredLogger
+	sugar      *zap.SugaredLogger
+	installDir string
 }
 
 func (l *trayLoggerAdapter) Info(format string, v ...any)  { l.sugar.Infof(format, v...) }
@@ -63,7 +101,13 @@ func (l *trayLoggerAdapter) Warn(format string, v ...any)  { l.sugar.Warnf(forma
 func (l *trayLoggerAdapter) Close()                        { l.sugar.Sync() }
 func (l *trayLoggerAdapter) CleanOldLogs()                 {}
 func (l *trayLoggerAdapter) SetDebugMode(enabled bool)     {}
-func (l *trayLoggerAdapter) GetLogDir() string             { return "" }
+
+func (l *trayLoggerAdapter) GetLogDir() string {
+	if l.installDir != "" {
+		return filepath.Join(l.installDir, "logs")
+	}
+	return ""
+}
 
 // NewApp 创建 GUI 应用实例
 func NewApp(icon []byte) *App {
@@ -79,38 +123,53 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	guiLogger.Info("=== BS2PRO GUI 启动 ===")
 
+	// 初始化自启动管理器
+	adapter := &trayLoggerAdapter{sugar: guiLogger, installDir: config.GetInstallDir()}
+	a.autostartManager = autostart.NewManager(adapter, config.GetInstallDir())
+
 	// 连接到后台核心服务
 	if err := a.ipcClient.Connect(); err != nil {
 		guiLogger.Errorf("连接核心服务失败: %v", err)
 		runtime.EventsEmit(ctx, "core-service-error", "无法连接到核心服务，请检查服务是否运行")
+
+		go func() {
+			defaultCfg := types.GetDefaultConfig(false)
+			defaultCfg.WindowsAutoStart = a.autostartManager.CheckWindowsAutoStart()
+			runtime.EventsEmit(ctx, "config-update", defaultCfg)
+		}()
 	} else {
 		guiLogger.Info("已成功连接到核心服务 IPC 管道")
 		a.ipcClient.SetEventHandler(a.handleCoreEvent)
 
 		// 启动时主动拉取一次配置，同步状态
-		go func() {
-			cfg := a.GetConfig()
-			status := a.GetDeviceStatus()
+		cfg := a.GetConfig()
+		status := a.GetDeviceStatus()
+		cfg.WindowsAutoStart = a.autostartManager.CheckWindowsAutoStart()
 
-			a.mutex.Lock()
-			a.autoControlState = cfg.AutoControl
-			if connected, ok := status["connected"].(bool); ok {
-				a.isConnected = connected
-			}
-			a.mutex.Unlock()
+		a.mutex.Lock()
+		a.autoControlState = cfg.AutoControl
+		if connected, ok := status["connected"].(bool); ok {
+			a.isConnected = connected
+		}
+		a.mutex.Unlock()
+		go func() {
+			runtime.EventsEmit(ctx, "config-update", cfg)
 		}()
 	}
 
 	// 初始化系统托盘
 	a.InitSystemTray()
 
+	// 启动连接健康检查
+	go a.startConnectionHealthCheck()
+
 	guiLogger.Info("=== BS2PRO GUI 启动完成 ===")
 }
 
 // InitSystemTray 初始化系统托盘
 func (a *App) InitSystemTray() {
-	adapter := &trayLoggerAdapter{sugar: guiLogger}
-	a.trayManager = tray.NewManager(adapter, a.iconData)
+	trayAdapter := &trayLoggerAdapter{sugar: guiLogger, installDir: config.GetInstallDir()}
+	a.trayManager = tray.NewManager(trayAdapter, a.iconData)
 
 	a.trayManager.SetCallbacks(
 		func() {
@@ -124,6 +183,10 @@ func (a *App) InitSystemTray() {
 		func() {
 			// 点击重启服务：重启核心服务
 			a.RestartCoreService()
+		},
+		func() {
+			// 点击关闭核心：停止核心服务
+			a.StopCoreService()
 		},
 		func() bool {
 			// 切换智能变频
@@ -164,9 +227,12 @@ func (a *App) OnWindowClosing(ctx context.Context) bool {
 
 // handleCoreEvent 处理核心服务推送的事件
 func (a *App) handleCoreEvent(event ipc.Event) {
+	defer func() { recover() }()
 	if a.ctx == nil {
 		return
 	}
+
+	guiLogger.Debug("handleCoreEvent: 收到事件类型=%v", event.Type)
 
 	switch event.Type {
 	case ipc.EventFanDataUpdate:
@@ -206,14 +272,57 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 		json.Unmarshal(event.Data, &errMsg)
 		runtime.EventsEmit(a.ctx, "device-error", errMsg)
 
+	case ipc.EventServiceConnected:
+		guiLogger.Info("核心服务连接事件 - UI 刷新")
+		// 服务重新连接后，延迟半秒等待硬件和 IPC 管道彻底就绪
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			cfg := a.GetConfig()
+			status := a.GetDeviceStatus()
+
+			a.mutex.Lock()
+			if connected, ok := status["connected"].(bool); ok {
+				a.isConnected = connected
+			}
+			a.autoControlState = cfg.AutoControl
+			a.mutex.Unlock()
+
+			if a.ctx != nil {
+				// 发送恢复信号给前端
+				runtime.EventsEmit(a.ctx, "core-service-connected", nil)
+				runtime.EventsEmit(a.ctx, "config-update", cfg)
+
+				// 如果核心服务汇报设备在线，一并通知前端设备在线
+				if a.isConnected {
+					runtime.EventsEmit(a.ctx, "device-connected", status["currentData"])
+				}
+			}
+		}()
+
+	case ipc.EventServiceDisconnected:
+		guiLogger.Warn("核心服务断开事件")
+		a.mutex.Lock()
+		a.isConnected = false
+		a.mutex.Unlock()
+
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "core-service-error", "核心服务意外终止，正在尝试重连...")
+			runtime.EventsEmit(a.ctx, "device-disconnected", nil)
+		}
+
 	case ipc.EventConfigUpdate:
 		var cfg types.AppConfig
 		if err := json.Unmarshal(event.Data, &cfg); err == nil {
+			// 用注册表真实状态覆盖配置中的windowsAutoStart，保持两者一致
+			cfg.WindowsAutoStart = a.CheckWindowsAutoStart()
 			a.mutex.Lock()
 			a.autoControlState = cfg.AutoControl
 			a.mutex.Unlock()
 			runtime.EventsEmit(a.ctx, "config-update", cfg)
 		}
+
+	case "show-window":
+		a.ShowWindow()
 	}
 }
 
@@ -226,7 +335,7 @@ func (a *App) GetAppVersion() string { return version.Get() }
 
 func (a *App) ConnectDevice() bool {
 	resp, err := a.sendRequest(ipc.ReqConnect, nil)
-	if err != nil || !resp.Success {
+	if err != nil || resp == nil || !resp.Success {
 		return false
 	}
 	var success bool
@@ -238,7 +347,7 @@ func (a *App) DisconnectDevice() { a.sendRequest(ipc.ReqDisconnect, nil) }
 
 func (a *App) GetDeviceStatus() map[string]any {
 	resp, err := a.sendRequest(ipc.ReqGetDeviceStatus, nil)
-	if err != nil || !resp.Success {
+	if err != nil || resp == nil || !resp.Success {
 		return map[string]any{"connected": false}
 	}
 	var status map[string]any
@@ -248,7 +357,7 @@ func (a *App) GetDeviceStatus() map[string]any {
 
 func (a *App) GetConfig() AppConfig {
 	resp, err := a.sendRequest(ipc.ReqGetConfig, nil)
-	if err != nil || !resp.Success {
+	if err != nil || resp == nil || !resp.Success {
 		return types.GetDefaultConfig(false)
 	}
 	var cfg AppConfig
@@ -261,8 +370,11 @@ func (a *App) UpdateConfig(cfg AppConfig) error {
 	if err != nil {
 		return err
 	}
-	if !resp.Success {
-		return fmt.Errorf("%s", resp.Error)
+	if resp == nil || !resp.Success {
+		if resp != nil {
+			return fmt.Errorf("%s", resp.Error)
+		}
+		return fmt.Errorf("服务响应为空")
 	}
 	return nil
 }
@@ -272,15 +384,18 @@ func (a *App) SetFanCurve(curve []FanCurvePoint) error {
 	if err != nil {
 		return err
 	}
-	if !resp.Success {
-		return fmt.Errorf("%s", resp.Error)
+	if resp == nil || !resp.Success {
+		if resp != nil {
+			return fmt.Errorf("%s", resp.Error)
+		}
+		return fmt.Errorf("服务响应为空")
 	}
 	return nil
 }
 
 func (a *App) GetFanCurve() []FanCurvePoint {
 	resp, err := a.sendRequest(ipc.ReqGetFanCurve, nil)
-	if err != nil || !resp.Success {
+	if err != nil || resp == nil || !resp.Success {
 		return types.GetDefaultFanCurve()
 	}
 	var curve []FanCurvePoint
@@ -293,15 +408,18 @@ func (a *App) SetAutoControl(enabled bool) error {
 	if err != nil {
 		return err
 	}
-	if !resp.Success {
-		return fmt.Errorf("%s", resp.Error)
+	if resp == nil || !resp.Success {
+		if resp != nil {
+			return fmt.Errorf("%s", resp.Error)
+		}
+		return fmt.Errorf("服务响应为空")
 	}
 	return nil
 }
 
 func (a *App) SetManualGear(gear, level string) bool {
 	resp, err := a.sendRequest(ipc.ReqSetManualGear, ipc.SetManualGearParams{Gear: gear, Level: level})
-	if err != nil || !resp.Success {
+	if err != nil || resp == nil || !resp.Success {
 		return false
 	}
 	var success bool
@@ -311,7 +429,7 @@ func (a *App) SetManualGear(gear, level string) bool {
 
 func (a *App) GetAvailableGears() map[string][]GearCommand {
 	resp, err := a.sendRequest(ipc.ReqGetAvailableGears, nil)
-	if err != nil || !resp.Success {
+	if err != nil || resp == nil || !resp.Success {
 		return types.GearCommands
 	}
 	var gears map[string][]GearCommand
@@ -324,15 +442,18 @@ func (a *App) SetCustomSpeed(enabled bool, rpm int) error {
 	if err != nil {
 		return err
 	}
-	if !resp.Success {
-		return fmt.Errorf("%s", resp.Error)
+	if resp == nil || !resp.Success {
+		if resp != nil {
+			return fmt.Errorf("%s", resp.Error)
+		}
+		return fmt.Errorf("服务响应为空")
 	}
 	return nil
 }
 
 func (a *App) SetGearLight(enabled bool) bool {
 	resp, err := a.sendRequest(ipc.ReqSetGearLight, ipc.SetBoolParams{Enabled: enabled})
-	if err != nil {
+	if err != nil || resp == nil {
 		return false
 	}
 	var success bool
@@ -342,7 +463,7 @@ func (a *App) SetGearLight(enabled bool) bool {
 
 func (a *App) SetPowerOnStart(enabled bool) bool {
 	resp, err := a.sendRequest(ipc.ReqSetPowerOnStart, ipc.SetBoolParams{Enabled: enabled})
-	if err != nil {
+	if err != nil || resp == nil {
 		return false
 	}
 	var success bool
@@ -352,7 +473,7 @@ func (a *App) SetPowerOnStart(enabled bool) bool {
 
 func (a *App) SetSmartStartStop(mode string) bool {
 	resp, err := a.sendRequest(ipc.ReqSetSmartStartStop, ipc.SetStringParams{Value: mode})
-	if err != nil {
+	if err != nil || resp == nil {
 		return false
 	}
 	var success bool
@@ -362,7 +483,7 @@ func (a *App) SetSmartStartStop(mode string) bool {
 
 func (a *App) SetBrightness(percentage int) bool {
 	resp, err := a.sendRequest(ipc.ReqSetBrightness, ipc.SetIntParams{Value: percentage})
-	if err != nil {
+	if err != nil || resp == nil {
 		return false
 	}
 	var success bool
@@ -372,7 +493,7 @@ func (a *App) SetBrightness(percentage int) bool {
 
 func (a *App) SetRGBMode(params ipc.SetRGBModeParams) bool {
 	resp, err := a.sendRequest(ipc.ReqSetRGBMode, params)
-	if err != nil {
+	if err != nil || resp == nil {
 		return false
 	}
 	var success bool
@@ -382,7 +503,7 @@ func (a *App) SetRGBMode(params ipc.SetRGBModeParams) bool {
 
 func (a *App) GetTemperature() TemperatureData {
 	resp, err := a.sendRequest(ipc.ReqGetTemperature, nil)
-	if err != nil {
+	if err != nil || resp == nil {
 		a.mutex.RLock()
 		defer a.mutex.RUnlock()
 		return a.currentTemp
@@ -394,7 +515,7 @@ func (a *App) GetTemperature() TemperatureData {
 
 func (a *App) GetCurrentFanData() *FanData {
 	resp, err := a.sendRequest(ipc.ReqGetCurrentFanData, nil)
-	if err != nil {
+	if err != nil || resp == nil {
 		return nil
 	}
 	var fanData FanData
@@ -405,17 +526,20 @@ func (a *App) GetCurrentFanData() *FanData {
 }
 
 func (a *App) SetWindowsAutoStart(enable bool) error {
-	adapter := &trayLoggerAdapter{sugar: guiLogger}
-	installDir := config.GetInstallDir()
-	manager := autostart.NewManager(adapter, installDir)
-	return manager.SetWindowsAutoStart(enable)
+	if a.autostartManager == nil {
+		// 防御性空指针保护
+		adapter := &trayLoggerAdapter{sugar: guiLogger, installDir: config.GetInstallDir()}
+		a.autostartManager = autostart.NewManager(adapter, config.GetInstallDir())
+	}
+	return a.autostartManager.SetWindowsAutoStart(enable)
 }
 
 func (a *App) CheckWindowsAutoStart() bool {
-	adapter := &trayLoggerAdapter{sugar: guiLogger}
-	installDir := config.GetInstallDir()
-	manager := autostart.NewManager(adapter, installDir)
-	return manager.CheckWindowsAutoStart()
+	if a.autostartManager == nil {
+		adapter := &trayLoggerAdapter{sugar: guiLogger, installDir: config.GetInstallDir()}
+		a.autostartManager = autostart.NewManager(adapter, config.GetInstallDir())
+	}
+	return a.autostartManager.CheckWindowsAutoStart()
 }
 
 func (a *App) IsAutoStartLaunch() bool {
@@ -449,27 +573,10 @@ func (a *App) QuitApp() {
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		guiLogger.Info("执行强杀...")
+		// Sync 将 zap 缓冲区写入磁盘，避免日志在os.Exit时丢失
+		guiLogger.Sync()
 		os.Exit(0)
 	}()
-}
-
-func (a *App) QuitAll() {
-	guiLogger.Info("GUI 彻底退出")
-	a.sendRequest(ipc.ReqQuitApp, nil)
-	a.QuitApp()
-}
-
-// QuitServiceOnly 只退出核心服务，不关闭GUI界面
-func (a *App) QuitServiceOnly() {
-	guiLogger.Info("GUI 请求只退出核心服务")
-	resp, err := a.sendRequest(ipc.ReqQuitApp, nil)
-	if err != nil {
-		guiLogger.Errorf("发送退出核心服务请求失败: %v", err)
-	} else if resp != nil && resp.Success {
-		guiLogger.Info("核心服务已退出")
-	} else {
-		guiLogger.Warn("退出核心服务请求未成功")
-	}
 }
 
 // RestartCoreService 重启核心服务
@@ -488,9 +595,25 @@ func (a *App) RestartCoreService() bool {
 	}
 }
 
+// StopCoreService 停止核心服务
+func (a *App) StopCoreService() bool {
+	guiLogger.Info("控制台请求停止核心服务")
+	resp, err := a.sendRequest(ipc.ReqStopService, nil)
+	if err != nil {
+		guiLogger.Errorf("发送停止核心服务请求失败: %v", err)
+		return false
+	} else if resp != nil && resp.Success {
+		guiLogger.Info("核心服务停止请求已发送，服务将在后台异步停止")
+		return true
+	} else {
+		guiLogger.Warn("停止核心服务请求未成功")
+		return false
+	}
+}
+
 func (a *App) TestTemperatureReading() TemperatureData {
 	resp, err := a.sendRequest(ipc.ReqTestTemperatureReading, nil)
-	if err != nil {
+	if err != nil || resp == nil {
 		return TemperatureData{}
 	}
 	var temp TemperatureData
@@ -500,8 +623,12 @@ func (a *App) TestTemperatureReading() TemperatureData {
 
 func (a *App) TestBridgeProgram() BridgeTemperatureData {
 	resp, err := a.sendRequest(ipc.ReqTestBridgeProgram, nil)
-	if err != nil {
-		return BridgeTemperatureData{Success: false, Error: err.Error()}
+	if err != nil || resp == nil {
+		errMsg := "请求失败"
+		if err != nil {
+			errMsg = err.Error()
+		}
+		return BridgeTemperatureData{Success: false, Error: errMsg}
 	}
 	var data BridgeTemperatureData
 	json.Unmarshal(resp.Data, &data)
@@ -510,8 +637,12 @@ func (a *App) TestBridgeProgram() BridgeTemperatureData {
 
 func (a *App) GetBridgeProgramStatus() map[string]any {
 	resp, err := a.sendRequest(ipc.ReqGetBridgeProgramStatus, nil)
-	if err != nil {
-		return map[string]any{"error": err.Error()}
+	if err != nil || resp == nil {
+		errMsg := "请求失败"
+		if err != nil {
+			errMsg = err.Error()
+		}
+		return map[string]any{"error": errMsg}
 	}
 	var status map[string]any
 	json.Unmarshal(resp.Data, &status)
@@ -524,8 +655,12 @@ func (a *App) UpdateGuiResponseTime() {
 
 func (a *App) GetDebugInfo() map[string]any {
 	resp, err := a.sendRequest(ipc.ReqGetDebugInfo, nil)
-	if err != nil {
-		return map[string]any{"error": err.Error()}
+	if err != nil || resp == nil {
+		errMsg := "请求失败"
+		if err != nil {
+			errMsg = err.Error()
+		}
+		return map[string]any{"error": errMsg}
 	}
 	var info map[string]any
 	json.Unmarshal(resp.Data, &info)
@@ -537,8 +672,92 @@ func (a *App) SetDebugMode(enabled bool) error {
 	if err != nil {
 		return err
 	}
-	if !resp.Success {
-		return fmt.Errorf("%s", resp.Error)
+	if resp == nil || !resp.Success {
+		if resp != nil {
+			return fmt.Errorf("%s", resp.Error)
+		}
+		return fmt.Errorf("服务响应为空")
 	}
 	return nil
+}
+
+// LogFrontendError 接收前端上报的JS错误，写入gui日志文件
+func (a *App) LogFrontendError(level, source, message, stack string) {
+	if guiLogger == nil {
+		return
+	}
+	entry := fmt.Sprintf("[frontend][%s] %s\n  stack: %s", source, message, stack)
+	switch level {
+	case "warn":
+		guiLogger.Warn(entry)
+	case "crash", "error":
+		guiLogger.Error(entry)
+	default:
+		guiLogger.Info(entry)
+	}
+}
+
+// startConnectionHealthCheck 启动连接健康检查
+func (a *App) startConnectionHealthCheck() {
+	guiLogger.Info("启动核心服务Watchdog")
+
+	baseInterval := 3 * time.Second // 基础探测频率：3秒
+	maxInterval := 30 * time.Second // 最大探测频率：30秒 (休眠期)
+	currentInterval := baseInterval
+
+	for {
+		if !a.ipcClient.IsConnected() {
+			guiLogger.Info("Watchdog: 检测到核心服务离线，尝试重连...")
+
+			if err := a.ipcClient.Connect(); err == nil {
+				guiLogger.Info("Watchdog: 核心服务重连成功！")
+				currentInterval = baseInterval // 重连成功，重置为基础心跳频率
+			} else {
+				// 连接失败，推送UI状态
+				if a.ctx != nil {
+					runtime.EventsEmit(a.ctx, "core-service-error", "核心服务已停止，正在等待服务启动...")
+					runtime.EventsEmit(a.ctx, "device-disconnected", nil)
+				}
+
+				// 指数退避，拉长下次探测的时间
+				currentInterval *= 2
+				if currentInterval > maxInterval {
+					currentInterval = maxInterval
+				}
+				guiLogger.Debug("Watchdog: 重连失败，下次探测将在 %v 后进行", currentInterval)
+			}
+		} else {
+			// 连接正常的情况下，发送Ping测活
+			resp, err := a.sendRequest(ipc.ReqPing, nil)
+			if err != nil || resp == nil || !resp.Success {
+				guiLogger.Error("Watchdog: Ping 失败，判定管道假死，主动切断连接")
+				a.ipcClient.Close()
+				currentInterval = baseInterval // 准备立即开始快速重连
+			} else {
+				currentInterval = baseInterval // 保持正常的3秒心跳频率
+			}
+		}
+
+		// 统一在此处休眠
+		time.Sleep(currentInterval)
+	}
+}
+
+// CheckConnectionStatus 检查当前连接状态（供前端调用）
+func (a *App) CheckConnectionStatus() map[string]any {
+	status := make(map[string]any)
+
+	// 尝试发送Ping请求
+	resp, err := a.sendRequest(ipc.ReqPing, nil)
+	if err != nil {
+		status["connected"] = false
+		status["error"] = err.Error()
+	} else {
+		status["connected"] = resp != nil && resp.Success
+		if resp != nil && !resp.Success {
+			status["error"] = resp.Error
+		}
+	}
+
+	return status
 }
