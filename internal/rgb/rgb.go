@@ -114,7 +114,7 @@ func (c *Controller) Start() {
 				return
 			case level := <-c.cmdQueue:
 				// 防抖: 控制命令频率
-				if time.Since(lastSend) > 2*time.Second {
+				if time.Since(lastSend) > 500*time.Millisecond {
 					c.SetSmartTempLevel(level)
 					lastSend = time.Now()
 				}
