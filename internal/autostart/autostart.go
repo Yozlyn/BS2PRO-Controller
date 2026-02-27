@@ -74,16 +74,6 @@ func (m *Manager) CheckWindowsAutoStart() bool {
 	return err == nil
 }
 
-// GetAutoStartMethod 获取当前的自启动方式
-func (m *Manager) GetAutoStartMethod() string {
-	return "registry"
-}
-
-// SetAutoStartWithMethod 使用指定方式设置自启动
-func (m *Manager) SetAutoStartWithMethod(enable bool, method string) error {
-	return m.SetWindowsAutoStart(enable)
-}
-
 // DetectAutoStartLaunch 检测是否为自启动启动
 func DetectAutoStartLaunch(args []string) bool {
 	for _, arg := range args {

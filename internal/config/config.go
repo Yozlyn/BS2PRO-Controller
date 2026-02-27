@@ -139,12 +139,12 @@ func (m *Manager) Save() error {
 
 // GetDefaultConfigDir 获取默认配置目录
 func (m *Manager) GetDefaultConfigDir() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		m.logError("获取用户主目录失败: %v", err)
+	programData := os.Getenv("PROGRAMDATA")
+	if programData == "" {
+		m.logError("PROGRAMDATA 环境变量未设置，回落到安装目录")
 		return filepath.Join(m.installDir, "config")
 	}
-	return filepath.Join(homeDir, ".bs2pro-controller")
+	return filepath.Join(programData, "BS2PRO-Controller")
 }
 
 // Get 获取当前配置
@@ -182,11 +182,6 @@ func (m *Manager) logDebug(format string, v ...any) {
 	}
 }
 
-// GetConfigDir 获取配置目录（保持向后兼容）
-func (m *Manager) GetConfigDir() string {
-	return m.GetDefaultConfigDir()
-}
-
 // GetInstallDir 获取安装目录
 func GetInstallDir() string {
 	exePath, err := os.Executable()
@@ -196,13 +191,14 @@ func GetInstallDir() string {
 	return filepath.Dir(exePath)
 }
 
-// GetCurrentWorkingDir 获取当前工作目录
-func GetCurrentWorkingDir() string {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "unknown"
+// GetLogDir 获取日志目录，统一存放到ProgramData\BS2PRO-Controller\logs
+func GetLogDir() string {
+	programData := os.Getenv("PROGRAMDATA")
+	if programData != "" {
+		return filepath.Join(programData, "BS2PRO-Controller", "logs")
 	}
-	return dir
+	// 回落：ProgramData环境变量不存在时用硬编码路径
+	return `C:\ProgramData\BS2PRO-Controller\logs`
 }
 
 // ValidateFanCurve 验证风扇曲线是否有效
