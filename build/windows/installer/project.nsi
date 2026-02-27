@@ -239,14 +239,18 @@ Section "主程序 (必需)" SEC_MAIN
     ${EndIf}
 SectionEnd
 
-Section /o "添加快捷方式" SEC_SHORTCUTS
-    DetailPrint "正在创建快捷方式..."
+Section /o "开始菜单快捷方式" SEC_STARTMENU
+    DetailPrint "正在创建开始菜单快捷方式..."
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+SectionEnd
+
+Section /o "桌面快捷方式" SEC_DESKTOP
+    DetailPrint "正在创建桌面快捷方式..."
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 SectionEnd
 
 Section /o "控制台自启动" SEC_AUTOSTART
-    DetailPrint "正在配置GUI开机自启..."
+    DetailPrint "正在配置控制台开机自启..."
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "BS2PRO-Controller" '"$INSTDIR\${PRODUCT_EXECUTABLE}" --autostart'
 SectionEnd
 
@@ -260,15 +264,17 @@ Function .onInit
    ${EndIf}
    Call DetectExistingInstallation
    
-   # 设置"添加快捷方式"组件默认选中
-   SectionSetFlags ${SEC_SHORTCUTS} 1
+   # 设置快捷方式组件默认选中
+   SectionSetFlags ${SEC_STARTMENU} 1
+   SectionSetFlags ${SEC_DESKTOP} 1
    SectionSetFlags ${SEC_AUTOSTART} 1
 FunctionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-    !insertmacro MUI_DESCRIPTION_TEXT ${SEC_MAIN} "BS2PRO 控制器主程序和后台核心守护服务。"
-    !insertmacro MUI_DESCRIPTION_TEXT ${SEC_SHORTCUTS} "（可选）在开始菜单和桌面创建快捷方式。"
-    !insertmacro MUI_DESCRIPTION_TEXT ${SEC_AUTOSTART} "（可选）登录桌面时静默启动控制台。核心服务已随系统自启，控制台无需自启。"
+   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_MAIN} "BS2PRO 控制器主程序和后台核心守护服务。"
+   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_STARTMENU} "（可选）在开始菜单创建快捷方式。"
+   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_DESKTOP} "（可选）在桌面创建快捷方式。"
+   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_AUTOSTART} "（可选）登录桌面时静默启动控制台。核心服务已随系统自启，控制台无需自启。"
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "uninstall"
@@ -283,7 +289,7 @@ Section "uninstall"
     
     # 首先尝试使用服务停止命令
     ${If} ${FileExists} "$INSTDIR\BS2PRO-CoreService.exe"
-        DetailPrint "尝停止核心服务..."
+        DetailPrint "停止核心服务..."
         nsExec::ExecToStack '"$INSTDIR\BS2PRO-CoreService.exe" stop'
         Pop $0
         Pop $1
