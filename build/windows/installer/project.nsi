@@ -6,6 +6,7 @@
 !include "MUI.nsh"
 !include "FileFunc.nsh"
 !include "DotNetChecker.nsh"
+!include "LogicLib.nsh"
 
 VIProductVersion "1.0.0.0"
 VIFileVersion    "1.0.0.0"
@@ -21,7 +22,6 @@ ManifestDPIAware true
 
 !define MUI_ICON "..\icon.ico"
 !define MUI_UNICON "..\icon.ico"
-!define MUI_FINISHPAGE_NOAUTOCLOSE 
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "启动BS2PRO控制台"
 !define MUI_FINISHPAGE_RUN_FUNCTION "LaunchAsNormalUser"
@@ -40,17 +40,7 @@ Name "${INFO_PRODUCTNAME}"
 OutFile "..\..\bin\${INFO_PROJECTNAME}-${ARCH}-installer.exe" 
 InstallDir "$PROGRAMFILES64\${INFO_PRODUCTNAME}" 
 ShowInstDetails show 
-
-Function .onInit
-   !insertmacro wails.checkArchitecture
-   !insertmacro CheckNetFramework 472
-   Pop $0
-   ${If} $0 == "false"
-       MessageBox MB_OK|MB_ICONSTOP "需要 .NET Framework 4.7.2 或更高版本。$\n$\n请先安装 .NET Framework 4.7.2。"
-       Abort
-   ${EndIf}
-   Call DetectExistingInstallation
-FunctionEnd
+AutoCloseWindow false
 
 Function CleanLegacyRegistryKeys
     SetRegView 64
@@ -141,36 +131,7 @@ Function StopRunningInstances
         DetailPrint "${PRODUCT_EXECUTABLE} 进程不存在，跳过终止"
     ${EndIf}
     
-    # 检查并停止核心服务
-    DetailPrint "检查 BS2PRO-CoreService.exe 进程..."
-    nsExec::ExecToStack '"$SYSDIR\tasklist.exe" /FI "IMAGENAME eq BS2PRO-CoreService.exe"'
-    Pop $0
-    Pop $1
-    ${If} $0 == 0
-        # 进程存在，尝试终止
-        DetailPrint "正在停止 BS2PRO-CoreService.exe..."
-        nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO-CoreService.exe" /T'
-        Pop $0
-        Pop $1
-        ${If} $0 == 0
-            Sleep 300
-        ${EndIf}
-    ${Else}
-        DetailPrint "BS2PRO-CoreService.exe 进程不存在，跳过终止"
-    ${EndIf}
-    
-    # 清理计划任务（如果存在）
-    ${If} ${FileExists} "$INSTDIR\${PRODUCT_EXECUTABLE}"
-        DetailPrint "清理计划任务..."
-        nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Controller" /f'
-        Pop $0
-        Pop $1
-        nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Core" /f'
-        Pop $0
-        Pop $1
-    ${EndIf}
-    
-    DetailPrint "进程停止完成"
+    DetailPrint "GUI进程停止完成"
 FunctionEnd
 
 Function un.StopRunningInstances
@@ -194,36 +155,21 @@ Function un.StopRunningInstances
         DetailPrint "${PRODUCT_EXECUTABLE} 进程不存在，跳过终止"
     ${EndIf}
     
-    # 检查并停止核心服务
-    DetailPrint "检查 BS2PRO-CoreService.exe 进程..."
-    nsExec::ExecToStack '"$SYSDIR\tasklist.exe" /FI "IMAGENAME eq BS2PRO-CoreService.exe"'
-    Pop $0
-    Pop $1
-    ${If} $0 == 0
-        # 进程存在，尝试终止
-        DetailPrint "正在停止 BS2PRO-CoreService.exe..."
-        nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO-CoreService.exe" /T'
-        Pop $0
-        Pop $1
-        ${If} $0 == 0
-            Sleep 300
-        ${EndIf}
-    ${Else}
-        DetailPrint "BS2PRO-CoreService.exe 进程不存在，跳过终止"
-    ${EndIf}
-    
-    DetailPrint "进程停止完成"
+    DetailPrint "GUI进程停止完成"
 FunctionEnd
 
+; 使用中间目录防止CopyFiles导致配置文件变成文件夹
 Function BackupUserData
     ${If} ${FileExists} "$INSTDIR\config.json"
-        CopyFiles "$INSTDIR\config.json" "$TEMP\bs2pro_config_backup.json"
+        CreateDirectory "$TEMP\BS2PRO_Backup"
+        CopyFiles "$INSTDIR\config.json" "$TEMP\BS2PRO_Backup"
     ${EndIf}
 FunctionEnd
 
 Function RestoreUserData
-    ${If} ${FileExists} "$TEMP\bs2pro_config_backup.json"
-        CopyFiles "$TEMP\bs2pro_config_backup.json" "$INSTDIR\config.json"
+    ${If} ${FileExists} "$TEMP\BS2PRO_Backup\config.json"
+        CopyFiles "$TEMP\BS2PRO_Backup\config.json" "$INSTDIR"
+        RMDir /r "$TEMP\BS2PRO_Backup"
     ${EndIf}
 FunctionEnd
 
@@ -232,17 +178,32 @@ Function LaunchAsNormalUser
 FunctionEnd
 
 Section "主程序 (必需)" SEC_MAIN
-    SectionIn RO 
+    SectionIn RO
     !insertmacro wails.setShellContext
+
+    ${If} ${FileExists} "$INSTDIR\BS2PRO-CoreService.exe"
+        DetailPrint "正在停止核心服务..."
+        nsExec::ExecToStack '"$INSTDIR\BS2PRO-CoreService.exe" stop'
+        Sleep 1000
+        nsExec::ExecToStack '"$SYSDIR\sc.exe" stop "BS2PRO_CoreService"'
+        Sleep 1000
+        
+        DetailPrint "正在卸载核心服务..."
+        nsExec::ExecToStack '"$INSTDIR\BS2PRO-CoreService.exe" uninstall'
+        nsExec::ExecToStack '"$SYSDIR\sc.exe" delete "BS2PRO_CoreService"'
+        Sleep 1000
+        
+        nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO-CoreService.exe" /T'
+        Sleep 500
+    ${EndIf}
 
     ${If} ${FileExists} "$INSTDIR\${PRODUCT_EXECUTABLE}"
         Call BackupUserData
         Call StopRunningInstances
         Delete "$INSTDIR\${PRODUCT_EXECUTABLE}"
         Delete "$INSTDIR\BS2PRO-CoreService.exe"
-        Delete "$INSTDIR\logs\*.log" 
+        Delete "$INSTDIR\logs\*.log"
     ${Else}
-        Call StopRunningInstances
         Delete "$INSTDIR\logs\*.*"
     ${EndIf}
     
@@ -250,65 +211,117 @@ Section "主程序 (必需)" SEC_MAIN
     SetOutPath $INSTDIR
     !insertmacro wails.files
     
-    DetailPrint "正在安装核心服务..."
+    DetailPrint "正在释放核心服务..."
     File "..\..\bin\BS2PRO-CoreService.exe"
     
-    nsExec::ExecToStack '"$INSTDIR\BS2PRO-CoreService.exe" stop'
-    Pop $0
-    Pop $1
-    nsExec::ExecToStack '"$INSTDIR\BS2PRO-CoreService.exe" uninstall'
-    Pop $0
-    Pop $1
+    DetailPrint "正在注册核心服务..."
     nsExec::ExecToStack '"$INSTDIR\BS2PRO-CoreService.exe" install'
     Pop $0
-    Pop $1
+    
+    DetailPrint "正在启动核心服务..."
     nsExec::ExecToStack '"$INSTDIR\BS2PRO-CoreService.exe" start'
     Pop $0
-    Pop $1
+    ${If} $0 == 0
+        DetailPrint "核心服务启动成功"
+    ${Else}
+        DetailPrint "核心服务启动失败，错误代码: $0"
+    ${EndIf}
     
     SetOutPath $INSTDIR
     Call RestoreUserData
-
-    CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
-    CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 
     !insertmacro wails.associateFiles
     !insertmacro wails.associateCustomProtocols
     !insertmacro wails.writeUninstaller
     
-    ${If} ${FileExists} "$TEMP\bs2pro_config_backup.json"
-        Delete "$TEMP\bs2pro_config_backup.json"
+    ${If} ${FileExists} "$TEMP\BS2PRO_Backup"
+        RMDir /r "$TEMP\BS2PRO_Backup"
     ${EndIf}
 SectionEnd
 
-Section /o "控制台自启动(建议关闭)" SEC_AUTOSTART
+Section /o "添加快捷方式" SEC_SHORTCUTS
+    DetailPrint "正在创建快捷方式..."
+    CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+    CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+SectionEnd
+
+Section /o "控制台自启动" SEC_AUTOSTART
     DetailPrint "正在配置GUI开机自启..."
-    nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /delete /tn "BS2PRO-Controller" /f'
-    Pop $0
-    Pop $1
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "BS2PRO-Controller" '"$INSTDIR\${PRODUCT_EXECUTABLE}" --autostart'
 SectionEnd
 
+Function .onInit
+   !insertmacro wails.checkArchitecture
+   !insertmacro CheckNetFramework 472
+   Pop $0
+   ${If} $0 == "false"
+       MessageBox MB_OK|MB_ICONSTOP "需要 .NET Framework 4.7.2 或更高版本。$\n$\n请先安装 .NET Framework 4.7.2。"
+       Abort
+   ${EndIf}
+   Call DetectExistingInstallation
+   
+   # 设置"添加快捷方式"组件默认选中
+   SectionSetFlags ${SEC_SHORTCUTS} 1
+   SectionSetFlags ${SEC_AUTOSTART} 1
+FunctionEnd
+
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
     !insertmacro MUI_DESCRIPTION_TEXT ${SEC_MAIN} "BS2PRO 控制器主程序和后台核心守护服务。"
-    !insertmacro MUI_DESCRIPTION_TEXT ${SEC_AUTOSTART} "（默认关闭）登录桌面时静默启动控制台。核心服务已随系统自启，控制台无需自启。"
+    !insertmacro MUI_DESCRIPTION_TEXT ${SEC_SHORTCUTS} "（可选）在开始菜单和桌面创建快捷方式。"
+    !insertmacro MUI_DESCRIPTION_TEXT ${SEC_AUTOSTART} "（可选）登录桌面时静默启动控制台。核心服务已随系统自启，控制台无需自启。"
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "uninstall"
     !insertmacro wails.setShellContext
 
-    Call un.StopRunningInstances
+    # 只在程序或服务可能存在时才尝试停止
+    ${If} ${FileExists} "$INSTDIR\${PRODUCT_EXECUTABLE}"
+        Call un.StopRunningInstances
+    ${EndIf}
     
     DetailPrint "正在停止并移除核心服务..."
-    nsExec::ExecToStack '"$SYSDIR\sc.exe" stop "BS2PRO_CoreService"'
+    
+    # 首先尝试使用服务停止命令
+    ${If} ${FileExists} "$INSTDIR\BS2PRO-CoreService.exe"
+        DetailPrint "尝停止核心服务..."
+        nsExec::ExecToStack '"$INSTDIR\BS2PRO-CoreService.exe" stop'
+        Pop $0
+        Pop $1
+        ${If} $0 == 0
+            DetailPrint "服务停止成功，等待1秒..."
+            Sleep 1000
+        ${Else}
+            DetailPrint "服务停止失败，回退到sc.exe停止..."
+        ${EndIf}
+    ${EndIf}
+    
+    # 检查服务是否存在
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" query "BS2PRO_CoreService"'
     Pop $0
     Pop $1
     ${If} $0 == 0
-        Sleep 500
+        # 服务存在，尝试停止
+        DetailPrint "使用sc.exe停止服务..."
+        nsExec::ExecToStack '"$SYSDIR\sc.exe" stop "BS2PRO_CoreService"'
+        Pop $0
+        Pop $1
+        ${If} $0 == 0
+            DetailPrint "服务停止成功，等待500ms..."
+            Sleep 500
+        ${EndIf}
+        
+        DetailPrint "删除服务..."
+        nsExec::ExecToStack '"$SYSDIR\sc.exe" delete "BS2PRO_CoreService"'
+        Pop $0
+        Pop $1
+        ${If} $0 == 0
+            DetailPrint "服务删除成功"
+        ${Else}
+            DetailPrint "服务删除失败，错误代码: $0"
+        ${EndIf}
+    ${Else}
+        DetailPrint "BS2PRO_CoreService 服务不存在，跳过停止和删除"
     ${EndIf}
-    nsExec::ExecToStack '"$SYSDIR\sc.exe" delete "BS2PRO_CoreService"'
-    Pop $0
-    Pop $1
     
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "BS2PRO-Controller"
     DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "BS2PRO-Controller"
@@ -316,9 +329,7 @@ Section "uninstall"
     DetailPrint "正在移除控制台应用缓存数据..."
     SetShellVarContext current
     RMDir /r /REBOOTOK "$APPDATA\BS2PRO-Controller"
-    RMDir /r /REBOOTOK "$LOCALAPPDATA\BS2PRO-Controller"
     SetShellVarContext all
-    RMDir /r /REBOOTOK "$APPDATA\BS2PRO-Controller"
 
     DetailPrint "正在删除安装目录..."
     RMDir /r "$INSTDIR\logs"
@@ -331,9 +342,8 @@ Section "uninstall"
     !insertmacro wails.unassociateCustomProtocols
     !insertmacro wails.deleteUninstaller
     
-    MessageBox MB_YESNO|MB_ICONQUESTION "是否删除所有配置文件？" IDNO skip_uninst_config
-    SetShellVarContext current
-    RMDir /r /REBOOTOK "$PROFILE\.bs2pro-controller"
+    MessageBox MB_YESNO|MB_ICONQUESTION "是否删除所有配置文件？$\n$\n如果您计划重新安装并希望保留设置，请选择“否”。" IDNO skip_uninst_config
+    RMDir /r /REBOOTOK "$APPDATA\BS2PRO-Controller"
     skip_uninst_config:
     DetailPrint "卸载完成"
 SectionEnd

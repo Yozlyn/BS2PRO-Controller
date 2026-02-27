@@ -31,15 +31,25 @@ func getWebView2DataPath() string {
 func main() {
 	app := NewApp(iconData)
 
+	// 检测是否为开机自启动模式
+	isAutoStart := false
+	for _, arg := range os.Args[1:] {
+		if arg == "--autostart" || arg == "/autostart" || arg == "-autostart" {
+			isAutoStart = true
+			break
+		}
+	}
+
 	// 启动 Wails 框架
 	err := wails.Run(&options.App{
 		Title:     "BS2PRO-控制台",
 		Width:     1024,
-		Height:    680,
+		Height:    720,
 		MinWidth:  850,
 		MinHeight: 600,
 
-		StartHidden: false,
+		// 开机自启时直接藏入托盘，不弹出窗口
+		StartHidden: isAutoStart,
 
 		// 应用程序单实例锁
 		SingleInstanceLock: &options.SingleInstanceLock{

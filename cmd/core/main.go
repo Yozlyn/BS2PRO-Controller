@@ -28,6 +28,12 @@ func (p *program) Start(s service.Service) error {
 
 	// 在后台协程中启动核心，防止阻塞系统服务管理器
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				capturePanic(p.app, "program.Start.goroutine", r)
+				os.Exit(1)
+			}
+		}()
 		if err := p.app.Start(); err != nil {
 			svcLogger, loggerErr := s.Logger(nil)
 			if loggerErr == nil {
@@ -48,6 +54,27 @@ func (p *program) Stop(s service.Service) error {
 }
 
 func main() {
+	var app *CoreApp
+
+	defer func() {
+		if r := recover(); r != nil {
+			capturePanic(app, "main", r)
+
+			if app != nil {
+				func() {
+					defer func() {
+						if stopPanic := recover(); stopPanic != nil {
+							capturePanic(app, "main.Stop", stopPanic)
+						}
+					}()
+					app.Stop()
+				}()
+			}
+
+			os.Exit(1)
+		}
+	}()
+
 	// 配置 Windows 服务属性
 	svcConfig := &service.Config{
 		Name:        "BS2PRO_CoreService",

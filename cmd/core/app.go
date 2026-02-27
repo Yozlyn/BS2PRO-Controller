@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/TIANLI0/BS2PRO-Controller/internal/asus"
@@ -15,6 +17,7 @@ import (
 	"github.com/TIANLI0/BS2PRO-Controller/internal/device"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/ipc"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/logger"
+	"github.com/TIANLI0/BS2PRO-Controller/internal/rgb"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/temperature"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/version"
@@ -45,22 +48,33 @@ type CoreApp struct {
 
 	mutex          sync.RWMutex
 	stopMonitoring chan bool
+
+	// 记录当前已经下发的 RGB 智能温度档位
+	lastSmartModeLevel byte
 }
 
 func NewCoreApp(debugMode bool) *CoreApp {
 	installDir := config.GetInstallDir()
-	customLogger, err := logger.NewCustomLogger(debugMode, installDir)
+	// 日志统一写入 ProgramData\BS2PRO-Controller\logs，与 GUI 进程保持一致
+	logBaseDir := filepath.Dir(config.GetLogDir()) // ProgramData\BS2PRO-Controller
+	customLogger, err := logger.NewCustomLogger(debugMode, logBaseDir)
 	if err != nil {
-		// 如果初始化失败，无法记录，直接退出
-		panic(fmt.Sprintf("初始化日志系统失败: %v", err))
+		// 降级：尝试系统临时目录，避免panic导致崩溃报告无法写入
+		fallbackDir := os.TempDir()
+		customLogger, err = logger.NewCustomLogger(debugMode, fallbackDir)
+		if err != nil {
+			// 最坏情况：创建一个只写stderr的logger，保证后续代码不会nil panic
+			customLogger, _ = logger.NewCustomLogger(debugMode, ".")
+		}
+		if customLogger != nil {
+			customLogger.Warn("日志目录初始化失败，已降级到临时目录: %s", fallbackDir)
+		}
 	} else {
 		customLogger.Info("核心服务启动")
 		customLogger.Info("安装目录: %s", installDir)
 		customLogger.CleanOldLogs()
 	}
 
-	// 创建管理器
-	// 初始化 ASUS ACPI 客户端
 	asusClient, err := asus.NewClient()
 	if err != nil {
 		customLogger.Warn("ASUS ACPI 客户端初始化失败: %v", err)
@@ -87,6 +101,7 @@ func NewCoreApp(debugMode bool) *CoreApp {
 		guiLastResponse:    time.Now().Unix(),
 		cleanupChan:        make(chan bool, 1),
 		guiMonitorEnabled:  true,
+		lastSmartModeLevel: 0,
 	}
 	return app
 }
@@ -117,18 +132,16 @@ func (a *CoreApp) Start() error {
 	}
 
 	if cfg.GuiMonitoring {
-		go a.startHealthMonitoring()
+		a.logInfo("启动健康监控")
+		a.safeGo("startHealthMonitoring", func() {
+			a.startHealthMonitoring()
+		})
 	}
 
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				a.logError("延迟连接设备时发生Panic: %v", r)
-			}
-		}()
+	a.safeGo("delayedConnectDevice", func() {
 		time.Sleep(1 * time.Second)
 		a.ConnectDevice()
-	}()
+	})
 
 	return nil
 }
@@ -162,6 +175,7 @@ func (a *CoreApp) onQuitRequest() {
 	}
 
 	go func() {
+		defer func() { recover() }()
 		time.Sleep(1 * time.Second)
 		a.Stop() // 释放硬件句柄
 		a.logInfo("核心服务进程自我终止")
@@ -341,6 +355,9 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 	case ipc.ReqRestartService:
 		success := a.RestartService()
 		return a.successResponse(success)
+	case ipc.ReqStopService:
+		success := a.StopService()
+		return a.successResponse(success)
 	case ipc.ReqUnsubscribeEvents:
 		return a.successResponse(true)
 	default:
@@ -368,6 +385,8 @@ func (a *CoreApp) dataResponse(data any) ipc.Response {
 func (a *CoreApp) onFanDataUpdate(fanData *types.FanData) {
 	a.mutex.Lock()
 	cfg := a.configManager.Get()
+	var shouldBroadcastConfig bool
+	var broadcastCfg types.AppConfig
 	if fanData.WorkMode == "挡位工作模式" && cfg.AutoControl && a.lastDeviceMode == "自动模式(实时转速)" && !a.userSetAutoControl && !cfg.IgnoreDeviceOnReconnect {
 		a.logInfo("检测到设备从自动模式切换到挡位工作模式，自动关闭智能变频")
 		cfg.AutoControl = false
@@ -379,9 +398,8 @@ func (a *CoreApp) onFanDataUpdate(fanData *types.FanData) {
 		}
 		a.configManager.Set(cfg)
 		a.configManager.Save()
-		if a.ipcServer != nil {
-			a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-		}
+		shouldBroadcastConfig = true
+		broadcastCfg = cfg
 	} else if fanData.WorkMode == "挡位工作模式" && cfg.AutoControl && a.lastDeviceMode == "自动模式(实时转速)" && !a.userSetAutoControl && cfg.IgnoreDeviceOnReconnect {
 		a.logInfo("检测到设备模式变化，但已开启断连保持配置模式，保持APP配置不变")
 	}
@@ -392,6 +410,10 @@ func (a *CoreApp) onFanDataUpdate(fanData *types.FanData) {
 	}
 	a.mutex.Unlock()
 
+	// 在锁外进行广播，避免持锁期间阻塞
+	if shouldBroadcastConfig && a.ipcServer != nil {
+		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, broadcastCfg)
+	}
 	if a.ipcServer != nil {
 		a.ipcServer.BroadcastEvent(ipc.EventFanDataUpdate, fanData)
 	}
@@ -422,7 +444,6 @@ func (a *CoreApp) onDeviceDisconnect() {
 }
 
 func (a *CoreApp) scheduleReconnect() {
-	// 防止重连时发生意外崩溃导致整个协程死掉
 	defer func() {
 		if r := recover(); r != nil {
 			a.logError("自动重连时发生Panic: %v", r)
@@ -462,24 +483,64 @@ func (a *CoreApp) scheduleReconnect() {
 }
 
 func (a *CoreApp) reapplyConfigAfterReconnect() {
+	a.logInfo("设备重连后重新应用配置")
+	a.applyConfigOnConnect()
+	a.logInfo("重连后配置重新应用完成")
+}
+
+func (a *CoreApp) applyConfigOnConnect() {
 	cfg := a.configManager.Get()
-	if cfg.AutoControl {
-		go a.startTemperatureMonitoring()
-	} else if cfg.CustomSpeedEnabled {
-		if !a.deviceManager.SetCustomFanSpeed(cfg.CustomSpeedRPM) {
-			a.logError("重新应用自定义转速失败")
+	a.logInfo("开始应用配置到设备")
+
+	time.Sleep(200 * time.Millisecond)
+
+	if !cfg.AutoControl {
+		if cfg.ManualGear != "" && cfg.ManualLevel != "" {
+			for i := 0; i < 3; i++ {
+				if a.deviceManager.SetManualGear(cfg.ManualGear, cfg.ManualLevel) {
+					break
+				}
+				if i < 2 {
+					time.Sleep(100 * time.Millisecond)
+				}
+			}
 		}
 	}
+
+	if cfg.CustomSpeedEnabled {
+		a.deviceManager.SetCustomFanSpeed(cfg.CustomSpeedRPM)
+	}
+
 	if cfg.GearLight {
-		if !a.deviceManager.SetGearLight(true) {
-			a.logError("重新开启挡位灯失败")
-		}
+		a.deviceManager.SetGearLight(true)
 	}
+
 	if cfg.PowerOnStart {
-		if !a.deviceManager.SetPowerOnStart(true) {
-			a.logError("重新开启通电自启动失败")
-		}
+		a.deviceManager.SetPowerOnStart(true)
 	}
+
+	if cfg.SmartStartStop != "" && cfg.SmartStartStop != "off" {
+		a.deviceManager.SetSmartStartStop(cfg.SmartStartStop)
+	}
+
+	if cfg.Brightness > 0 {
+		a.deviceManager.SetBrightness(cfg.Brightness)
+	}
+
+	if cfg.RGBConfig != nil {
+		params := ipc.SetRGBModeParams{
+			Mode:       cfg.RGBConfig.Mode,
+			Colors:     make([]ipc.RGBColorParam, len(cfg.RGBConfig.Colors)),
+			Speed:      cfg.RGBConfig.Speed,
+			Brightness: cfg.RGBConfig.Brightness,
+		}
+		for i, color := range cfg.RGBConfig.Colors {
+			params.Colors[i] = ipc.RGBColorParam{R: color.R, G: color.G, B: color.B}
+		}
+		a.SetRGBMode(params)
+	}
+
+	a.logInfo("配置应用完成")
 }
 
 func (a *CoreApp) ConnectDevice() bool {
@@ -497,10 +558,8 @@ func (a *CoreApp) ConnectDevice() bool {
 			a.ipcServer.BroadcastEvent(ipc.EventDeviceConnected, deviceInfo)
 		}
 
-		cfg := a.configManager.Get()
-		if cfg.AutoControl {
-			go a.startTemperatureMonitoring()
-		}
+		go a.startTemperatureMonitoring()
+		a.applyConfigOnConnect()
 	} else if a.ipcServer != nil {
 		a.ipcServer.BroadcastEvent(ipc.EventDeviceError, "连接失败")
 	}
@@ -539,18 +598,15 @@ func (a *CoreApp) GetDeviceStatus() map[string]any {
 
 func (a *CoreApp) UpdateConfig(cfg types.AppConfig) error {
 	a.mutex.Lock()
-	defer a.mutex.Unlock()
 	oldCfg := a.configManager.Get()
-	if cfg.AutoControl && !a.monitoringTemp && a.isConnected {
-		go a.startTemperatureMonitoring()
-	} else if !cfg.AutoControl && a.monitoringTemp {
-		select {
-		case a.stopMonitoring <- true:
-		default:
-		}
-	}
+	shouldStartMonitor := !a.monitoringTemp && a.isConnected && cfg.AutoControl
 	cfg.ConfigPath = oldCfg.ConfigPath
-	return a.configManager.Update(cfg)
+	err := a.configManager.Update(cfg)
+	a.mutex.Unlock()
+	if shouldStartMonitor {
+		go a.startTemperatureMonitoring()
+	}
+	return err
 }
 
 func (a *CoreApp) SetFanCurve(curve []types.FanCurvePoint) error {
@@ -563,31 +619,45 @@ func (a *CoreApp) SetFanCurve(curve []types.FanCurvePoint) error {
 
 func (a *CoreApp) SetAutoControl(enabled bool) error {
 	a.mutex.Lock()
-	defer a.mutex.Unlock()
 	cfg := a.configManager.Get()
 	if enabled && cfg.CustomSpeedEnabled {
+		a.mutex.Unlock()
 		return fmt.Errorf("自定义转速模式下无法开启智能变频")
 	}
 	cfg.AutoControl = enabled
 	if enabled {
 		a.userSetAutoControl = true
 	}
-	if enabled && !a.monitoringTemp && a.isConnected {
-		go a.startTemperatureMonitoring()
-	} else if !enabled && a.monitoringTemp {
-		select {
-		case a.stopMonitoring <- true:
-		default:
-		}
-		if a.isConnected {
-			go func() {
-				time.Sleep(200 * time.Millisecond)
-				a.applyCurrentGearSetting()
-			}()
-		}
-	}
+	shouldStartMonitor := enabled && !a.monitoringTemp && a.isConnected
 	a.configManager.Set(cfg)
 	err := a.configManager.Save()
+	isConnected := a.isConnected
+	a.mutex.Unlock()
+
+	// 修复: 在锁外启动 goroutine，避免 startTemperatureMonitoring 锁竞态
+	if shouldStartMonitor {
+		go a.startTemperatureMonitoring()
+	}
+	if !enabled && isConnected {
+		a.safeGo("applyCurrentGearSetting", func() {
+			time.Sleep(200 * time.Millisecond)
+			a.applyCurrentGearSetting()
+		})
+	} else if enabled && isConnected {
+		// 当开启智能变频时（从手动模式切换过来），需要恢复RGB状态
+		a.safeGo("restoreCurrentRGB-autoControl", func() {
+			time.Sleep(300 * time.Millisecond) // 给硬件更多时间切换状态
+			a.restoreCurrentRGB()
+		})
+		// 确保进入自动模式，即使温度监控已经在运行
+		a.safeGo("enterAutoMode", func() {
+			time.Sleep(100 * time.Millisecond) // 等待一下再进入自动模式
+			if err := a.deviceManager.EnterAutoMode(); err != nil {
+				a.logError("进入自动模式失败: %v", err)
+			}
+		})
+	}
+
 	if a.ipcServer != nil {
 		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
 	}
@@ -600,7 +670,14 @@ func (a *CoreApp) applyCurrentGearSetting() {
 		return
 	}
 	cfg := a.configManager.Get()
-	a.deviceManager.SetManualGear(fanData.SetGear, cfg.ManualLevel)
+	success := a.deviceManager.SetManualGear(fanData.SetGear, cfg.ManualLevel)
+
+	if success && a.isConnected {
+		a.safeGo("restoreCurrentRGB-applyGear", func() {
+			time.Sleep(200 * time.Millisecond)
+			a.restoreCurrentRGB()
+		})
+	}
 }
 
 func (a *CoreApp) SetManualGear(gear, level string) bool {
@@ -608,12 +685,21 @@ func (a *CoreApp) SetManualGear(gear, level string) bool {
 	cfg.ManualGear = gear
 	cfg.ManualLevel = level
 	a.configManager.Update(cfg)
-	return a.deviceManager.SetManualGear(gear, level)
+
+	success := a.deviceManager.SetManualGear(gear, level)
+
+	// 当用户主动点击按钮切换到 手动低/中/高时，硬件必定会重置状态
+	if success && a.isConnected {
+		a.safeGo("restoreCurrentRGB-manualGear", func() {
+			time.Sleep(200 * time.Millisecond)
+			a.restoreCurrentRGB()
+		})
+	}
+	return success
 }
 
 func (a *CoreApp) SetCustomSpeed(enabled bool, rpm int) error {
 	a.mutex.Lock()
-	defer a.mutex.Unlock()
 	cfg := a.configManager.Get()
 	if enabled {
 		if cfg.AutoControl {
@@ -627,17 +713,31 @@ func (a *CoreApp) SetCustomSpeed(enabled bool, rpm int) error {
 		}
 		cfg.CustomSpeedEnabled = true
 		cfg.CustomSpeedRPM = rpm
-		if a.isConnected {
-			go a.deviceManager.SetCustomFanSpeed(rpm)
-		}
 	} else {
 		cfg.CustomSpeedEnabled = false
 	}
 	a.configManager.Set(cfg)
 	err := a.configManager.Save()
+	isConnected := a.isConnected
+	a.mutex.Unlock()
+
+	if enabled && isConnected {
+		a.safeGo("setCustomFanSpeed", func() {
+			a.deviceManager.SetCustomFanSpeed(rpm)
+		})
+	}
+
 	if a.ipcServer != nil {
 		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
 	}
+
+	if isConnected {
+		a.safeGo("restoreCurrentRGB-customSpeed", func() {
+			time.Sleep(200 * time.Millisecond)
+			a.restoreCurrentRGB()
+		})
+	}
+
 	return err
 }
 
@@ -697,61 +797,83 @@ func (a *CoreApp) SetRGBMode(params ipc.SetRGBModeParams) bool {
 	if !a.isConnected {
 		return false
 	}
+
 	var speed byte
 	switch params.Speed {
 	case "fast":
-		speed = device.RGBSpeedFast
+		speed = rgb.SpeedFast
 	case "slow":
-		speed = device.RGBSpeedSlow
+		speed = rgb.SpeedSlow
 	default:
-		speed = device.RGBSpeedMedium
+		speed = rgb.SpeedMedium
 	}
 	brightness := byte(params.Brightness)
-	toRGBColor := func(c ipc.RGBColorParam) device.RGBColor {
-		return device.RGBColor{R: byte(c.R), G: byte(c.G), B: byte(c.B)}
+	toRGBColor := func(c ipc.RGBColorParam) rgb.Color {
+		return rgb.Color{R: byte(c.R), G: byte(c.G), B: byte(c.B)}
 	}
 
 	var success bool
+
+	// 从deviceManager获取独立的rgbController进行操作
+	rgbCtrl := a.deviceManager.RGB()
+
 	switch params.Mode {
 	case "smart":
-		success = a.deviceManager.SetRGBSmartTemp()
+		a.mutex.Lock()
+		a.lastSmartModeLevel = 0
+		curTemp := a.currentTemp.MaxTemp
+		a.mutex.Unlock()
+
+		var level byte = 1
+		if curTemp > 0 {
+			if curTemp < 60 {
+				level = 1
+			} else if curTemp < 85 {
+				level = 2
+			} else if curTemp < 90 {
+				level = 3
+			} else {
+				level = 4
+			}
+		}
+
+		success = rgbCtrl.SetSmartTempLevel(level)
+		if success {
+			a.mutex.Lock()
+			a.lastSmartModeLevel = level
+			a.mutex.Unlock()
+		}
 	case "off":
-		success = a.deviceManager.SetRGBOff()
+		success = rgbCtrl.SetOff()
 	case "static_single":
-		color := device.RGBColor{R: 255, G: 255, B: 255}
+		color := rgb.Color{R: 255, G: 255, B: 255}
 		if len(params.Colors) > 0 {
 			color = toRGBColor(params.Colors[0])
 		}
-		success = a.deviceManager.SetRGBStaticSingle(color, brightness)
+		success = rgbCtrl.SetStaticSingle(color, brightness)
 	case "static_multi":
-		var colors [3]device.RGBColor
-		colors[0] = device.RGBColor{R: 255, G: 0, B: 0}
-		colors[1] = device.RGBColor{R: 0, G: 255, B: 0}
-		colors[2] = device.RGBColor{R: 0, G: 0, B: 255}
+		var colors [3]rgb.Color
+		colors[0] = rgb.Color{R: 255, G: 0, B: 0}
+		colors[1] = rgb.Color{R: 0, G: 255, B: 0}
+		colors[2] = rgb.Color{R: 0, G: 0, B: 255}
 		for i := 0; i < 3 && i < len(params.Colors); i++ {
 			colors[i] = toRGBColor(params.Colors[i])
 		}
-		success = a.deviceManager.SetRGBStaticMulti(colors, brightness)
+		success = rgbCtrl.SetStaticMulti(colors, brightness)
 	case "rotation":
-		colors := make([]device.RGBColor, 0)
+		colors := make([]rgb.Color, 0)
 		for _, c := range params.Colors {
 			colors = append(colors, toRGBColor(c))
 		}
-		if len(colors) == 0 {
-			colors = []device.RGBColor{{R: 255, G: 0, B: 0}, {R: 0, G: 255, B: 0}, {R: 0, G: 0, B: 255}}
-		}
-		success = a.deviceManager.SetRGBRotation(colors, speed, brightness)
+		success = rgbCtrl.SetRotation(colors, speed, brightness)
 	case "breathing":
-		colors := make([]device.RGBColor, 0)
+		colors := make([]rgb.Color, 0)
 		for _, c := range params.Colors {
 			colors = append(colors, toRGBColor(c))
 		}
-		if len(colors) == 0 {
-			colors = []device.RGBColor{{R: 0, G: 255, B: 0}}
-		}
-		success = a.deviceManager.SetRGBBreathing(colors, speed, brightness)
+		success = rgbCtrl.SetBreathing(colors, speed, brightness)
 	case "flowing":
-		success = a.deviceManager.SetRGBFlowing(speed, brightness)
+		success = rgbCtrl.SetFlowing(speed, brightness)
 	default:
 		return false
 	}
@@ -778,18 +900,23 @@ func (a *CoreApp) SetRGBMode(params ipc.SetRGBModeParams) bool {
 }
 
 func (a *CoreApp) GetDebugInfo() map[string]any {
+	a.mutex.RLock()
+	debugMode := a.debugMode
+	isConnected := a.isConnected
+	monitoringTemp := a.monitoringTemp
+	a.mutex.RUnlock()
+
 	return map[string]any{
-		"debugMode":       a.debugMode,
-		"isConnected":     a.isConnected,
+		"debugMode":       debugMode,
+		"isConnected":     isConnected,
 		"guiLastResponse": time.Unix(atomic.LoadInt64(&a.guiLastResponse), 0).Format("2006-01-02 15:04:05"),
-		"monitoringTemp":  a.monitoringTemp,
+		"monitoringTemp":  monitoringTemp,
 		"hasGUIClients":   a.ipcServer != nil && a.ipcServer.HasClients(),
 	}
 }
 
 func (a *CoreApp) SetDebugMode(enabled bool) error {
 	a.mutex.Lock()
-	defer a.mutex.Unlock()
 	cfg := a.configManager.Get()
 	cfg.DebugMode = enabled
 	a.debugMode = enabled
@@ -797,7 +924,9 @@ func (a *CoreApp) SetDebugMode(enabled bool) error {
 		a.logger.SetDebugMode(enabled)
 	}
 	a.configManager.Set(cfg)
-	if err := a.configManager.Save(); err != nil {
+	err := a.configManager.Save()
+	a.mutex.Unlock()
+	if err != nil {
 		return err
 	}
 	if a.ipcServer != nil {
@@ -810,12 +939,20 @@ func (a *CoreApp) startTemperatureMonitoring() {
 	a.mutex.Lock()
 	if a.monitoringTemp {
 		a.mutex.Unlock()
+		a.logDebug("温度监控已在运行中，跳过重复启动")
 		return
 	}
 	a.monitoringTemp = true
+	isConnected := a.isConnected
 	a.mutex.Unlock()
 
-	if a.isConnected {
+	// 清空 stopMonitoring 中可能残留的信号，
+	// 否则新启动的监控goroutine会在第一个select就读到旧信号立即退出
+	for len(a.stopMonitoring) > 0 {
+		<-a.stopMonitoring
+	}
+
+	if isConnected {
 		if err := a.deviceManager.EnterAutoMode(); err != nil {
 			a.logError("进入自动模式失败: %v", err)
 		}
@@ -824,7 +961,6 @@ func (a *CoreApp) startTemperatureMonitoring() {
 
 	cfg := a.configManager.Get()
 
-	// 防止更新频率设置过低导致 CPU 被打满或底层驱动卡死
 	intervalSec := cfg.TempUpdateRate
 	if intervalSec < 1 {
 		intervalSec = 1
@@ -835,7 +971,7 @@ func (a *CoreApp) startTemperatureMonitoring() {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				a.logError("致命错误：温度监控协程崩溃: %v", r)
+				capturePanic(a, "startTemperatureMonitoring", r)
 			}
 			ticker.Stop()
 			a.mutex.Lock()
@@ -845,6 +981,7 @@ func (a *CoreApp) startTemperatureMonitoring() {
 
 		sampleCount := max(cfg.TempSampleCount, 1)
 		tempSamples := make([]int, 0, sampleCount)
+		currentIntervalSec := intervalSec
 
 		for {
 			select {
@@ -859,15 +996,54 @@ func (a *CoreApp) startTemperatureMonitoring() {
 				a.mutex.Unlock()
 
 				if a.ipcServer != nil {
-					a.ipcServer.BroadcastEvent(ipc.EventTemperatureUpdate, temp)
+					go func(t types.TemperatureData) {
+						defer func() { recover() }()
+						a.ipcServer.BroadcastEvent(ipc.EventTemperatureUpdate, t)
+					}(temp)
 				}
 
 				cfg := a.configManager.Get()
+
+				// 分离式 RGB 智能温控判定
+				if cfg.RGBConfig != nil && cfg.RGBConfig.Mode == "smart" && temp.MaxTemp > 0 {
+					var level byte = 1
+					if temp.MaxTemp < 60 {
+						level = 1
+					} else if temp.MaxTemp < 85 {
+						level = 2
+					} else if temp.MaxTemp < 90 {
+						level = 3
+					} else {
+						level = 4
+					}
+
+					a.mutex.Lock()
+					changed := a.lastSmartModeLevel != level
+					if changed {
+						a.lastSmartModeLevel = level
+					}
+					a.mutex.Unlock()
+
+					if changed {
+						a.deviceManager.RGB().AsyncSetSmartTempLevel(level)
+					}
+				}
+
+				// 原有的风扇速度控制
 				if cfg.AutoControl && temp.MaxTemp > 0 {
 					newSampleCount := max(cfg.TempSampleCount, 1)
 					if newSampleCount != sampleCount {
 						sampleCount = newSampleCount
 						tempSamples = make([]int, 0, sampleCount)
+					}
+					// 动态响应采样间隔配置变更
+					newIntervalSec := cfg.TempUpdateRate
+					if newIntervalSec < 1 {
+						newIntervalSec = 1
+					}
+					if newIntervalSec != currentIntervalSec {
+						currentIntervalSec = newIntervalSec
+						ticker.Reset(time.Duration(currentIntervalSec) * time.Second)
 					}
 					tempSamples = append(tempSamples, temp.MaxTemp)
 					if len(tempSamples) > sampleCount {
@@ -890,34 +1066,26 @@ func (a *CoreApp) startTemperatureMonitoring() {
 }
 
 func (a *CoreApp) startHealthMonitoring() {
-	a.healthCheckTicker = time.NewTicker(30 * time.Second)
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				a.logError("健康监控协程崩溃: %v", r)
-			}
-			a.healthCheckTicker.Stop()
-		}()
-		for {
-			select {
-			case <-a.healthCheckTicker.C:
-				a.performHealthCheck()
-			case <-a.cleanupChan:
-				return
-			}
-		}
-	}()
 	if a.logger != nil {
 		go a.logger.CleanOldLogs()
 	}
+
+	// 设备健康检查使用指数退避策略
+	baseInterval := 5 * time.Second // 基础探测频率：5秒
+	maxInterval := 60 * time.Second // 最大探测频率：60秒
+	currentInterval := baseInterval
+
+	for {
+		select {
+		case <-time.After(currentInterval):
+			a.checkDeviceHealth(&currentInterval, baseInterval, maxInterval)
+		case <-a.cleanupChan:
+			return
+		}
+	}
 }
 
-func (a *CoreApp) performHealthCheck() {
-	a.checkDeviceHealth()
-	a.logDebug("健康检查完成 - 设备连接:%v", a.isConnected)
-}
-
-func (a *CoreApp) checkDeviceHealth() {
+func (a *CoreApp) checkDeviceHealth(currentInterval *time.Duration, baseInterval, maxInterval time.Duration) {
 	a.mutex.RLock()
 	connected := a.isConnected
 	userDid := a.userDisconnected
@@ -927,27 +1095,43 @@ func (a *CoreApp) checkDeviceHealth() {
 		if userDid {
 			return
 		}
-		a.logInfo("健康检查: 设备未连接，尝试重新连接")
-		go func() {
-			if a.ConnectDevice() {
-				a.logInfo("健康检查: 设备重连成功")
+		a.logInfo("设备Watchdog: 设备未连接，尝试重新连接")
+
+		// 尝试重连设备
+		if a.ConnectDevice() {
+			a.logInfo("设备Watchdog: 设备重连成功")
+			*currentInterval = baseInterval // 重连成功，重置为基础心跳频率
+		} else {
+			a.logDebug("设备Watchdog: 重连失败")
+
+			// 指数退避，拉长下次探测的时间
+			*currentInterval *= 2
+			if *currentInterval > maxInterval {
+				*currentInterval = maxInterval
 			}
-		}()
+			a.logDebug("设备Watchdog: 下次探测将在 %v 后进行", *currentInterval)
+		}
 	} else {
+		// 连接状态下，检查设备是否真的在线
 		if !a.deviceManager.IsConnected() {
-			a.logError("健康检查: 检测到设备状态不一致，触发断开回调")
+			a.logError("设备Watchdog: 检测到设备状态不一致，触发断开回调")
 			a.onDeviceDisconnect()
+			*currentInterval = baseInterval // 准备立即开始快速重连
+		} else {
+			// 设备在线，保持正常的心跳频率
+			*currentInterval = baseInterval
+			a.logDebug("设备Watchdog: 设备连接正常")
 		}
 	}
 }
 
 func (a *CoreApp) cleanup() {
-	if a.healthCheckTicker != nil {
-		a.healthCheckTicker.Stop()
-	}
 	select {
 	case a.cleanupChan <- true:
 	default:
+	}
+	if a.healthCheckTicker != nil {
+		a.healthCheckTicker.Stop()
 	}
 	if a.logger != nil {
 		a.logger.Close()
@@ -972,25 +1156,81 @@ func (a *CoreApp) logDebug(format string, v ...any) {
 	}
 }
 
-// RestartService 重启核心服务（异步执行）
+// restoreCurrentRGB 恢复当前配置的RGB设置
+func (a *CoreApp) restoreCurrentRGB() {
+	if !a.isConnected {
+		return
+	}
+	cfg := a.configManager.Get()
+	if cfg.RGBConfig != nil {
+		params := ipc.SetRGBModeParams{
+			Mode:       cfg.RGBConfig.Mode,
+			Colors:     make([]ipc.RGBColorParam, len(cfg.RGBConfig.Colors)),
+			Speed:      cfg.RGBConfig.Speed,
+			Brightness: cfg.RGBConfig.Brightness,
+		}
+		for i, color := range cfg.RGBConfig.Colors {
+			params.Colors[i] = ipc.RGBColorParam{R: color.R, G: color.G, B: color.B}
+		}
+		a.SetRGBMode(params)
+	}
+}
+
 func (a *CoreApp) RestartService() bool {
-	a.logInfo("收到重启服务请求，准备通过服务管理器重启...")
+	a.logInfo("收到重启服务请求，通过 powershell Restart-Service 触发完整重启")
 	const serviceName = "BS2PRO_CoreService"
 
 	go func() {
-		time.Sleep(500 * time.Millisecond)
-		a.logInfo("执行服务重启: Restart-Service -Name %s -Force", serviceName)
-		a.Stop()
-
 		psCommand := fmt.Sprintf(`Restart-Service -Name "%s" -Force`, serviceName)
-
-		cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-Command", psCommand)
-
+		cmd := exec.Command("powershell",
+			"-NonInteractive",
+			"-Command", psCommand,
+		)
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			HideWindow:    true,
+			CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+		}
 		if err := cmd.Start(); err != nil {
-			a.logError("触发服务重启脚本失败: %v", err)
+			a.logError("启动 powershell Restart-Service 失败: %v", err)
 			return
 		}
 	}()
 
 	return true
+}
+
+func (a *CoreApp) StopService() bool {
+	a.logInfo("收到停止服务请求，通过 powershell Stop-Service 触发停止")
+	const serviceName = "BS2PRO_CoreService"
+
+	go func() {
+		psCommand := fmt.Sprintf(`Stop-Service -Name "%s" -Force`, serviceName)
+		cmd := exec.Command("powershell",
+			"-NonInteractive",
+			"-Command", psCommand,
+		)
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			HideWindow:    true,
+			CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+		}
+		if err := cmd.Start(); err != nil {
+			a.logError("启动 powershell Stop-Service 失败: %v", err)
+			return
+		}
+	}()
+
+	return true
+}
+
+// safeGo 安全地启动一个goroutine，自动捕获并报告panic
+func (a *CoreApp) safeGo(name string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				capturePanic(a, "goroutine:"+name, r)
+			}
+		}()
+
+		fn()
+	}()
 }
