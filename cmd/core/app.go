@@ -395,8 +395,9 @@ func (a *CoreApp) onFanDataUpdate(fanData *types.FanData) {
 			default:
 			}
 		}
-		a.configManager.Set(cfg)
-		a.configManager.Save()
+		if err := a.configManager.Update(cfg); err != nil {
+			a.logError("保存配置失败: %v", err)
+		}
 		shouldBroadcastConfig = true
 		broadcastCfg = cfg
 	} else if fanData.WorkMode == "挡位工作模式" && cfg.AutoControl && a.lastDeviceMode == "自动模式(实时转速)" && !a.userSetAutoControl && cfg.IgnoreDeviceOnReconnect {
@@ -628,9 +629,8 @@ func (a *CoreApp) SetAutoControl(enabled bool) error {
 		a.userSetAutoControl = true
 	}
 	shouldStartMonitor := enabled && !a.monitoringTemp && a.isConnected
-	a.configManager.Set(cfg)
-	err := a.configManager.Save()
 	isConnected := a.isConnected
+	err := a.configManager.Update(cfg)
 	a.mutex.Unlock()
 
 	// 修复: 在锁外启动 goroutine，避免 startTemperatureMonitoring 锁竞态
@@ -715,9 +715,8 @@ func (a *CoreApp) SetCustomSpeed(enabled bool, rpm int) error {
 	} else {
 		cfg.CustomSpeedEnabled = false
 	}
-	a.configManager.Set(cfg)
-	err := a.configManager.Save()
 	isConnected := a.isConnected
+	err := a.configManager.Update(cfg)
 	a.mutex.Unlock()
 
 	if enabled && isConnected {
@@ -889,8 +888,9 @@ func (a *CoreApp) SetRGBMode(params ipc.SetRGBModeParams) bool {
 			Speed:      params.Speed,
 			Brightness: params.Brightness,
 		}
-		a.configManager.Update(cfg)
-		_ = a.configManager.Save()
+		if err := a.configManager.Update(cfg); err != nil {
+			a.logError("保存RGB配置失败: %v", err)
+		}
 		if a.ipcServer != nil {
 			a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
 		}
@@ -922,8 +922,7 @@ func (a *CoreApp) SetDebugMode(enabled bool) error {
 	if a.logger != nil {
 		a.logger.SetDebugMode(enabled)
 	}
-	a.configManager.Set(cfg)
-	err := a.configManager.Save()
+	err := a.configManager.Update(cfg)
 	a.mutex.Unlock()
 	if err != nil {
 		return err
@@ -982,6 +981,10 @@ func (a *CoreApp) startTemperatureMonitoring() {
 		tempSamples := make([]int, 0, sampleCount)
 		currentIntervalSec := intervalSec
 
+		// 温度读取失败重试计数器
+		tempReadFailCount := 0
+		const maxTempReadFailures = 3
+
 		for {
 			select {
 			case <-a.stopMonitoring:
@@ -989,6 +992,21 @@ func (a *CoreApp) startTemperatureMonitoring() {
 
 			case <-ticker.C:
 				temp := a.tempReader.Read()
+				if temp.MaxTemp <= 0 {
+					tempReadFailCount++
+					if tempReadFailCount <= maxTempReadFailures {
+						a.logDebug("温度读取失败 (尝试 %d/%d): %s", tempReadFailCount, maxTempReadFailures, temp.BridgeMsg)
+						continue
+					} else {
+						a.logInfo("温度读取连续失败 %d 次，继续执行但智能变频可能不生效", maxTempReadFailures)
+					}
+				} else {
+					// 温度读取成功，重置失败计数器
+					if tempReadFailCount > 0 {
+						a.logInfo("温度读取恢复成功")
+						tempReadFailCount = 0
+					}
+				}
 
 				a.mutex.Lock()
 				a.currentTemp = temp

@@ -87,37 +87,15 @@ func (m *Manager) tryLoadFromPath(configPath string) bool {
 
 // Save 保存配置
 func (m *Manager) Save() error {
-	// 首先尝试保存到默认目录
+	// 保存到默认目录
 	defaultConfigDir := m.GetDefaultConfigDir()
 	defaultConfigPath := filepath.Join(defaultConfigDir, "config.json")
 
-	m.logDebug("尝试保存配置到默认目录: %s", defaultConfigPath)
+	m.logDebug("保存配置到默认目录: %s", defaultConfigPath)
 
 	// 确保默认配置目录存在
 	if err := os.MkdirAll(defaultConfigDir, 0755); err != nil {
 		m.logError("创建默认配置目录失败: %v", err)
-	} else {
-		data, err := json.MarshalIndent(m.config, "", "  ")
-		if err != nil {
-			m.logError("序列化配置失败: %v", err)
-		} else {
-			if err := os.WriteFile(defaultConfigPath, data, 0644); err != nil {
-				m.logError("保存配置到默认目录失败: %v", err)
-			} else {
-				m.config.ConfigPath = defaultConfigPath
-				m.logInfo("配置保存到默认目录成功: %s", defaultConfigPath)
-				return nil
-			}
-		}
-	}
-
-	installConfigDir := filepath.Join(m.installDir, "config")
-	installConfigPath := filepath.Join(installConfigDir, "config.json")
-
-	m.logInfo("保存到默认目录失败，尝试保存到安装目录: %s", installConfigPath)
-
-	if err := os.MkdirAll(installConfigDir, 0755); err != nil {
-		m.logError("创建安装配置目录失败: %v", err)
 		return err
 	}
 
@@ -127,13 +105,21 @@ func (m *Manager) Save() error {
 		return err
 	}
 
-	if err := os.WriteFile(installConfigPath, data, 0644); err != nil {
-		m.logError("保存配置到安装目录失败: %v", err)
+	// 检查配置是否实际发生变化
+	if existingData, err := os.ReadFile(defaultConfigPath); err == nil {
+		if string(existingData) == string(data) {
+			m.config.ConfigPath = defaultConfigPath
+			return nil
+		}
+	}
+
+	if err := os.WriteFile(defaultConfigPath, data, 0644); err != nil {
+		m.logError("保存配置失败: %v", err)
 		return err
 	}
 
-	m.config.ConfigPath = installConfigPath
-	m.logInfo("配置保存到安装目录成功: %s", installConfigPath)
+	m.config.ConfigPath = defaultConfigPath
+	m.logInfo("配置保存成功: %s", defaultConfigPath)
 	return nil
 }
 
