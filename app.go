@@ -701,17 +701,37 @@ func (a *App) LogFrontendError(level, source, message, stack string) {
 func (a *App) startConnectionHealthCheck() {
 	guiLogger.Info("启动核心服务Watchdog")
 
-	baseInterval := 3 * time.Second // 基础探测频率：3秒
-	maxInterval := 30 * time.Second // 最大探测频率：30秒 (休眠期)
+	baseInterval := 3 * time.Second     // 基础探测频率：3秒
+	maxInterval := 30 * time.Second     // 最大探测频率：30秒 (休眠期)
+	maxRetryDuration := 5 * time.Minute // 最大重试时长：5分钟
 	currentInterval := baseInterval
+	retryStartTime := time.Now()
+	retryStopped := false
 
 	for {
 		if !a.ipcClient.IsConnected() {
+			// 检查是否超过最大重试时长
+			if !retryStopped && time.Since(retryStartTime) > maxRetryDuration {
+				guiLogger.Warn("Watchdog: 超过5分钟仍无法连接核心服务，停止重试")
+				if a.ctx != nil {
+					runtime.EventsEmit(a.ctx, "core-service-error", "核心服务长时间无法连接，请检查服务状态")
+				}
+				retryStopped = true
+			}
+
+			if retryStopped {
+				// 保持基本的心跳检查
+				time.Sleep(30 * time.Second)
+				continue
+			}
+
 			guiLogger.Info("Watchdog: 检测到核心服务离线，尝试重连...")
 
 			if err := a.ipcClient.Connect(); err == nil {
 				guiLogger.Info("Watchdog: 核心服务重连成功！")
 				currentInterval = baseInterval // 重连成功，重置为基础心跳频率
+				retryStartTime = time.Now()    // 重置重试开始时间
+				retryStopped = false           // 重置停止标志
 			} else {
 				// 连接失败，推送UI状态
 				if a.ctx != nil {
@@ -733,8 +753,12 @@ func (a *App) startConnectionHealthCheck() {
 				guiLogger.Error("Watchdog: Ping 失败，判定管道假死，主动切断连接")
 				a.ipcClient.Close()
 				currentInterval = baseInterval // 准备立即开始快速重连
+				retryStartTime = time.Now()    // 重置重试开始时间
+				retryStopped = false           // 重置停止标志
 			} else {
 				currentInterval = baseInterval // 保持正常的3秒心跳频率
+				retryStartTime = time.Now()    // 重置重试开始时间
+				retryStopped = false           // 重置停止标志
 			}
 		}
 
