@@ -2,6 +2,7 @@
 package temperature
 
 import (
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -16,9 +17,8 @@ type Reader struct {
 	asusClient *asus.Client
 	logger     types.Logger
 
-	gpuVendor      string
-	nvmlDevice     uintptr
-	initVendorOnce sync.Once
+	gpuVendor  string
+	nvmlDevice uintptr
 }
 
 // NewReader 创建新的温度读取器
@@ -72,52 +72,74 @@ var (
 	nvmlInit                 *syscall.LazyProc
 	nvmlDeviceGetHandle      *syscall.LazyProc
 	nvmlDeviceGetTemperature *syscall.LazyProc
-	nvmlLoaded               bool
+
+	nvmlLoaded       bool
+	globalNvmlDevice uintptr
+	nvmlOnce         sync.Once
 )
 
 const nvmlTemperatureGPU = 0
 
 // initNVMLWindows 通过syscall本地加载 nvml.dll
 func (r *Reader) initNVMLWindows() {
-	r.initVendorOnce.Do(func() {
-		// 尝试直接加载nvml.dll
-		nvmlDLL = syscall.NewLazyDLL("nvml.dll")
-		if err := nvmlDLL.Load(); err != nil {
-			// 降级策略：尝试从 NVIDIA 默认驱动安装路径硬加载
-			nvmlDLL = syscall.NewLazyDLL("C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvml.dll")
-			if err := nvmlDLL.Load(); err != nil {
-				r.logger.Debug("未找到nvml.dll，可能未安装NVIDIA驱动")
-				r.gpuVendor = "unknown"
-				return
-			}
+	nvmlOnce.Do(func() {
+		possiblePaths := []string{
+			"nvml.dll",
+			"C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvml.dll",
 		}
 
-		// 获取所需的三个核心函数指针
+		driverStorePattern := "C:\\Windows\\System32\\DriverStore\\FileRepository\\nv*\\nvml.dll"
+		matches, err := filepath.Glob(driverStorePattern)
+		if err == nil && len(matches) > 0 {
+			possiblePaths = append(possiblePaths, matches...)
+		}
+
+		var loaded bool
+		var lastErr error
+		for _, path := range possiblePaths {
+			nvmlDLL = syscall.NewLazyDLL(path)
+			err := nvmlDLL.Load()
+			if err == nil {
+				r.logger.Debug("成功加载nvml.dll从路径: %s", path)
+				loaded = true
+				break
+			}
+			lastErr = err
+		}
+
+		if !loaded {
+			r.logger.Warn("未找到nvml.dll，可能未安装NVIDIA驱动，错误: %v", lastErr)
+			return
+		}
+
 		nvmlInit = nvmlDLL.NewProc("nvmlInit_v2")
 		nvmlDeviceGetHandle = nvmlDLL.NewProc("nvmlDeviceGetHandleByIndex_v2")
 		nvmlDeviceGetTemperature = nvmlDLL.NewProc("nvmlDeviceGetTemperature")
 
-		// 调用nvmlInit_v2
 		ret, _, _ := nvmlInit.Call()
-		if ret != 0 { // 0代表NVML_SUCCESS
-			r.logger.Debug("NVML初始化失败，返回码: %d", ret)
-			r.gpuVendor = "unknown"
+		if ret != 0 {
+			r.logger.Warn("NVML初始化失败，返回码: %d", ret)
 			return
 		}
 
-		// 获取并缓存显卡句柄
+		// 获取并缓存全局显卡句柄
 		var device uintptr
 		ret, _, _ = nvmlDeviceGetHandle.Call(0, uintptr(unsafe.Pointer(&device)))
 		if ret == 0 {
-			r.nvmlDevice = device
-			r.gpuVendor = "nvidia"
+			globalNvmlDevice = device // 存入全局缓存
 			nvmlLoaded = true
 			r.logger.Debug("NVML本地DLL加载并初始化成功")
 		} else {
-			r.logger.Debug("NVML无法获取主显卡句柄，返回码: %d", ret)
-			r.gpuVendor = "unknown"
+			r.logger.Warn("NVML无法获取主显卡句柄，返回码: %d", ret)
 		}
 	})
+
+	if nvmlLoaded {
+		r.gpuVendor = "nvidia"
+		r.nvmlDevice = globalNvmlDevice
+	} else {
+		r.gpuVendor = "unknown"
+	}
 }
 
 // readGPUTemperature 读取GPU温度

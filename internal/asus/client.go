@@ -1,4 +1,3 @@
-// Package asus 提供华硕 ACPI 设备接口
 package asus
 
 import (
@@ -18,7 +17,14 @@ const (
 	ID_CPU_TEMP = 0x00120094
 )
 
-// Client 华硕 ACPI 设备客户端
+// acpiRequest 映射底层的内存结构 (16 bytes)
+type acpiRequest struct {
+	Signature [4]byte
+	Size      uint32
+	Arg       uint32
+	Padding   uint32
+}
+
 type Client struct {
 	handle syscall.Handle
 }
@@ -43,50 +49,60 @@ func NewClient() (*Client, error) {
 	}
 
 	c := &Client{handle: h}
-	c.init()
+	if err := c.init(); err != nil {
+		c.Close()
+		return nil, err
+	}
 	return c, nil
 }
 
 // init 发送 INIT 指令初始化 ACPI 设备
-func (c *Client) init() {
-	in := make([]byte, 16)
-	copy(in[0:4], []byte("INIT"))
-	*(*uint32)(unsafe.Pointer(&in[4])) = 8
+func (c *Client) init() error {
+	req := acpiRequest{
+		Size: 8,
+	}
+	copy(req.Signature[:], "INIT")
 
-	// 分配输出缓冲区，即使返回值不重要，也避免访问违规
-	out := make([]byte, 16)
-	var ret uint32
-	procDeviceIoCtrl.Call(
-		uintptr(c.handle),
-		uintptr(IOCTL_ASUS_ACPI),
-		uintptr(unsafe.Pointer(&in[0])),
-		uintptr(16),
-		uintptr(unsafe.Pointer(&out[0])),
-		uintptr(16),
-		uintptr(unsafe.Pointer(&ret)),
-		uintptr(0),
-	)
-}
-
-// GetCPUTemperature 获取 CPU 实时温度
-func (c *Client) GetCPUTemperature() (int, error) {
-	in := make([]byte, 16)
-	copy(in[0:4], []byte("DSTS"))
-	*(*uint32)(unsafe.Pointer(&in[4])) = 8
-	*(*uint32)(unsafe.Pointer(&in[8])) = ID_CPU_TEMP
-
-	out := make([]byte, 16)
+	var out [16]byte
 	var ret uint32
 
 	r1, _, err := procDeviceIoCtrl.Call(
 		uintptr(c.handle),
 		uintptr(IOCTL_ASUS_ACPI),
-		uintptr(unsafe.Pointer(&in[0])),
-		uintptr(16),
+		uintptr(unsafe.Pointer(&req)),
+		unsafe.Sizeof(req),
 		uintptr(unsafe.Pointer(&out[0])),
-		uintptr(16),
+		uintptr(len(out)),
 		uintptr(unsafe.Pointer(&ret)),
-		uintptr(0),
+		0,
+	)
+
+	if r1 == 0 {
+		return err
+	}
+	return nil
+}
+
+// GetCPUTemperature 获取 CPU 实时温度
+func (c *Client) GetCPUTemperature() (int, error) {
+	req := acpiRequest{
+		Size: 8,
+		Arg:  ID_CPU_TEMP,
+	}
+	copy(req.Signature[:], "DSTS")
+
+	var out [16]byte
+	var ret uint32
+
+	r1, _, err := procDeviceIoCtrl.Call(
+		uintptr(c.handle),
+		uintptr(IOCTL_ASUS_ACPI),
+		uintptr(unsafe.Pointer(&req)),
+		unsafe.Sizeof(req),
+		uintptr(unsafe.Pointer(&out[0])),
+		uintptr(len(out)),
+		uintptr(unsafe.Pointer(&ret)),
+		0,
 	)
 
 	if r1 == 0 {
@@ -104,7 +120,7 @@ func (c *Client) GetCPUTemperature() (int, error) {
 		}
 	}
 
-	return 0, syscall.Errno(0x1F) // ERROR_READ_FAULT
+	return 0, syscall.Errno(0x1F)
 }
 
 // Close 关闭设备句柄
