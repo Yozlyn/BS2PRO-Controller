@@ -40,6 +40,7 @@ const getTempStatus = (temp: number) => {
 
 export default function Home() {
   const [isConnected, setIsConnected] = useState(false);
+  const [coreServiceOffline, setCoreServiceOffline] = useState(false);
   const [config, setConfig] = useState<types.AppConfig | null>(null);
   const [fanData, setFanData] = useState<types.FanData | null>(null);
   const [temperature, setTemperature] = useState<types.TemperatureData | null>(null);
@@ -111,10 +112,12 @@ export default function Home() {
       apiService.onCoreServiceError((msg: string) => {
         setError(msg);
         setIsConnected(false);
+        setCoreServiceOffline(true);
       }),
       
       apiService.onCoreServiceConnected(() => {
         setError(null);
+        setCoreServiceOffline(false);
         initializeApp();
       })
     ];
@@ -227,6 +230,12 @@ export default function Home() {
                   <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
                   {isConnected ? '已连接' : '未连接'}
                 </span>
+                {coreServiceOffline && !isConnected && (
+                  <span className="px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 bg-amber-50 text-amber-600 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                    核心已离线
+                  </span>
+                )}
                 {isConnected && gearStatus && (
                   <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border flex items-center gap-1.5 ${gearStatus.colorClass}`}>
                     <span className={`w-1.5 h-1.5 rounded-full ${gearStatus.dotColor}`}></span>
