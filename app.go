@@ -12,6 +12,7 @@ import (
 	"github.com/TIANLI0/BS2PRO-Controller/internal/autostart"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/config"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/ipc"
+	"github.com/TIANLI0/BS2PRO-Controller/internal/logger"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/tray"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/version"
@@ -54,22 +55,21 @@ type (
 var guiLogger *zap.SugaredLogger
 
 func init() {
+	installDir := config.GetInstallDir()
+	customLogger, err := logger.NewCustomLogger(false, installDir)
+	if err != nil {
+		fallbackInit()
+		return
+	}
+
+	guiLogger = customLogger.GetSugaredLogger()
+}
+
+func fallbackInit() {
 	logDir := config.GetLogDir()
 	_ = os.MkdirAll(logDir, 0755)
 
 	logFilePath := filepath.Join(logDir, fmt.Sprintf("gui_%s.log", time.Now().Format("2006-01-02")))
-
-	encoderCfg := zapcore.EncoderConfig{
-		TimeKey:        "time",
-		LevelKey:       "level",
-		MessageKey:     "msg",
-		CallerKey:      "caller",
-		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    zapcore.CapitalLevelEncoder,
-		EncodeTime:     zapcore.ISO8601TimeEncoder,
-		EncodeDuration: zapcore.StringDurationEncoder,
-		EncodeCaller:   zapcore.ShortCallerEncoder,
-	}
 
 	fileWriter := zapcore.AddSync(&lumberjack.Logger{
 		Filename:   logFilePath,
@@ -79,8 +79,27 @@ func init() {
 		Compress:   true,
 	})
 
+	// 使用CSV编码器，与核心服务日志格式保持一致
+	csvEncoderCfg := zapcore.EncoderConfig{
+		TimeKey:    "time",
+		LevelKey:   "level",
+		CallerKey:  "caller",
+		MessageKey: "msg",
+		LineEnding: zapcore.DefaultLineEnding,
+		EncodeLevel: func(l zapcore.Level, enc zapcore.PrimitiveArrayEncoder) {
+			enc.AppendString(`"` + l.CapitalString() + `"`)
+		},
+		EncodeTime: func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
+			enc.AppendString(`"` + t.Format("2006-01-02 15:04:05") + `"`)
+		},
+		EncodeDuration: zapcore.StringDurationEncoder,
+		EncodeCaller: func(caller zapcore.EntryCaller, enc zapcore.PrimitiveArrayEncoder) {
+			enc.AppendString(`"` + caller.TrimmedPath() + `"`)
+		},
+	}
+
 	core := zapcore.NewCore(
-		zapcore.NewJSONEncoder(encoderCfg),
+		logger.NewCSVEncoder(csvEncoderCfg),
 		fileWriter,
 		zapcore.InfoLevel,
 	)

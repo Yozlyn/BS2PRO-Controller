@@ -16,6 +16,7 @@ import {
 } from '@heroicons/react/24/solid';
 import { types } from '../../../wailsjs/go/models';
 import { apiService } from '../services/api';
+import { logger } from '../services/logger';
 import { ToggleSwitch, Card, Badge, Button } from './ui';
 import clsx from 'clsx';
 
@@ -165,7 +166,7 @@ export default function DeviceStatus({
       const newConfig = types.AppConfig.createFrom({ ...config, autoControl: enabled });
       onConfigChange(newConfig);
     } catch (error) {
-      console.error('设置智能变频失败:', error);
+      logger.error('设置智能变频失败', 'DeviceStatus', error);
     }
   };
 

@@ -22,6 +22,7 @@ import {
   ChartBarIcon,
 } from '@heroicons/react/24/outline';
 import { apiService } from '../services/api';
+import { logger } from '../services/logger';
 import { types } from '../../../wailsjs/go/models';
 import { BrowserOpenURL } from '../../../wailsjs/runtime/runtime';
 import { DebugInfo } from '../types/app';
@@ -104,7 +105,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
     try {
       BrowserOpenURL(url);
     } catch (error) {
-      console.error('打开链接失败:', error);
+      logger.error('打开链接失败', 'ControlPanel', error);
     }
   }, []);
 
@@ -114,7 +115,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
       await apiService.setAutoControl(enabled);
       onConfigChange(types.AppConfig.createFrom({ ...config, autoControl: enabled }));
     } catch (error) {
-      console.error('设置智能变频失败:', error);
+      logger.error('设置智能变频失败', 'ControlPanel', error);
     } finally {
       setLoading('autoControl', false);
     }
@@ -131,7 +132,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
         autoControl: enabled ? false : config.autoControl
       }));
     } catch (error) {
-      console.error('设置自定义转速失败:', error);
+      logger.error('设置自定义转速失败', 'ControlPanel', error);
     } finally {
       setLoading('customSpeed', false);
     }
@@ -154,7 +155,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
         onConfigChange(types.AppConfig.createFrom({ ...config, gearLight: enabled }));
       }
     } catch (error) {
-      console.error('设置挡位灯失败:', error);
+      logger.error('设置挡位灯失败', 'ControlPanel', error);
     } finally {
       setLoading('gearLight', false);
     }
@@ -169,7 +170,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
         onConfigChange(types.AppConfig.createFrom({ ...config, powerOnStart: enabled }));
       }
     } catch (error) {
-      console.error('设置通电自启动失败:', error);
+      logger.error('设置通电自启动失败', 'ControlPanel', error);
     } finally {
       setLoading('powerOnStart', false);
     }
@@ -182,7 +183,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
       await apiService.setWindowsAutoStart(enabled);
       onConfigChange(types.AppConfig.createFrom({ ...config, windowsAutoStart: enabled }));
     } catch (error) {
-      console.error('设置开机自启动失败:', error);
+      logger.error('设置开机自启动失败', 'ControlPanel', error);
       alert(`设置自启动失败: ${error}`);
     } finally {
       setLoading('windowsAutoStart', false);
@@ -195,7 +196,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
       await apiService.updateConfig(newConfig);
       onConfigChange(newConfig);
     } catch (error) {
-      console.error('设置断连保持配置模式失败:', error);
+      logger.error('设置断连保持配置模式失败', 'ControlPanel', error);
     }
   }, [config, onConfigChange]);
 
@@ -207,7 +208,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
         onConfigChange(types.AppConfig.createFrom({ ...config, smartStartStop: mode }));
       }
     } catch (error) {
-      console.error('设置智能启停失败:', error);
+      logger.error('设置智能启停失败', 'ControlPanel', error);
     }
   }, [config, onConfigChange, isConnected]);
 
@@ -216,7 +217,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
       await apiService.setDebugMode(!config.debugMode);
       onConfigChange(types.AppConfig.createFrom({ ...config, debugMode: !config.debugMode }));
     } catch (error) {
-      console.error('设置调试模式失败:', error);
+      logger.error('设置调试模式失败', 'ControlPanel', error);
     }
   }, [config, onConfigChange]);
 
@@ -226,7 +227,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
       await apiService.updateConfig(newConfig);
       onConfigChange(newConfig);
     } catch (error) {
-      console.error('设置GUI监控失败:', error);
+      logger.error('设置GUI监控失败', 'ControlPanel', error);
     }
   }, [config, onConfigChange]);
 
@@ -236,7 +237,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
       const info = await apiService.getDebugInfo();
       setDebugInfo(info);
     } catch (error) {
-      console.error('获取调试信息失败:', error);
+      logger.error('获取调试信息失败', 'ControlPanel', error);
     } finally {
       setDebugInfoLoading(false);
     }
@@ -264,7 +265,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
       await apiService.updateConfig(newConfig);
       onConfigChange(newConfig);
     } catch (error) {
-      console.error('设置温度采样次数失败:', error);
+      logger.error('设置温度采样次数失败', 'ControlPanel', error);
     }
   }, [config, onConfigChange]);
 

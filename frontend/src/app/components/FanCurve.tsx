@@ -10,6 +10,7 @@ import {
   ArrowUpTrayIcon,
 } from '@heroicons/react/24/outline';
 import { apiService } from '../services/api';
+import { logger } from '../services/logger';
 import { types } from '../../../wailsjs/go/models';
 import { ToggleSwitch, Select, Button, Badge, Card } from './ui';
 import clsx from 'clsx';
@@ -360,7 +361,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
       onConfigChange(newConfig);
       setHasUnsavedChanges(false);
     } catch (error) {
-      console.error('保存风扇曲线失败:', error);
+      logger.error('保存风扇曲线失败', 'FanCurve', error);
     } finally {
       setIsSaving(false);
     }
@@ -444,13 +445,13 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
               const newConfig = types.AppConfig.createFrom({ ...config, autoControl: fanConfig.autoControl });
               onConfigChange(newConfig);
             } catch (error) {
-              console.error('设置智能变频失败:', error);
+              logger.error('设置智能变频失败', 'FanCurve', error);
             }
           }
           
           alert('风扇配置导入成功！');
         } catch (error) {
-          console.error('导入风扇配置失败:', error);
+          logger.error('导入风扇配置失败', 'FanCurve', error);
           alert('导入失败：文件格式无效');
         }
       };
@@ -467,7 +468,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
       const newConfig = types.AppConfig.createFrom({ ...config, autoControl: enabled });
       onConfigChange(newConfig);
     } catch (error) {
-      console.error('设置智能变频失败:', error);
+      logger.error('设置智能变频失败', 'FanCurve', error);
     }
   }, [config, onConfigChange]);
 
@@ -492,7 +493,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
       const newConfig = types.AppConfig.createFrom({ ...config, manualGear: gear });
       onConfigChange(newConfig);
     } catch (error) {
-      console.error('设置手动挡位失败:', error);
+      logger.error('设置手动挡位失败', 'FanCurve', error);
     }
   }, [config, onConfigChange]);
 
@@ -502,7 +503,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
       const newConfig = types.AppConfig.createFrom({ ...config, manualLevel: level });
       onConfigChange(newConfig);
     } catch (error) {
-      console.error('设置挡位级别失败:', error);
+      logger.error('设置挡位级别失败', 'FanCurve', error);
     }
   }, [config, onConfigChange]);
 
