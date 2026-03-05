@@ -113,7 +113,7 @@ FunctionEnd
 Function StopRunningInstances
     DetailPrint "正在检查并停止运行中的进程..."
     
-    # 检查并停止 GUI 程序
+    # 检查并停止控制台程序
     DetailPrint "检查 ${PRODUCT_EXECUTABLE} 进程..."
     nsExec::ExecToStack '"$SYSDIR\tasklist.exe" /FI "IMAGENAME eq ${PRODUCT_EXECUTABLE}"'
     Pop $0
@@ -131,13 +131,13 @@ Function StopRunningInstances
         DetailPrint "${PRODUCT_EXECUTABLE} 进程不存在，跳过终止"
     ${EndIf}
     
-    DetailPrint "GUI进程停止完成"
+    DetailPrint "控制台进程停止完成"
 FunctionEnd
 
 Function un.StopRunningInstances
     DetailPrint "正在检查并停止运行中的进程..."
     
-    # 检查并停止 GUI 程序
+    # 检查并停止控制台程序
     DetailPrint "检查 ${PRODUCT_EXECUTABLE} 进程..."
     nsExec::ExecToStack '"$SYSDIR\tasklist.exe" /FI "IMAGENAME eq ${PRODUCT_EXECUTABLE}"'
     Pop $0
@@ -155,7 +155,7 @@ Function un.StopRunningInstances
         DetailPrint "${PRODUCT_EXECUTABLE} 进程不存在，跳过终止"
     ${EndIf}
     
-    DetailPrint "GUI进程停止完成"
+    DetailPrint "控制台进程停止完成"
 FunctionEnd
 
 ; 使用中间目录防止CopyFiles导致配置文件变成文件夹
@@ -211,7 +211,6 @@ Section "主程序 (必需)" SEC_MAIN
     SetOutPath $INSTDIR
     !insertmacro wails.files
     
-    DetailPrint "正在释放核心服务..."
     File "..\..\bin\BS2PRO-CoreService.exe"
     
     DetailPrint "正在注册核心服务..."
