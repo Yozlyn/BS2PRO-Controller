@@ -269,6 +269,7 @@ BS2PRO-Controller/
 
 - [Wails](https://wails.io/) - 优秀的 Go 桌面应用框架
 - [Next.js](https://nextjs.org/) - React 应用框架
+- [GHelper](https://github.com/seerge/g-helper) - Excellent lightweight control tool
 - 飞智- BS2/BS2PRO 硬件设备
 
 ## 免责声明
