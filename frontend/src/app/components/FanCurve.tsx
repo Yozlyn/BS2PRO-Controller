@@ -270,7 +270,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
 
   // 更新单个点
   const updatePoint = useCallback((index: number, newRpm: number) => {
-    const clampedRpm = Math.max(rpmRange.min, Math.min(rpmRange.max, Math.round(newRpm / 50) * 50));
+    const clampedRpm = Math.max(rpmRange.min, Math.min(rpmRange.max, Math.round(newRpm / 100) * 100));
     
     setLocalCurve(prev => {
       if (prev[index]?.rpm === clampedRpm) return prev;
@@ -738,7 +738,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
                 onBlur={() => setTimeout(() => setIsInteracting(false), 100)}
                 min={rpmRange.min}
                 max={rpmRange.max}
-                step={50}
+                step={100}
                 className={clsx(
                   'w-full px-1 py-0.5 text-center text-xs font-medium rounded',
                   'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600',
@@ -758,7 +758,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
                   onTouchEnd={() => setTimeout(() => setIsInteracting(false), 100)}
                   min={rpmRange.min}
                   max={rpmRange.max}
-                  step={50}
+                  step={100}
                   className="w-full h-1 rounded-full appearance-none cursor-pointer slider-thumb"
                   style={{
                     background: `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${((point.rpm - rpmRange.min) / (rpmRange.max - rpmRange.min)) * 100}%, #e5e7eb ${((point.rpm - rpmRange.min) / (rpmRange.max - rpmRange.min)) * 100}%, #e5e7eb 100%)`
