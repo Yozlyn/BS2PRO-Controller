@@ -322,8 +322,6 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 	case ipc.ReqShowWindow:
 		a.onShowWindowRequest()
 		return a.successResponse(true)
-	case ipc.ReqHideWindow:
-		return a.successResponse(true)
 	case ipc.ReqQuitApp:
 		go a.onQuitRequest()
 		return a.successResponse(true)
@@ -472,18 +470,12 @@ func (a *CoreApp) scheduleReconnect() {
 			cfg := a.configManager.Get()
 			if cfg.IgnoreDeviceOnReconnect {
 				a.logInfo("断连保持配置模式已开启，重新应用APP配置")
-				a.reapplyConfigAfterReconnect()
+				a.applyConfigOnConnect()
 			}
 			return
 		}
 		a.logError("第 %d 次重连失败", i+1)
 	}
-}
-
-func (a *CoreApp) reapplyConfigAfterReconnect() {
-	a.logInfo("设备重连后重新应用配置")
-	a.applyConfigOnConnect()
-	a.logInfo("重连后配置重新应用完成")
 }
 
 func (a *CoreApp) applyConfigOnConnect() {

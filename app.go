@@ -791,22 +791,3 @@ func (a *App) startConnectionHealthCheck() {
 		time.Sleep(currentInterval)
 	}
 }
-
-// CheckConnectionStatus 检查当前连接状态（供前端调用）
-func (a *App) CheckConnectionStatus() map[string]any {
-	status := make(map[string]any)
-
-	// 尝试发送Ping请求
-	resp, err := a.sendRequest(ipc.ReqPing, nil)
-	if err != nil {
-		status["connected"] = false
-		status["error"] = err.Error()
-	} else {
-		status["connected"] = resp != nil && resp.Success
-		if resp != nil && !resp.Success {
-			status["error"] = resp.Error
-		}
-	}
-
-	return status
-}

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	goruntime "runtime"
 	"strings"
 	"sync"
@@ -58,7 +57,6 @@ const (
 
 	// 窗口相关
 	ReqShowWindow RequestType = "ShowWindow"
-	ReqHideWindow RequestType = "HideWindow"
 	ReqQuitApp    RequestType = "QuitApp"
 
 	// 调试相关
@@ -600,23 +598,6 @@ func (c *Client) logDebug(format string, v ...any) {
 	if c.logger != nil {
 		c.logger.Debug(format, v...)
 	}
-}
-
-// CheckCoreServiceRunning 检查核心服务是否正在运行
-func CheckCoreServiceRunning() bool {
-	timeout := 1 * time.Second
-	conn, err := winio.DialPipe(PipePath, &timeout)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
-}
-
-// GetCoreLockFilePath 获取核心服务锁文件路径
-func GetCoreLockFilePath() string {
-	tempDir := os.TempDir()
-	return fmt.Sprintf("%s/bs2pro-core.lock", tempDir)
 }
 
 // SetAutoControlParams 设置智能变频参数

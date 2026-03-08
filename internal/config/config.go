@@ -3,7 +3,6 @@ package config
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -138,11 +137,6 @@ func (m *Manager) Get() types.AppConfig {
 	return m.config
 }
 
-// Set 设置配置
-func (m *Manager) Set(config types.AppConfig) {
-	m.config = config
-}
-
 // Update 更新配置并保存
 func (m *Manager) Update(config types.AppConfig) error {
 	m.config = config
@@ -185,19 +179,4 @@ func GetLogDir() string {
 	}
 	// 回落：ProgramData环境变量不存在时用硬编码路径
 	return `C:\ProgramData\BS2PRO-Controller\logs`
-}
-
-// ValidateFanCurve 验证风扇曲线是否有效
-func ValidateFanCurve(curve []types.FanCurvePoint) error {
-	if len(curve) < 2 {
-		return fmt.Errorf("风扇曲线至少需要2个点")
-	}
-
-	for i := 1; i < len(curve); i++ {
-		if curve[i].Temperature <= curve[i-1].Temperature {
-			return fmt.Errorf("风扇曲线温度点必须递增")
-		}
-	}
-
-	return nil
 }

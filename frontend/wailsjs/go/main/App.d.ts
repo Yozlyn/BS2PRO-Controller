@@ -3,8 +3,6 @@
 import {types} from '../models';
 import {ipc} from '../models';
 
-export function CheckConnectionStatus():Promise<Record<string, any>>;
-
 export function CheckWindowsAutoStart():Promise<boolean>;
 
 export function ConnectDevice():Promise<boolean>;

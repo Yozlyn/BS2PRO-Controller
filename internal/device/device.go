@@ -26,7 +26,6 @@ const (
 type Manager struct {
 	device         *hid.Device
 	isConnected    bool
-	productID      uint16 // 当前连接的产品ID
 	mutex          sync.RWMutex
 	deviceOpMutex  sync.Mutex // 设备操作互斥锁，确保同一时间只有一个读/写操作
 	logger         types.Logger
@@ -68,11 +67,6 @@ func (m *Manager) Init() error {
 	return hid.Init()
 }
 
-// Exit 清理 HID 库
-func (m *Manager) Exit() error {
-	return hid.Exit()
-}
-
 // Connect 连接 HID 设备
 func (m *Manager) Connect() (bool, map[string]string) {
 	m.mutex.Lock()
@@ -107,7 +101,6 @@ func (m *Manager) Connect() (bool, map[string]string) {
 
 	m.device = device
 	m.isConnected = true
-	m.productID = connectedProductID
 
 	modelName := "BS2PRO"
 	if connectedProductID == ProductID2 {
