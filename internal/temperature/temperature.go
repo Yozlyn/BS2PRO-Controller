@@ -82,6 +82,11 @@ const nvmlTemperatureGPU = 0
 
 // initNVMLWindows 通过syscall本地加载 nvml.dll
 func (r *Reader) initNVMLWindows() {
+	if nvmlLoaded {
+		r.gpuVendor = "nvidia"
+		r.nvmlDevice = globalNvmlDevice
+		return
+	}
 	nvmlOnce.Do(func() {
 		possiblePaths := []string{
 			"nvml.dll",
@@ -144,7 +149,9 @@ func (r *Reader) initNVMLWindows() {
 
 // readGPUTemperature 读取GPU温度
 func (r *Reader) readGPUTemperature() int {
-	r.initNVMLWindows()
+	if r.gpuVendor == "" {
+		r.initNVMLWindows()
+	}
 
 	if r.gpuVendor == "nvidia" && nvmlLoaded {
 		return r.readNvidiaGPUTemp()
