@@ -1,4 +1,5 @@
 // 日志服务
+import { LogFrontendError } from '../../../wailsjs/go/main/App';
 
 export enum LogLevel {
   DEBUG = 'debug',
@@ -15,24 +16,30 @@ export interface LogEntry {
   data?: any;
 }
 
+// 待 flush 的缓冲队列项
+interface PendingEntry {
+  level: string;
+  source: string;
+  message: string;
+  stack: string;
+}
+
 class Logger {
   private static instance: Logger;
   private logLevel: LogLevel = LogLevel.INFO;
   private isDebugMode: boolean = false;
-  private logs: LogEntry[] = [];
-  private readonly STORAGE_KEY = 'bs2pro_frontend_logs';
-  private readonly MAX_LOCAL_STORAGE_ENTRIES = 100;
-  private readonly MAX_MEMORY_ENTRIES = 1000;
+
+  // 后端不可用时的缓冲队列
+  private pendingQueue: PendingEntry[] = [];
+  private readonly MAX_PENDING = 200;
+  private backendAvailable: boolean = true;
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
 
   private constructor() {
-    // 从环境变量或配置中读取日志级别
     if (typeof window !== 'undefined') {
       const debugMode = (window as any).__DEBUG_MODE__ || false;
       this.isDebugMode = debugMode;
       this.logLevel = debugMode ? LogLevel.DEBUG : LogLevel.INFO;
-      
-      // 从本地存储加载历史日志
-      this.loadFromLocalStorage();
     }
   }
 
@@ -43,155 +50,118 @@ class Logger {
     return Logger.instance;
   }
 
-  public setLogLevel(level: LogLevel): void {
-    this.logLevel = level;
-  }
-
   public setDebugMode(enabled: boolean): void {
     this.isDebugMode = enabled;
     this.logLevel = enabled ? LogLevel.DEBUG : LogLevel.INFO;
   }
 
+  // 通知logger后端已恢复，立即flush缓冲队列
+  public notifyBackendAvailable(): void {
+    this.backendAvailable = true;
+    this.flushPending();
+  }
+
   private shouldLog(level: LogLevel): boolean {
-    const levelPriority = {
+    const priority: Record<LogLevel, number> = {
       [LogLevel.DEBUG]: 0,
       [LogLevel.INFO]: 1,
       [LogLevel.WARN]: 2,
-      [LogLevel.ERROR]: 3
+      [LogLevel.ERROR]: 3,
     };
-
-    return levelPriority[level] >= levelPriority[this.logLevel];
+    return priority[level] >= priority[this.logLevel];
   }
 
-  private formatMessage(message: string, context?: string): string {
-    const timestamp = new Date().toISOString();
-    const contextStr = context ? `[${context}] ` : '';
-    return `${timestamp} ${contextStr}${message}`;
-  }
-
-  private saveToLocalStorage(): void {
-    try {
-      if (typeof window === 'undefined' || !window.localStorage) {
-        return;
-      }
-
-      // 只保存最近的日志
-      const recentLogs = this.logs.slice(-this.MAX_LOCAL_STORAGE_ENTRIES);
-      const serializableLogs = recentLogs.map(log => ({
-        ...log,
-        timestamp: log.timestamp.toISOString(),
-        // 简化数据，避免循环引用
-        data: this.serializeData(log.data)
-      }));
-
-      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(serializableLogs));
-    } catch (error) {
-      // 本地存储可能已满或不可用，静默失败
-      console.warn('无法保存日志到本地存储:', error);
-    }
-  }
-
-  private loadFromLocalStorage(): void {
-    try {
-      if (typeof window === 'undefined' || !window.localStorage) {
-        return;
-      }
-
-      const stored = localStorage.getItem(this.STORAGE_KEY);
-      if (stored) {
-        const parsedLogs = JSON.parse(stored);
-        const restoredLogs = parsedLogs.map((log: any) => ({
-          ...log,
-          timestamp: new Date(log.timestamp)
-        }));
-        
-        // 合并到内存中，但不超过限制
-        this.logs = [...restoredLogs, ...this.logs].slice(-this.MAX_MEMORY_ENTRIES);
-      }
-    } catch (error) {
-      // 本地存储可能损坏，清除它
-      console.warn('无法从本地存储加载日志:', error);
-      this.clearLocalStorage();
-    }
-  }
-
-  private clearLocalStorage(): void {
-    try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        localStorage.removeItem(this.STORAGE_KEY);
-      }
-    } catch (error) {
-      // 忽略错误
-    }
-  }
-
-  private serializeData(data: any): any {
-    if (data === null || data === undefined) {
-      return data;
-    }
-
-    if (data instanceof Error) {
-      return {
-        name: data.name,
-        message: data.message,
-        stack: data.stack
-      };
-    }
-
+  private serializeData(data: any): string {
+    if (data === null || data === undefined) return '';
+    if (data instanceof Error) return `${data.name}: ${data.message}`;
     if (typeof data === 'object') {
       try {
-        // 尝试序列化，如果失败则返回简化版本
-        return JSON.parse(JSON.stringify(data));
+        return JSON.stringify(data);
       } catch {
-        return { _type: 'unserializable_object' };
+        return '[unserializable]';
       }
     }
+    return String(data);
+  }
 
-    return data;
+  private sendToBackend(entry: PendingEntry): void {
+    LogFrontendError(entry.level, entry.source, entry.message, entry.stack)
+      .then(() => {
+        // 发送成功，标记后端可用并尝试flush
+        if (!this.backendAvailable) {
+          this.backendAvailable = true;
+          this.flushPending();
+        }
+      })
+      .catch(() => {
+        // 后端不可用，进入缓冲队列
+        this.backendAvailable = false;
+        if (this.pendingQueue.length < this.MAX_PENDING) {
+          this.pendingQueue.push(entry);
+        }
+        this.scheduleFlush();
+      });
+  }
+
+  private flushPending(): void {
+    if (this.pendingQueue.length === 0) return;
+    const batch = this.pendingQueue.splice(0);
+    for (const entry of batch) {
+      LogFrontendError(entry.level, entry.source, entry.message, entry.stack)
+        .catch(() => {
+          // 仍然失败，重新入队
+          if (this.pendingQueue.length < this.MAX_PENDING) {
+            this.pendingQueue.unshift(entry);
+          }
+          this.backendAvailable = false;
+        });
+    }
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushTimer !== null) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      if (this.pendingQueue.length > 0) {
+        this.flushPending();
+        if (this.pendingQueue.length > 0) {
+          this.scheduleFlush(); // 仍有未发出的，继续重试
+        }
+      }
+    }, 5000);
   }
 
   private log(level: LogLevel, message: string, context?: string, data?: any): void {
-    if (!this.shouldLog(level)) {
-      return;
-    }
+    if (!this.shouldLog(level)) return;
 
-    const formattedMessage = this.formatMessage(message, context);
-    const entry: LogEntry = {
-      level,
-      message: formattedMessage,
-      timestamp: new Date(),
-      context,
-      data
-    };
+    const source = context ?? 'frontend';
+    const dataStr = data ? ` | ${this.serializeData(data)}` : '';
+    const stack = data instanceof Error ? (data.stack ?? '') : '';
 
-    // 添加到内存日志
-    this.logs.push(entry);
-
-    // 保存到本地存储（异步，避免阻塞）
-    setTimeout(() => this.saveToLocalStorage(), 0);
-
-    // 根据级别输出到控制台
+    // 控制台输出
+    const consoleMsg = `[${source}] ${message}${dataStr}`;
     switch (level) {
       case LogLevel.DEBUG:
-        if (this.isDebugMode) {
-          console.debug(`[DEBUG] ${formattedMessage}`, data || '');
-        }
+        if (this.isDebugMode) console.debug(`[DEBUG] ${consoleMsg}`);
         break;
       case LogLevel.INFO:
-        console.info(`[INFO] ${formattedMessage}`, data || '');
+        console.info(`[INFO] ${consoleMsg}`);
         break;
       case LogLevel.WARN:
-        console.warn(`[WARN] ${formattedMessage}`, data || '');
+        console.warn(`[WARN] ${consoleMsg}`);
         break;
       case LogLevel.ERROR:
-        console.error(`[ERROR] ${formattedMessage}`, data || '');
+        console.error(`[ERROR] ${consoleMsg}`);
         break;
     }
 
-    // 限制内存中的日志数量
-    if (this.logs.length > this.MAX_MEMORY_ENTRIES) {
-      this.logs = this.logs.slice(-500);
-    }
+    // 上报后端（带缓冲，后端不在时不丢失）
+    this.sendToBackend({
+      level,
+      source,
+      message: data ? `${message}${dataStr}` : message,
+      stack,
+    });
   }
 
   public debug(message: string, context?: string, data?: any): void {
@@ -209,51 +179,6 @@ class Logger {
   public error(message: string, context?: string, data?: any): void {
     this.log(LogLevel.ERROR, message, context, data);
   }
-
-  public getLogs(): LogEntry[] {
-    return [...this.logs];
-  }
-
-  public getLogsAsText(): string {
-    return this.logs.map(log => {
-      const level = log.level.toUpperCase();
-      const context = log.context ? ` [${log.context}]` : '';
-      return `${log.timestamp.toISOString()} ${level}${context}: ${log.message}`;
-    }).join('\n');
-  }
-
-  public clearLogs(): void {
-    this.logs = [];
-    this.clearLocalStorage();
-  }
-
-  public exportLogs(): void {
-    try {
-      const logText = this.getLogsAsText();
-      const blob = new Blob([logText], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `bs2pro_logs_${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('导出日志失败:', error);
-    }
-  }
-
-  // 兼容旧版console.log的快捷方法
-  public logError(error: any, context?: string): void {
-    const message = error instanceof Error ? error.message : String(error);
-    const stack = error instanceof Error ? error.stack : undefined;
-    
-    this.error(message, context, { 
-      error: error,
-      stack: stack
-    });
-  }
 }
 
 // 导出单例实例
@@ -262,12 +187,9 @@ export const logger = Logger.getInstance();
 // 导出快捷方法
 export const log = {
   debug: (message: string, context?: string, data?: any) => logger.debug(message, context, data),
-  info: (message: string, context?: string, data?: any) => logger.info(message, context, data),
-  warn: (message: string, context?: string, data?: any) => logger.warn(message, context, data),
+  info:  (message: string, context?: string, data?: any) => logger.info(message, context, data),
+  warn:  (message: string, context?: string, data?: any) => logger.warn(message, context, data),
   error: (message: string, context?: string, data?: any) => logger.error(message, context, data),
-  errorObj: (error: any, context?: string) => logger.logError(error, context),
-  export: () => logger.exportLogs(),
-  clear: () => logger.clearLogs()
 };
 
 export default logger;
