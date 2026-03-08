@@ -2,10 +2,15 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
+	"strings"
+	"time"
 
+	"github.com/TIANLI0/BS2PRO-Controller/internal/config"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -18,6 +23,39 @@ var assets embed.FS
 //go:embed build/windows/icon.ico
 var iconData []byte
 
+// guiCapturePanic 捕获GUI进程的panic，写入crash文件和日志
+func guiCapturePanic(recovered any) {
+	stack := debug.Stack()
+	logDir := config.GetLogDir()
+	_ = os.MkdirAll(logDir, 0755)
+
+	fileName := fmt.Sprintf("crash_gui_%s.log", time.Now().Format("2006-01-02_15-04-05.000"))
+	filePath := filepath.Join(logDir, fileName)
+
+	var b strings.Builder
+	b.WriteString("=== BS2PRO GUI Crash Report ===\n")
+	b.WriteString(fmt.Sprintf("time:  %s\n", time.Now().Format(time.RFC3339Nano)))
+	b.WriteString(fmt.Sprintf("panic: %v\n", recovered))
+	b.WriteString(fmt.Sprintf("pid:   %d\n", os.Getpid()))
+	b.WriteString(fmt.Sprintf("args:  %v\n", os.Args))
+	b.WriteString("\n--- stack ---\n")
+	b.Write(stack)
+	b.WriteString("\n")
+
+	if err := os.WriteFile(filePath, []byte(b.String()), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "写入GUI崩溃报告失败: %v\npanic: %v\n%s\n", err, recovered, stack)
+	} else {
+		fmt.Fprintf(os.Stderr, "GUI进程发生panic，崩溃报告已写入: %s\n", filePath)
+	}
+
+	// 同步写入运行日志
+	if guiLogger != nil {
+		guiLogger.Errorf("[GUI crash] panic: %v", recovered)
+		guiLogger.Errorf("[GUI crash] stack:\n%s", string(stack))
+		guiLogger.Sync()
+	}
+}
+
 // 获取WebView2用户数据目录路径，隔离缓存以便卸载时干净清理
 func getWebView2DataPath() string {
 	appData, err := os.UserConfigDir()
@@ -29,6 +67,13 @@ func getWebView2DataPath() string {
 }
 
 func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			guiCapturePanic(r)
+			os.Exit(1)
+		}
+	}()
+
 	app := NewApp(iconData)
 
 	// 检测是否为开机自启动模式

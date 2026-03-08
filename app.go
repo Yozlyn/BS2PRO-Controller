@@ -246,7 +246,13 @@ func (a *App) OnWindowClosing(ctx context.Context) bool {
 
 // handleCoreEvent 处理核心服务推送的事件
 func (a *App) handleCoreEvent(event ipc.Event) {
-	defer func() { recover() }()
+	defer func() {
+		if r := recover(); r != nil {
+			if guiLogger != nil {
+				guiLogger.Errorf("[handleCoreEvent] panic: %v, event type: %v", r, event.Type)
+			}
+		}
+	}()
 	if a.ctx == nil {
 		return
 	}
