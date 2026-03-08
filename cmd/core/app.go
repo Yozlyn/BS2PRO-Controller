@@ -386,20 +386,16 @@ func (a *CoreApp) onFanDataUpdate(fanData *types.FanData) {
 	cfg := a.configManager.Get()
 	var shouldBroadcastConfig bool
 	var broadcastCfg types.AppConfig
-	if fanData.WorkMode == "挡位工作模式" && cfg.AutoControl && a.lastDeviceMode == "自动模式(实时转速)" && !a.userSetAutoControl && !cfg.IgnoreDeviceOnReconnect {
+	if fanData.WorkMode == "挡位工作模式" && cfg.AutoControl && a.lastDeviceMode == "自动模式(实时转速)" && !a.userSetAutoControl && !cfg.IgnoreDeviceOnReconnect && !a.monitoringTemp {
 		a.logInfo("检测到设备从自动模式切换到挡位工作模式，自动关闭智能变频")
 		cfg.AutoControl = false
-		if a.monitoringTemp {
-			select {
-			case a.stopMonitoring <- true:
-			default:
-			}
-		}
 		if err := a.configManager.Update(cfg); err != nil {
 			a.logError("保存配置失败: %v", err)
 		}
 		shouldBroadcastConfig = true
 		broadcastCfg = cfg
+	} else if fanData.WorkMode == "挡位工作模式" && cfg.AutoControl && a.lastDeviceMode == "自动模式(实时转速)" && !a.userSetAutoControl && !cfg.IgnoreDeviceOnReconnect && a.monitoringTemp {
+		a.logDebug("智能变频监控期间设备临时进入挡位模式")
 	} else if fanData.WorkMode == "挡位工作模式" && cfg.AutoControl && a.lastDeviceMode == "自动模式(实时转速)" && !a.userSetAutoControl && cfg.IgnoreDeviceOnReconnect {
 		a.logInfo("检测到设备模式变化，但已开启断连保持配置模式，保持APP配置不变")
 	}
@@ -424,6 +420,8 @@ func (a *CoreApp) onDeviceDisconnect() {
 	wasConnected := a.isConnected
 	a.isConnected = false
 	userDid := a.userDisconnected
+	// 重置设备模式记录，防止重连窗口期内 onFanDataUpdate 用陈旧的 lastDeviceMode 错误判断
+	a.lastDeviceMode = ""
 	a.mutex.Unlock()
 
 	if wasConnected {
@@ -577,6 +575,7 @@ func (a *CoreApp) DisconnectDevice() {
 		a.monitoringTemp = false
 	}
 	a.isConnected = false
+	a.lastDeviceMode = ""
 	a.mutex.Unlock()
 
 	a.deviceManager.Disconnect()
@@ -950,14 +949,15 @@ func (a *CoreApp) startTemperatureMonitoring() {
 		<-a.stopMonitoring
 	}
 
-	if isConnected {
+	cfg := a.configManager.Get()
+
+	if isConnected && cfg.AutoControl {
 		if err := a.deviceManager.EnterAutoMode(); err != nil {
 			a.logError("进入自动模式失败: %v", err)
 		}
 		time.Sleep(100 * time.Millisecond)
+		cfg = a.configManager.Get()
 	}
-
-	cfg := a.configManager.Get()
 
 	intervalSec := cfg.TempUpdateRate
 	if intervalSec < 1 {
@@ -1074,6 +1074,12 @@ func (a *CoreApp) startTemperatureMonitoring() {
 
 					targetRPM := temperature.CalculateTargetRPM(avgTemp, cfg.FanCurve)
 					if targetRPM > 0 {
+						if fd := a.deviceManager.GetCurrentFanData(); fd != nil && fd.WorkMode == "挡位工作模式" {
+							a.logDebug("智能变频监控：设备进入手动模式，重新进入自动模式")
+							if err := a.deviceManager.EnterAutoMode(); err == nil {
+								time.Sleep(100 * time.Millisecond)
+							}
+						}
 						a.deviceManager.SetFanSpeed(targetRPM)
 					}
 				}
