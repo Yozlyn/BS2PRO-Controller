@@ -88,16 +88,16 @@ func (r *Reader) initNVMLWindows() {
 		return
 	}
 	nvmlOnce.Do(func() {
-		possiblePaths := []string{
-			"nvml.dll",
-			"C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvml.dll",
-		}
-
+		var possiblePaths []string
 		driverStorePattern := "C:\\Windows\\System32\\DriverStore\\FileRepository\\nv*\\nvml.dll"
 		matches, err := filepath.Glob(driverStorePattern)
 		if err == nil && len(matches) > 0 {
 			possiblePaths = append(possiblePaths, matches...)
 		}
+
+		possiblePaths = append(possiblePaths,
+			"C:\\Windows\\System32\\nvml.dll",
+		)
 
 		var loaded bool
 		var lastErr error
