@@ -597,7 +597,7 @@ func (a *App) QuitApp() {
 
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		guiLogger.Info("执行强杀...")
+		guiLogger.Info("控制台已退出")
 		// Sync 将 zap 缓冲区写入磁盘，避免日志在os.Exit时丢失
 		guiLogger.Sync()
 		os.Exit(0)
