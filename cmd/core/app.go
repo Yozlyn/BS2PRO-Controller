@@ -50,6 +50,9 @@ type CoreApp struct {
 
 	// 记录当前已经下发的 RGB 智能温度档位
 	lastSmartModeLevel byte
+
+	// 重连代数：每次发起新的重连任务时递增，用于取消过期的重连协程
+	reconnectGen int32
 }
 
 func NewCoreApp(debugMode bool) *CoreApp {
@@ -435,36 +438,32 @@ func (a *CoreApp) onDeviceDisconnect() {
 	}
 
 	if !userDid {
-		go a.scheduleReconnect()
+		gen := atomic.AddInt32(&a.reconnectGen, 1)
+		go a.scheduleReconnect(gen)
 	}
 }
 
-func (a *CoreApp) scheduleReconnect() {
+func (a *CoreApp) scheduleReconnect(gen int32) {
 	defer func() {
 		if r := recover(); r != nil {
 			a.logError("自动重连时发生Panic: %v", r)
 		}
 	}()
 
-	retryDelays := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second, 30 * time.Second}
-	for i, delay := range retryDelays {
-		a.mutex.RLock()
-		connected := a.isConnected
-		a.mutex.RUnlock()
-		if connected {
-			return
+	// isCancelled 检查本次重连是否应当放弃
+	isCancelled := func() bool {
+		if atomic.LoadInt32(&a.reconnectGen) != gen {
+			return true
 		}
-
-		a.logInfo("等待 %v 后尝试第 %d 次重连...", delay, i+1)
-		time.Sleep(delay)
-
 		a.mutex.RLock()
-		connected = a.isConnected
-		a.mutex.RUnlock()
-		if connected {
-			return
-		}
+		defer a.mutex.RUnlock()
+		return a.isConnected || a.userDisconnected
+	}
 
+	tryConnect := func() bool {
+		if isCancelled() {
+			return false
+		}
 		if a.ConnectDevice() {
 			a.logInfo("设备重连成功")
 			cfg := a.configManager.Get()
@@ -472,9 +471,38 @@ func (a *CoreApp) scheduleReconnect() {
 				a.logInfo("断连保持配置模式已开启，重新应用APP配置")
 				a.applyConfigOnConnect()
 			}
+			return true
+		}
+		return false
+	}
+
+	time.Sleep(2 * time.Second)
+	if isCancelled() {
+		return
+	}
+	a.logInfo("尝试快速重连...")
+	if tryConnect() {
+		return
+	}
+
+	a.logInfo("快速重连失败，进入等待模式：将在检测到设备接入后自动重连")
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if isCancelled() {
+			a.logInfo("重连任务已取消")
 			return
 		}
-		a.logError("第 %d 次重连失败", i+1)
+		if !a.deviceManager.IsDevicePresent() {
+			// 设备尚未出现，继续等待，不发起连接
+			continue
+		}
+		a.logInfo("检测到设备接入，尝试重连...")
+		if tryConnect() {
+			return
+		}
+		a.logError("设备已出现但连接失败，继续等待...")
 	}
 }
 
@@ -557,6 +585,9 @@ func (a *CoreApp) ConnectDevice() bool {
 }
 
 func (a *CoreApp) DisconnectDevice() {
+	// 取消任何正在等待的重连协程
+	atomic.AddInt32(&a.reconnectGen, 1)
+
 	a.mutex.Lock()
 	a.userDisconnected = true
 	if a.monitoringTemp {
@@ -1092,45 +1123,28 @@ func (a *CoreApp) startHealthMonitoring() {
 
 	// 设备健康检查使用指数退避策略
 	baseInterval := 5 * time.Second // 基础探测频率：5秒
-	maxInterval := 30 * time.Second // 最大探测频率：30秒
 	currentInterval := baseInterval
 
 	for {
 		select {
 		case <-time.After(currentInterval):
-			a.checkDeviceHealth(&currentInterval, baseInterval, maxInterval)
+			a.checkDeviceHealth(&currentInterval, baseInterval)
 		case <-a.cleanupChan:
 			return
 		}
 	}
 }
 
-func (a *CoreApp) checkDeviceHealth(currentInterval *time.Duration, baseInterval, maxInterval time.Duration) {
+func (a *CoreApp) checkDeviceHealth(currentInterval *time.Duration, baseInterval time.Duration) {
 	a.mutex.RLock()
 	connected := a.isConnected
-	userDid := a.userDisconnected
 	a.mutex.RUnlock()
 
 	if !connected {
-		if userDid {
-			return
-		}
-		a.logInfo("设备Watchdog: 设备未连接，尝试重新连接")
-
-		// 尝试重连设备
-		if a.ConnectDevice() {
-			a.logInfo("设备Watchdog: 设备重连成功")
-			*currentInterval = baseInterval // 重连成功，重置为基础心跳频率
-		} else {
-			a.logDebug("设备Watchdog: 重连失败")
-
-			// 指数退避，拉长下次探测的时间
-			*currentInterval *= 2
-			if *currentInterval > maxInterval {
-				*currentInterval = maxInterval
-			}
-			a.logDebug("设备Watchdog: 下次探测将在 %v 后进行", *currentInterval)
-		}
+		// scheduleReconnect 协程负责非用户断开后的重连（等待设备出现再连接），
+		// Watchdog 不再重复尝试，避免双重连接竞争。
+		*currentInterval = baseInterval
+		return
 	} else {
 		// 连接状态下，检查设备是否真的在线
 		if !a.deviceManager.IsConnected() {
