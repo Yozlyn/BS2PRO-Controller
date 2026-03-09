@@ -983,6 +983,13 @@ func (a *CoreApp) startTemperatureMonitoring() {
 				return
 
 			case <-ticker.C:
+				cfg := a.configManager.Get()
+				hasGUI := a.ipcServer != nil && a.ipcServer.HasClients()
+
+				if !cfg.AutoControl && !hasGUI {
+					continue
+				}
+
 				temp := a.tempReader.Read()
 				if temp.MaxTemp <= 0 {
 					tempReadFailCount++
@@ -1010,8 +1017,6 @@ func (a *CoreApp) startTemperatureMonitoring() {
 						a.ipcServer.BroadcastEvent(ipc.EventTemperatureUpdate, t)
 					}(temp)
 				}
-
-				cfg := a.configManager.Get()
 
 				// 分离式 RGB 智能温控判定
 				if cfg.RGBConfig != nil && cfg.RGBConfig.Mode == "smart" && temp.MaxTemp > 0 {
