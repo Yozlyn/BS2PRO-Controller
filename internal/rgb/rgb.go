@@ -219,8 +219,6 @@ func (c *Controller) sendConfig(cfg *rgbConfig) bool {
 	return false
 }
 
-// --- 以下为对外部暴露的灯效设置方法 ---
-
 func (c *Controller) SetFlowing(speed, brightness byte) bool {
 	if !c.lockWithTimeout() {
 		return false // 设备忙，用户操作无法在1秒内开始
@@ -325,9 +323,7 @@ func (c *Controller) SetOff() bool {
 	return c.setState(false)
 }
 
-// ============================================
 // 灯光矩阵模型与插值算法
-// ============================================
 
 type rgbGroup struct{ Units [10][3]byte }
 
