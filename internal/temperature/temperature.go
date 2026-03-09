@@ -3,6 +3,7 @@ package temperature
 
 import (
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -134,6 +135,12 @@ func (r *Reader) initNVMLWindows() {
 			globalNvmlDevice = device // 存入全局缓存
 			nvmlLoaded = true
 			r.logger.Debug("NVML本地DLL加载并初始化成功")
+			// NVML初始化占用的临时内存归还OS
+			debug.FreeOSMemory()
+			kernel32 := syscall.NewLazyDLL("kernel32.dll")
+			setWorkingSet := kernel32.NewProc("SetProcessWorkingSetSize")
+			proc, _ := syscall.GetCurrentProcess()
+			setWorkingSet.Call(uintptr(proc), ^uintptr(0), ^uintptr(0))
 		} else {
 			r.logger.Warn("NVML无法获取主显卡句柄，返回码: %d", ret)
 		}
