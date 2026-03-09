@@ -181,6 +181,20 @@ func (m *Manager) GetCurrentFanData() *types.FanData {
 	return m.currentFanData
 }
 
+// IsDevicePresent 检查目标HID设备是否出现在系统设备列表中
+func (m *Manager) IsDevicePresent() bool {
+	sentinel := fmt.Errorf("found")
+	for _, productID := range []uint16{ProductID1, ProductID2} {
+		err := hid.Enumerate(VendorID, productID, func(_ *hid.DeviceInfo) error {
+			return sentinel
+		})
+		if err == sentinel {
+			return true
+		}
+	}
+	return false
+}
+
 // monitorDeviceData 监控设备数据
 func (m *Manager) monitorDeviceData() {
 	m.mutex.RLock()
