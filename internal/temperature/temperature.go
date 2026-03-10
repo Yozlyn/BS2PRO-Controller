@@ -221,3 +221,46 @@ func CalculateTargetRPM(temperature int, fanCurve []types.FanCurvePoint) int {
 
 	return 0
 }
+
+// CalculateOffset 根据温度线性插值计算风扇曲线偏移量
+func CalculateOffset(temperature int, fanCurve []types.FanCurvePoint) int {
+	if len(fanCurve) < 2 {
+		return 0
+	}
+
+	if temperature <= fanCurve[0].Temperature {
+		return fanCurve[0].Offset
+	}
+
+	lastPoint := fanCurve[len(fanCurve)-1]
+	if temperature >= lastPoint.Temperature {
+		return lastPoint.Offset
+	}
+
+	for i := 0; i < len(fanCurve)-1; i++ {
+		p1 := fanCurve[i]
+		p2 := fanCurve[i+1]
+
+		if temperature >= p1.Temperature && temperature <= p2.Temperature {
+			ratio := float64(temperature-p1.Temperature) / float64(p2.Temperature-p1.Temperature)
+			offset := float64(p1.Offset) + ratio*float64(p2.Offset-p1.Offset)
+			// 偏移量取整为100的倍数
+			return int((offset+50)/100) * 100
+		}
+	}
+
+	return 0
+}
+
+// ApplyOffset 将偏移量应用到基础转速上，结果钳位到 1000-4000 且为100的倍数
+func ApplyOffset(baseRPM, offset int) int {
+	rpm := baseRPM + offset
+	rpm = int((float64(rpm)+50)/100) * 100
+	if rpm < 1000 {
+		return 1000
+	}
+	if rpm > 4000 {
+		return 4000
+	}
+	return rpm
+}

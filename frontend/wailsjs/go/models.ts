@@ -112,6 +112,7 @@ export namespace types {
 	export class FanCurvePoint {
 	    temperature: number;
 	    rpm: number;
+	    offset: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new FanCurvePoint(source);
@@ -121,6 +122,7 @@ export namespace types {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.temperature = source["temperature"];
 	        this.rpm = source["rpm"];
+	        this.offset = source["offset"];
 	    }
 	}
 	export class AppConfig {
@@ -141,6 +143,7 @@ export namespace types {
 	    customSpeedEnabled: boolean;
 	    customSpeedRPM: number;
 	    ignoreDeviceOnReconnect: boolean;
+	    fanCurveOffsetEnabled: boolean;
 	    rgbConfig?: RGBConfig;
 	
 	    static createFrom(source: any = {}) {
@@ -166,6 +169,7 @@ export namespace types {
 	        this.customSpeedEnabled = source["customSpeedEnabled"];
 	        this.customSpeedRPM = source["customSpeedRPM"];
 	        this.ignoreDeviceOnReconnect = source["ignoreDeviceOnReconnect"];
+	        this.fanCurveOffsetEnabled = source["fanCurveOffsetEnabled"];
 	        this.rgbConfig = this.convertValues(source["rgbConfig"], RGBConfig);
 	    }
 	
@@ -253,6 +257,7 @@ export namespace types {
 	    updateTime: number;
 	    bridgeOk: boolean;
 	    bridgeMessage: string;
+	    autoOffset: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new TemperatureData(source);
@@ -266,6 +271,7 @@ export namespace types {
 	        this.updateTime = source["updateTime"];
 	        this.bridgeOk = source["bridgeOk"];
 	        this.bridgeMessage = source["bridgeMessage"];
+	        this.autoOffset = source["autoOffset"];
 	    }
 	}
 

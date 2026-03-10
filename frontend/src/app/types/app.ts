@@ -4,6 +4,7 @@
 export interface FanCurvePoint {
   temperature: number; // 温度 °C
   rpm: number;         // 转速 RPM
+  offset: number;      // 转速偏移 RPM
 }
 
 // 风扇数据结构
@@ -30,13 +31,15 @@ export interface TemperatureData {
   updateTime: number;  // 更新时间戳
   bridgeOk?: boolean;  // 桥接程序是否正常
   bridgeMessage?: string; // 桥接程序提示
+  autoOffset?: number; // 自动偏移量
 }
 
 // 应用配置
 export interface AppConfig {
-  autoControl: boolean;         // 智能变频开关
-  fanCurve: FanCurvePoint[];   // 风扇曲线
-  gearLight: boolean;          // 挡位灯
+  autoControl: boolean;              // 智能变频开关
+  fanCurve: FanCurvePoint[];        // 风扇曲线
+  fanCurveOffsetEnabled: boolean;   // 风扇曲线偏移开关
+  gearLight: boolean;               // 挡位灯
   powerOnStart: boolean;       // 通电自启动
   windowsAutoStart: boolean;   // Windows开机自启动
   smartStartStop: string;      // 智能启停

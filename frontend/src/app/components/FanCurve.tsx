@@ -8,6 +8,7 @@ import {
   InformationCircleIcon,
   ArrowDownTrayIcon,
   ArrowUpTrayIcon,
+  AdjustmentsHorizontalIcon,
 } from '@heroicons/react/24/outline';
 import { apiService } from '../services/api';
 import { logger } from '../services/logger';
@@ -260,14 +261,37 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
     }
   }, [config.fanCurve, fanData?.maxGear, isInitialized]);
 
+  // 同步后端自动偏移变更到本地曲线（不影响 RPM 编辑状态）
+  useEffect(() => {
+    if (!isInitialized || !config.fanCurveOffsetEnabled) return;
+    setLocalCurve(prev => {
+      let changed = false;
+      const next = prev.map((p, i) => {
+        const cfgOffset = config.fanCurve[i]?.offset ?? 0;
+        if (p.offset !== cfgOffset) {
+          changed = true;
+          return { ...p, offset: cfgOffset };
+        }
+        return p;
+      });
+      return changed ? next : prev;
+    });
+  }, [config.fanCurve, config.fanCurveOffsetEnabled, isInitialized]);
+
   // 图表数据 - 使用本地状态
-  const chartData = useMemo(() => 
-    localCurve.map((point, index) => ({
-      temperature: point.temperature,
-      rpm: point.rpm,
-      index
-    })),
-  [localCurve]);
+  const chartData = useMemo(() => {
+    return localCurve.map((point, index) => {
+      // 当自动偏移开启时，使用每个控制点自身的偏移值
+      const offset = config.fanCurveOffsetEnabled ? (point.offset || 0) : 0;
+      const effectiveRpm = Math.min(rpmRange.max, Math.max(rpmRange.min, Math.round((point.rpm + offset) / 100) * 100));
+      return {
+        temperature: point.temperature,
+        rpm: point.rpm,
+        effectiveRpm: config.fanCurveOffsetEnabled ? effectiveRpm : undefined,
+        index
+      };
+    });
+  }, [localCurve, config.fanCurveOffsetEnabled, rpmRange]);
 
   // 更新单个点
   const updatePoint = useCallback((index: number, newRpm: number) => {
@@ -281,6 +305,19 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
     });
     setHasUnsavedChanges(true);
   }, [rpmRange]);
+
+  // 更新单个点的偏移量
+  const updateOffset = useCallback((index: number, newOffset: number) => {
+    const clampedOffset = Math.round(newOffset / 100) * 100;
+    
+    setLocalCurve(prev => {
+      if (prev[index]?.offset === clampedOffset) return prev;
+      const newCurve = [...prev];
+      newCurve[index] = { ...newCurve[index], offset: clampedOffset };
+      return newCurve;
+    });
+    setHasUnsavedChanges(true);
+  }, []);
 
   // 拖拽处理
   const handleDragStart = useCallback((index: number) => {
@@ -370,20 +407,20 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
   // 重置曲线
   const resetCurve = useCallback(() => {
     const defaultCurve: types.FanCurvePoint[] = [
-      { temperature: 30, rpm: 1000 },
-      { temperature: 35, rpm: 1200 },
-      { temperature: 40, rpm: 1400 },
-      { temperature: 45, rpm: 1600 },
-      { temperature: 50, rpm: 1800 },
-      { temperature: 55, rpm: 2000 },
-      { temperature: 60, rpm: Math.min(2300, rpmRange.max) },
-      { temperature: 65, rpm: Math.min(2600, rpmRange.max) },
-      { temperature: 70, rpm: Math.min(2900, rpmRange.max) },
-      { temperature: 75, rpm: Math.min(3200, rpmRange.max) },
-      { temperature: 80, rpm: Math.min(3500, rpmRange.max) },
-      { temperature: 85, rpm: Math.min(3800, rpmRange.max) },
-      { temperature: 90, rpm: rpmRange.max },
-      { temperature: 95, rpm: rpmRange.max },
+      { temperature: 30, rpm: 1000, offset: 0 },
+      { temperature: 35, rpm: 1200, offset: 0 },
+      { temperature: 40, rpm: 1400, offset: 0 },
+      { temperature: 45, rpm: 1600, offset: 0 },
+      { temperature: 50, rpm: 1800, offset: 100 },
+      { temperature: 55, rpm: 2000, offset: 100 },
+      { temperature: 60, rpm: Math.min(2300, rpmRange.max), offset: 100 },
+      { temperature: 65, rpm: Math.min(2600, rpmRange.max), offset: 200 },
+      { temperature: 70, rpm: Math.min(2900, rpmRange.max), offset: 200 },
+      { temperature: 75, rpm: Math.min(3200, rpmRange.max), offset: 200 },
+      { temperature: 80, rpm: Math.min(3500, rpmRange.max), offset: 300 },
+      { temperature: 85, rpm: Math.min(3800, rpmRange.max), offset: 200 },
+      { temperature: 90, rpm: rpmRange.max, offset: 0 },
+      { temperature: 95, rpm: rpmRange.max, offset: 0 },
     ];
     
     setLocalCurve(defaultCurve);
@@ -469,6 +506,17 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
       onConfigChange(newConfig);
     } catch (error) {
       logger.error('设置智能变频失败', 'FanCurve', error);
+    }
+  }, [config, onConfigChange]);
+
+  // 风扇曲线偏移开关切换
+  const handleOffsetToggle = useCallback(async (enabled: boolean) => {
+    try {
+      const newConfig = types.AppConfig.createFrom({ ...config, fanCurveOffsetEnabled: enabled });
+      await apiService.updateConfig(newConfig);
+      onConfigChange(newConfig);
+    } catch (error) {
+      logger.error('设置风扇偏移失败', 'FanCurve', error);
     }
   }, [config, onConfigChange]);
 
@@ -617,7 +665,10 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
                 }}
               />
               <Tooltip 
-                formatter={(value: number) => [`${value} RPM`, '目标转速']}
+                formatter={(value: number, name: string) => {
+                  if (name === 'effectiveRpm') return [`${value} RPM`, '实际转速(含偏移)'];
+                  return [`${value} RPM`, '基础转速'];
+                }}
                 labelFormatter={(value) => `温度: ${value}°C`}
                 contentStyle={{
                   backgroundColor: isDarkMode ? 'rgba(17, 24, 39, 0.95)' : 'rgba(255, 255, 255, 0.95)',
@@ -646,7 +697,21 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
                 dot={CustomDot}
                 activeDot={false}
                 isAnimationActive={false}
+                name="rpm"
               />
+              {config.fanCurveOffsetEnabled && (
+                <Line 
+                  type="monotone" 
+                  dataKey="effectiveRpm" 
+                  stroke="#f59e0b" 
+                  strokeWidth={2}
+                  strokeDasharray="6 3"
+                  dot={false}
+                  activeDot={false}
+                  isAnimationActive={false}
+                  name="effectiveRpm"
+                />
+              )}
             </LineChart>
           </ResponsiveContainer>
           
@@ -697,6 +762,34 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
         </Button>
       </div>
 
+      {/* 偏移开关 */}
+      <div className="flex items-center justify-between mb-2 px-1">
+        <div className="flex items-center gap-1.5">
+          <AdjustmentsHorizontalIcon className="w-3.5 h-3.5 text-amber-500" />
+          <span className="text-xs font-medium text-gray-700 dark:text-gray-300">自动曲线偏移</span>
+          {config.fanCurveOffsetEnabled && (
+            <Badge variant="warning" size="sm">
+              {(temperature?.autoOffset ?? 0) >= 0 ? '+' : ''}{temperature?.autoOffset ?? 0} RPM
+            </Badge>
+          )}
+        </div>
+        <ToggleSwitch
+          enabled={config.fanCurveOffsetEnabled ?? false}
+          onChange={(val) => { handleOffsetToggle(val); }}
+        />
+      </div>
+      {config.fanCurveOffsetEnabled && (
+        <div className="mb-2 px-1">
+          <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 mb-1">
+            <span className="inline-block w-4 border-t-2 border-dashed border-amber-500" />
+            <span>橙色虚线 = 基础转速 + 各点偏移量（实际生效转速）</span>
+          </div>
+          <div className="text-xs text-gray-500 dark:text-gray-400">
+            系统按温度区间独立调节偏移量，收敛后自动锁定；温度突变时重新调整
+          </div>
+        </div>
+      )}
+
       {/* 拖拽提示 */}
       <div className="text-center mb-2">
         <span className="text-xs text-gray-400 dark:text-gray-500 px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700/50">
@@ -714,7 +807,12 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
         </div>
         
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-1.5">
-          {localCurve.map((point, index) => (
+          {localCurve.map((point, index) => {
+            const autoOffset = config.fanCurveOffsetEnabled ? (temperature?.autoOffset || 0) : 0;
+            const effectiveRpm = config.fanCurveOffsetEnabled
+              ? Math.min(rpmRange.max, Math.max(rpmRange.min, Math.round((point.rpm + autoOffset) / 100) * 100))
+              : point.rpm;
+            return (
             <div
               key={`control-${point.temperature}`}
               className={clsx(
@@ -766,8 +864,21 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
                   }}
                 />
               </div>
+
+              {/* 自动偏移信息展示 */}
+              {config.fanCurveOffsetEnabled && (
+                <div className="mt-1 pt-1 border-t border-gray-200 dark:border-gray-600">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-amber-600 dark:text-amber-400">偏移</span>
+                    <span className="text-[10px] text-gray-400">
+                      ={effectiveRpm}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
@@ -781,6 +892,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
               <li className="text-xs">• <strong>拖拽图表点：</strong>直接在图表上拖拽蓝色圆点调整转速</li>
               <li className="text-xs">• <strong>数值输入：</strong>在下方控制点卡片中直接输入精确值</li>
               <li className="text-xs">• <strong>滑块调节：</strong>使用滑块快速微调</li>
+              <li className="text-xs">• <strong>自动偏移：</strong>开启后系统根据温度趋势自动调整偏移量，无需手动设置</li>
               <li className="text-xs">• <strong>保存设置：</strong>修改后点击保存按钮应用更改</li>
             </ul>
             <p className="text-xs text-blue-600 dark:text-blue-400 pt-0.5 border-t border-blue-200 dark:border-blue-700">

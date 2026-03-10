@@ -20,6 +20,7 @@ import {
   FireIcon,
   ClockIcon,
   ChartBarIcon,
+  AdjustmentsHorizontalIcon,
 } from '@heroicons/react/24/outline';
 import { apiService } from '../services/api';
 import { logger } from '../services/logger';
@@ -269,6 +270,16 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
     }
   }, [config, onConfigChange]);
 
+  const handleFanCurveOffsetChange = useCallback(async (enabled: boolean) => {
+    try {
+      const newConfig = types.AppConfig.createFrom({ ...config, fanCurveOffsetEnabled: enabled });
+      await apiService.updateConfig(newConfig);
+      onConfigChange(newConfig);
+    } catch (error) {
+      logger.error('设置风扇曲线偏移失败', 'ControlPanel', error);
+    }
+  }, [config, onConfigChange]);
+
   return (
     <>
       <Card className="p-6">
@@ -311,6 +322,20 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
                 />
               </div>
             </div>
+          )}
+
+          {config.autoControl && (
+            <SettingItem
+              icon={<AdjustmentsHorizontalIcon className="w-5 h-5 text-amber-600 dark:text-amber-400" />}
+              iconBgActive="bg-amber-100 dark:bg-amber-900/30"
+              iconBgInactive="bg-gray-100 dark:bg-gray-700"
+              title="自动曲线偏移"
+              description="根据温度趋势自动调整风扇偏移量，温度上升加速、稳定/下降节能降速"
+              enabled={config.fanCurveOffsetEnabled ?? false}
+              onChange={handleFanCurveOffsetChange}
+              disabled={!isConnected}
+              color="orange"
+            />
           )}
 
           <div className="py-4">
