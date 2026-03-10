@@ -128,6 +128,12 @@ func (l *trayLoggerAdapter) GetLogDir() string {
 	return ""
 }
 
+// GUI 日志包装函数，保持与其他包调用层数一致
+func logInfo(format string, v ...any)  { guiLogger.Infof(format, v...) }
+func logError(format string, v ...any) { guiLogger.Errorf(format, v...) }
+func logWarn(format string, v ...any)  { guiLogger.Warnf(format, v...) }
+func logDebug(format string, v ...any) { guiLogger.Debugf(format, v...) }
+
 // NewApp 创建 GUI 应用实例
 func NewApp(icon []byte) *App {
 	return &App{
@@ -140,7 +146,7 @@ func NewApp(icon []byte) *App {
 // startup 应用启动时调用
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	guiLogger.Info("=== BS2PRO GUI 启动 ===")
+	logInfo("GUI 启动 版本: %s", version.Get())
 
 	// 初始化自启动管理器
 	adapter := &trayLoggerAdapter{sugar: guiLogger, installDir: config.GetInstallDir()}
@@ -148,7 +154,7 @@ func (a *App) startup(ctx context.Context) {
 
 	// 连接到后台核心服务
 	if err := a.ipcClient.Connect(); err != nil {
-		guiLogger.Errorf("连接核心服务失败: %v", err)
+		logError("连接核心服务失败: %v", err)
 		runtime.EventsEmit(ctx, "core-service-error", "无法连接到核心服务，请检查服务是否运行")
 
 		go func() {
@@ -157,7 +163,7 @@ func (a *App) startup(ctx context.Context) {
 			runtime.EventsEmit(ctx, "config-update", defaultCfg)
 		}()
 	} else {
-		guiLogger.Info("已成功连接到核心服务 IPC 管道")
+		logInfo("已成功连接到核心服务 IPC 管道")
 		a.ipcClient.SetEventHandler(a.handleCoreEvent)
 
 		// 启动时主动拉取一次配置，同步状态
@@ -173,6 +179,9 @@ func (a *App) startup(ctx context.Context) {
 		a.mutex.Unlock()
 		go func() {
 			runtime.EventsEmit(ctx, "config-update", cfg)
+			if a.isConnected {
+				runtime.EventsEmit(ctx, "device-connected", status["currentData"])
+			}
 		}()
 	}
 
@@ -182,7 +191,7 @@ func (a *App) startup(ctx context.Context) {
 	// 启动连接健康检查
 	go a.startConnectionHealthCheck()
 
-	guiLogger.Info("=== BS2PRO GUI 启动完成 ===")
+	logInfo("GUI 启动完成")
 }
 
 // InitSystemTray 初始化系统托盘
@@ -239,7 +248,7 @@ func (a *App) InitSystemTray() {
 }
 
 func (a *App) OnWindowClosing(ctx context.Context) bool {
-	guiLogger.Info("拦截到窗口关闭动作，隐藏至托盘...")
+	logInfo("拦截到窗口关闭动作，隐藏至托盘...")
 	a.HideWindow()
 	return true
 }
@@ -249,7 +258,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 	defer func() {
 		if r := recover(); r != nil {
 			if guiLogger != nil {
-				guiLogger.Errorf("[handleCoreEvent] panic: %v, event type: %v", r, event.Type)
+				logError("[handleCoreEvent] panic: %v, event type: %v", r, event.Type)
 			}
 		}
 	}()
@@ -257,7 +266,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 		return
 	}
 
-	guiLogger.Debug("handleCoreEvent: 收到事件类型=%v", event.Type)
+	logDebug("handleCoreEvent: 收到事件类型=%v", event.Type)
 
 	switch event.Type {
 	case ipc.EventFanDataUpdate:
@@ -298,7 +307,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 		runtime.EventsEmit(a.ctx, "device-error", errMsg)
 
 	case ipc.EventServiceConnected:
-		guiLogger.Info("核心服务连接事件 - UI 刷新")
+		logInfo("核心服务连接事件 - UI 刷新")
 		// 服务重新连接后，延迟半秒等待硬件和 IPC 管道彻底就绪
 		go func() {
 			time.Sleep(500 * time.Millisecond)
@@ -325,7 +334,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 		}()
 
 	case ipc.EventServiceDisconnected:
-		guiLogger.Warn("核心服务断开事件")
+		logWarn("核心服务断开事件")
 		a.mutex.Lock()
 		a.isConnected = false
 		a.mutex.Unlock()
@@ -387,6 +396,7 @@ func (a *App) GetConfig() AppConfig {
 	}
 	var cfg AppConfig
 	json.Unmarshal(resp.Data, &cfg)
+	cfg.Repair() // 补全缺失部分配置项
 	return cfg
 }
 
@@ -550,21 +560,20 @@ func (a *App) GetCurrentFanData() *FanData {
 	return &fanData
 }
 
-func (a *App) SetWindowsAutoStart(enable bool) error {
+func (a *App) getAutostartManager() *autostart.Manager {
 	if a.autostartManager == nil {
-		// 防御性空指针保护
 		adapter := &trayLoggerAdapter{sugar: guiLogger, installDir: config.GetInstallDir()}
 		a.autostartManager = autostart.NewManager(adapter, config.GetInstallDir())
 	}
-	return a.autostartManager.SetWindowsAutoStart(enable)
+	return a.autostartManager
+}
+
+func (a *App) SetWindowsAutoStart(enable bool) error {
+	return a.getAutostartManager().SetWindowsAutoStart(enable)
 }
 
 func (a *App) CheckWindowsAutoStart() bool {
-	if a.autostartManager == nil {
-		adapter := &trayLoggerAdapter{sugar: guiLogger, installDir: config.GetInstallDir()}
-		a.autostartManager = autostart.NewManager(adapter, config.GetInstallDir())
-	}
-	return a.autostartManager.CheckWindowsAutoStart()
+	return a.getAutostartManager().CheckWindowsAutoStart()
 }
 
 func (a *App) IsAutoStartLaunch() bool {
@@ -584,7 +593,7 @@ func (a *App) HideWindow() {
 }
 
 func (a *App) QuitApp() {
-	guiLogger.Info("控制台请求退出")
+	logInfo("控制台请求退出")
 	if a.trayManager != nil {
 		a.trayManager.Quit()
 	}
@@ -597,7 +606,7 @@ func (a *App) QuitApp() {
 
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		guiLogger.Info("控制台已退出")
+		logInfo("控制台已退出")
 		// Sync 将 zap 缓冲区写入磁盘，避免日志在os.Exit时丢失
 		guiLogger.Sync()
 		os.Exit(0)
@@ -606,32 +615,32 @@ func (a *App) QuitApp() {
 
 // RestartCoreService 重启核心服务
 func (a *App) RestartCoreService() bool {
-	guiLogger.Info("控制台请求重启核心服务")
+	logInfo("控制台请求重启核心服务")
 	resp, err := a.sendRequest(ipc.ReqRestartService, nil)
 	if err != nil {
-		guiLogger.Errorf("发送重启核心服务请求失败: %v", err)
+		logError("发送重启核心服务请求失败: %v", err)
 		return false
 	} else if resp != nil && resp.Success {
-		guiLogger.Info("核心服务重启请求已发送，服务将在后台异步重启")
+		logInfo("核心服务重启请求已发送，服务将在后台异步重启")
 		return true
 	} else {
-		guiLogger.Warn("重启核心服务请求未成功")
+		logWarn("重启核心服务请求未成功")
 		return false
 	}
 }
 
 // StopCoreService 停止核心服务
 func (a *App) StopCoreService() bool {
-	guiLogger.Info("控制台请求停止核心服务")
+	logInfo("控制台请求停止核心服务")
 	resp, err := a.sendRequest(ipc.ReqStopService, nil)
 	if err != nil {
-		guiLogger.Errorf("发送停止核心服务请求失败: %v", err)
+		logError("发送停止核心服务请求失败: %v", err)
 		return false
 	} else if resp != nil && resp.Success {
-		guiLogger.Info("核心服务停止请求已发送，服务将在后台异步停止")
+		logInfo("核心服务停止请求已发送，服务将在后台异步停止")
 		return true
 	} else {
-		guiLogger.Warn("停止核心服务请求未成功")
+		logWarn("停止核心服务请求未成功")
 		return false
 	}
 }
@@ -714,17 +723,17 @@ func (a *App) LogFrontendError(level, source, message, stack string) {
 	entry := fmt.Sprintf("[frontend][%s] %s\n  stack: %s", source, message, stack)
 	switch level {
 	case "warn":
-		guiLogger.Warn(entry)
+		logWarn("%s", entry)
 	case "crash", "error":
-		guiLogger.Error(entry)
+		logError("%s", entry)
 	default:
-		guiLogger.Info(entry)
+		logInfo("%s", entry)
 	}
 }
 
 // startConnectionHealthCheck 启动连接健康检查
 func (a *App) startConnectionHealthCheck() {
-	guiLogger.Info("启动核心服务Watchdog")
+	logInfo("启动核心服务Watchdog")
 
 	baseInterval := 3 * time.Second     // 基础探测频率：3秒
 	maxInterval := 30 * time.Second     // 最大探测频率：30秒 (休眠期)
@@ -737,7 +746,7 @@ func (a *App) startConnectionHealthCheck() {
 		if !a.ipcClient.IsConnected() {
 			// 检查是否超过最大重试时长
 			if !retryStopped && time.Since(retryStartTime) > maxRetryDuration {
-				guiLogger.Warn("Watchdog: 超过5分钟仍无法连接核心服务，停止重试")
+				logWarn("Watchdog: 超过5分钟仍无法连接核心服务，停止重试")
 				if a.ctx != nil {
 					runtime.EventsEmit(a.ctx, "core-service-error", "核心服务长时间无法连接，请检查服务状态")
 				}
@@ -750,10 +759,10 @@ func (a *App) startConnectionHealthCheck() {
 				continue
 			}
 
-			guiLogger.Info("Watchdog: 检测到核心服务离线，尝试重连...")
+			logInfo("Watchdog: 检测到核心服务离线，尝试重连...")
 
 			if err := a.ipcClient.Connect(); err == nil {
-				guiLogger.Info("Watchdog: 核心服务重连成功！")
+				logInfo("Watchdog: 核心服务重连成功！")
 				currentInterval = baseInterval // 重连成功，重置为基础心跳频率
 				retryStartTime = time.Now()    // 重置重试开始时间
 				retryStopped = false           // 重置停止标志
@@ -769,13 +778,13 @@ func (a *App) startConnectionHealthCheck() {
 				if currentInterval > maxInterval {
 					currentInterval = maxInterval
 				}
-				guiLogger.Debug("Watchdog: 重连失败，下次探测将在 %v 后进行", currentInterval)
+				logDebug("Watchdog: 重连失败，下次探测将在 %v 后进行", currentInterval)
 			}
 		} else {
 			// 连接正常的情况下，发送Ping测活
 			resp, err := a.sendRequest(ipc.ReqPing, nil)
 			if err != nil || resp == nil || !resp.Success {
-				guiLogger.Error("Watchdog: Ping 失败，判定管道假死，主动切断连接")
+				logError("Watchdog: Ping 失败，判定管道假死，主动切断连接")
 				a.ipcClient.Close()
 				currentInterval = baseInterval // 准备立即开始快速重连
 				retryStartTime = time.Now()    // 重置重试开始时间
