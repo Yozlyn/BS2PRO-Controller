@@ -565,7 +565,7 @@ func (a *CoreApp) ConnectDevice() bool {
 		a.isConnected = true
 		a.mutex.Unlock()
 
-		// 重置自动偏移控制器（新连接从零开始）
+		// 重置自动偏移控制器
 		a.fanOffsetCtrl.Reset()
 
 		if deviceInfo != nil && a.ipcServer != nil {
@@ -974,6 +974,10 @@ func (a *CoreApp) startTemperatureMonitoring() {
 	if intervalSec < 1 {
 		intervalSec = 1
 	}
+	// 偏移开启时，采样间隔至少3秒，与偏移控制器冷却期对齐
+	if cfg.FanCurveOffsetEnabled && intervalSec < 3 {
+		intervalSec = 3
+	}
 	updateInterval := time.Duration(intervalSec) * time.Second
 	ticker := time.NewTicker(updateInterval)
 
@@ -1032,7 +1036,7 @@ func (a *CoreApp) startTemperatureMonitoring() {
 
 				// 将自动偏移量附加到温度数据中，供 GUI 展示
 				if cfg.FanCurveOffsetEnabled {
-					temp.AutoOffset = a.fanOffsetCtrl.GetOffset()
+					temp.AutoOffset = temperature.CalculateOffset(temp.MaxTemp, cfg.FanCurve)
 				}
 
 				if a.ipcServer != nil {
@@ -1070,6 +1074,10 @@ func (a *CoreApp) startTemperatureMonitoring() {
 				// 原有的风扇速度控制
 				if cfg.AutoControl && temp.MaxTemp > 0 {
 					newSampleCount := max(cfg.TempSampleCount, 1)
+					// 偏移开启时，平滑采样至少3次，确保趋势数据不受噪声干扰
+					if cfg.FanCurveOffsetEnabled && newSampleCount < 3 {
+						newSampleCount = 3
+					}
 					if newSampleCount != sampleCount {
 						sampleCount = newSampleCount
 						tempSamples = make([]int, 0, sampleCount)
@@ -1078,6 +1086,10 @@ func (a *CoreApp) startTemperatureMonitoring() {
 					newIntervalSec := cfg.TempUpdateRate
 					if newIntervalSec < 1 {
 						newIntervalSec = 1
+					}
+					// 偏移开启时，采样间隔至少3秒
+					if cfg.FanCurveOffsetEnabled && newIntervalSec < 3 {
+						newIntervalSec = 3
 					}
 					if newIntervalSec != currentIntervalSec {
 						currentIntervalSec = newIntervalSec
@@ -1109,7 +1121,11 @@ func (a *CoreApp) startTemperatureMonitoring() {
 								deviceMaxRPM = 4000
 							}
 						}
-						autoOffset := a.fanOffsetCtrl.Update(avgTemp, targetRPM, 1000, deviceMaxRPM)
+						changed := a.fanOffsetCtrl.Update(avgTemp, cfg.FanCurve, 1000, deviceMaxRPM)
+						if changed {
+							a.configManager.Update(cfg)
+						}
+						autoOffset := temperature.CalculateOffset(avgTemp, cfg.FanCurve)
 						targetRPM = temperature.ApplyOffset(targetRPM, autoOffset)
 					}
 					if targetRPM > 0 {
