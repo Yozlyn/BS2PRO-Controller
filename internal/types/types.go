@@ -5,6 +5,7 @@ package types
 type FanCurvePoint struct {
 	Temperature int `json:"temperature"` // 温度 °C
 	RPM         int `json:"rpm"`         // 转速 RPM
+	Offset      int `json:"offset"`      // 转速偏移 RPM (100的整数倍)
 }
 
 // FanData 风扇数据结构
@@ -38,6 +39,7 @@ type TemperatureData struct {
 	UpdateTime int64  `json:"updateTime"`    // 更新时间戳
 	BridgeOk   bool   `json:"bridgeOk"`      // 桥接程序是否正常
 	BridgeMsg  string `json:"bridgeMessage"` // 桥接故障提示
+	AutoOffset int    `json:"autoOffset"`    // 自动偏移量 (由 fanoffset 控制器计算)
 }
 
 // BridgeTemperatureData 桥接程序返回的温度数据
@@ -84,6 +86,7 @@ type AppConfig struct {
 	CustomSpeedEnabled      bool            `json:"customSpeedEnabled"`      // 自定义转速开关
 	CustomSpeedRPM          int             `json:"customSpeedRPM"`          // 自定义转速值(无上下限)
 	IgnoreDeviceOnReconnect bool            `json:"ignoreDeviceOnReconnect"` // 断连后忽略设备状态(保持APP配置)
+	FanCurveOffsetEnabled   bool            `json:"fanCurveOffsetEnabled"`   // 风扇曲线偏移开关
 	RGBConfig               *RGBConfig      `json:"rgbConfig"`               // RGB灯效配置
 }
 
@@ -126,20 +129,20 @@ var GearCommands = map[string][]GearCommand{
 // GetDefaultFanCurve 获取默认风扇曲线
 func GetDefaultFanCurve() []FanCurvePoint {
 	return []FanCurvePoint{
-		{Temperature: 30, RPM: 1000},
-		{Temperature: 35, RPM: 1200},
-		{Temperature: 40, RPM: 1400},
-		{Temperature: 45, RPM: 1600},
-		{Temperature: 50, RPM: 1800},
-		{Temperature: 55, RPM: 2000},
-		{Temperature: 60, RPM: 2300},
-		{Temperature: 65, RPM: 2600},
-		{Temperature: 70, RPM: 2900},
-		{Temperature: 75, RPM: 3200},
-		{Temperature: 80, RPM: 3500},
-		{Temperature: 85, RPM: 3800},
-		{Temperature: 90, RPM: 4000},
-		{Temperature: 95, RPM: 4000},
+		{Temperature: 30, RPM: 1000, Offset: 0},
+		{Temperature: 35, RPM: 1200, Offset: 0},
+		{Temperature: 40, RPM: 1400, Offset: 0},
+		{Temperature: 45, RPM: 1600, Offset: 0},
+		{Temperature: 50, RPM: 1800, Offset: 100},
+		{Temperature: 55, RPM: 2000, Offset: 100},
+		{Temperature: 60, RPM: 2300, Offset: 100},
+		{Temperature: 65, RPM: 2600, Offset: 200},
+		{Temperature: 70, RPM: 2900, Offset: 200},
+		{Temperature: 75, RPM: 3200, Offset: 200},
+		{Temperature: 80, RPM: 3500, Offset: 300},
+		{Temperature: 85, RPM: 3800, Offset: 200},
+		{Temperature: 90, RPM: 4000, Offset: 0},
+		{Temperature: 95, RPM: 4000, Offset: 0},
 	}
 }
 
@@ -163,11 +166,54 @@ func GetDefaultConfig(isAutoStart bool) AppConfig {
 		CustomSpeedEnabled:      false,
 		CustomSpeedRPM:          2000,
 		IgnoreDeviceOnReconnect: true, // 默认开启，防止断连后误判用户手动切换
+		FanCurveOffsetEnabled:   false,
 		RGBConfig: &RGBConfig{
 			Mode:       "smart",
 			Colors:     []RGBColorConfig{{R: 0, G: 0, B: 255}, {R: 255, G: 0, B: 0}, {R: 0, G: 255, B: 0}},
 			Speed:      "medium",
 			Brightness: 100,
 		},
+	}
+}
+
+// Repair 检查并修复配置中缺失的值
+func (c *AppConfig) Repair() {
+	defaultCfg := GetDefaultConfig(c.WindowsAutoStart)
+
+	if len(c.FanCurve) == 0 {
+		c.FanCurve = defaultCfg.FanCurve
+	}
+	if c.SmartStartStop == "" {
+		c.SmartStartStop = defaultCfg.SmartStartStop
+	}
+	if c.TempUpdateRate <= 0 {
+		c.TempUpdateRate = defaultCfg.TempUpdateRate
+	}
+	if c.TempSampleCount <= 0 {
+		c.TempSampleCount = defaultCfg.TempSampleCount
+	}
+	if c.ManualGear == "" {
+		c.ManualGear = defaultCfg.ManualGear
+	}
+	if c.ManualLevel == "" {
+		c.ManualLevel = defaultCfg.ManualLevel
+	}
+	if c.CustomSpeedRPM <= 0 {
+		c.CustomSpeedRPM = defaultCfg.CustomSpeedRPM
+	}
+
+	if c.RGBConfig == nil {
+		c.RGBConfig = defaultCfg.RGBConfig
+	} else {
+		if c.RGBConfig.Mode == "" {
+			c.RGBConfig.Mode = defaultCfg.RGBConfig.Mode
+		}
+		if len(c.RGBConfig.Colors) == 0 {
+			c.RGBConfig.Colors = defaultCfg.RGBConfig.Colors
+		}
+		if c.RGBConfig.Speed == "" {
+			c.RGBConfig.Speed = defaultCfg.RGBConfig.Speed
+		}
+		// 不对 Brightness 为 0 强行覆盖，因为可能用户就想设0亮度
 	}
 }

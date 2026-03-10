@@ -32,21 +32,21 @@ func (m *Manager) Load(isAutoStart bool) types.AppConfig {
 
 	installConfigPath := filepath.Join(m.installDir, "config", "config.json")
 
-	m.logInfo("尝试从默认目录加载配置: %s", defaultConfigPath)
+	m.logDebug("尝试从默认目录加载配置: %s", defaultConfigPath)
 
 	// 先尝试从默认目录加载
 	if m.tryLoadFromPath(defaultConfigPath) {
 		m.config.ConfigPath = defaultConfigPath
-		m.logInfo("从默认目录加载配置成功: %s", defaultConfigPath)
+		m.logInfo("配置加载成功: %s", defaultConfigPath)
 		return m.config
 	}
 
-	m.logInfo("从默认目录加载配置失败，尝试从安装目录加载: %s", installConfigPath)
+	m.logDebug("从默认目录加载配置失败，尝试从安装目录加载: %s", installConfigPath)
 
 	// 默认目录失败，尝试从安装目录加载
 	if m.tryLoadFromPath(installConfigPath) {
 		m.config.ConfigPath = installConfigPath
-		m.logInfo("从安装目录加载配置成功: %s", installConfigPath)
+		m.logInfo("配置加载成功: %s", installConfigPath)
 		return m.config
 	}
 
@@ -79,6 +79,9 @@ func (m *Manager) tryLoadFromPath(configPath string) bool {
 		m.logError("解析配置文件失败 %s: %v", configPath, err)
 		return false
 	}
+
+	// 补全缺失的配置项，兼容不同版本的配置文件
+	config.Repair()
 
 	m.config = config
 	return true
@@ -161,6 +164,12 @@ func (m *Manager) logDebug(format string, v ...any) {
 		m.logger.Debug(format, v...)
 	}
 }
+
+// func (m *Manager) logWarn(format string, v ...any) {
+// 	if m.logger != nil {
+// 		m.logger.Warn(format, v...)
+// 	}
+// }
 
 // GetInstallDir 获取安装目录
 func GetInstallDir() string {

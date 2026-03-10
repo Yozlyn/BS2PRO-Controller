@@ -164,7 +164,7 @@ func (s *Server) acceptConnections() {
 		conn, err := s.listener.Accept()
 		if err != nil {
 			if s.running.Load() {
-				s.logError("接受连接失败: %v", err)
+				s.logWarn("接受连接失败: %v", err)
 				continue
 			}
 			return
@@ -317,6 +317,12 @@ func (s *Server) logError(format string, v ...any) {
 func (s *Server) logDebug(format string, v ...any) {
 	if s.logger != nil {
 		s.logger.Debug(format, v...)
+	}
+}
+
+func (s *Server) logWarn(format string, v ...any) {
+	if s.logger != nil {
+		s.logger.Warn(format, v...)
 	}
 }
 
@@ -513,10 +519,10 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 
 		if !connected || conn == nil {
 			// 已断连，尝试重新建立连接
-			c.logInfo("SendRequest: 连接已断开，尝试重新连接")
+			c.logWarn("SendRequest: 连接已断开，尝试重新连接")
 			if err := c.Connect(); err != nil {
 				lastErr = fmt.Errorf("重连失败: %v", err)
-				c.logInfo("SendRequest: 重连失败: %v", err)
+				c.logWarn("SendRequest: 重连失败: %v", err)
 				continue
 			}
 			c.connMutex.RLock()
@@ -524,7 +530,7 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 			c.connMutex.RUnlock()
 			if conn == nil {
 				lastErr = fmt.Errorf("重连后连接仍为空")
-				c.logInfo("SendRequest: 重连后连接仍为空")
+				c.logError("SendRequest: 重连后连接仍为空")
 				continue
 			}
 			c.logInfo("SendRequest: 重连成功")
@@ -539,7 +545,7 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 		_, err = conn.Write(append(reqBytes, '\n'))
 		if err != nil {
 			lastErr = err
-			c.logDebug("发送请求失败 (尝试 %d): %v", attempt+1, err)
+			c.logWarn("发送请求失败 (尝试 %d): %v", attempt+1, err)
 			// 标记断连，下次循环重连
 			c.connMutex.Lock()
 			c.connected = false
@@ -597,6 +603,18 @@ func (c *Client) logInfo(format string, v ...any) {
 func (c *Client) logDebug(format string, v ...any) {
 	if c.logger != nil {
 		c.logger.Debug(format, v...)
+	}
+}
+
+func (c *Client) logError(format string, v ...any) {
+	if c.logger != nil {
+		c.logger.Error(format, v...)
+	}
+}
+
+func (c *Client) logWarn(format string, v ...any) {
+	if c.logger != nil {
+		c.logger.Warn(format, v...)
 	}
 }
 

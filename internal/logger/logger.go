@@ -224,7 +224,7 @@ func NewCustomLogger(debugMode bool, installDir string) (*CustomLogger, error) {
 	core := zapcore.NewTee(cores...)
 
 	// 创建 logger
-	logger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
+	logger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(2))
 	sugar := logger.Sugar()
 
 	return &CustomLogger{

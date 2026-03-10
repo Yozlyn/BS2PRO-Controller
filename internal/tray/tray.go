@@ -222,6 +222,34 @@ func (m *Manager) createMenu() (items *MenuItems, err error) {
 	return items, nil
 }
 
+// triggerMenuAction 执行菜单动作，并在执行期间临时禁用菜单项，5秒后自动恢复。
+func (m *Manager) triggerMenuAction(item *systray.MenuItem, busyTitle, originalTitle string, fn func()) {
+	if fn == nil {
+		m.logWarn("菜单动作未定义: %s", originalTitle)
+		return
+	}
+	fn()
+	m.uiMutex.Lock()
+	item.SetTitle(busyTitle)
+	item.Disable()
+	m.uiMutex.Unlock()
+	go func() {
+		time.Sleep(5 * time.Second)
+		m.uiMutex.Lock()
+		item.SetTitle(originalTitle)
+		item.Enable()
+		m.uiMutex.Unlock()
+	}()
+}
+
+// formatMenuValue 将数值格式化为菜单标题，为0时显示"无数据"。
+func formatMenuValue(label string, value int, unit string) string {
+	if value > 0 {
+		return fmt.Sprintf("%s: %d%s", label, value, unit)
+	}
+	return label + ": 无数据"
+}
+
 func (m *Manager) handleMenuEvents() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -260,42 +288,10 @@ func (m *Manager) handleMenuEvents() {
 			}
 		case <-m.menuStopCore.ClickedCh:
 			m.logDebug("托盘菜单: 关闭核心")
-			if m.onStopCore != nil {
-				m.onStopCore()
-				// 更新菜单项文本，添加"（关闭中）"提示
-				m.uiMutex.Lock()
-				m.menuStopCore.SetTitle("关闭核心（关闭中）")
-				m.menuStopCore.Disable() // 禁用菜单项，防止重复点击
-				m.uiMutex.Unlock()
-
-				// 5秒后恢复菜单项
-				go func() {
-					time.Sleep(5 * time.Second)
-					m.uiMutex.Lock()
-					m.menuStopCore.SetTitle("关闭核心")
-					m.menuStopCore.Enable()
-					m.uiMutex.Unlock()
-				}()
-			}
+			m.triggerMenuAction(m.menuStopCore, "关闭核心（关闭中）", "关闭核心", m.onStopCore)
 		case <-m.menuQuitAll.ClickedCh:
 			m.logDebug("托盘菜单: 重启核心")
-			if m.onQuitAll != nil {
-				m.onQuitAll()
-				// 更新菜单项文本，添加"（重启中）"提示
-				m.uiMutex.Lock()
-				m.menuQuitAll.SetTitle("重启核心（重启中）")
-				m.menuQuitAll.Disable() // 禁用菜单项，防止重复点击
-				m.uiMutex.Unlock()
-
-				// 5秒后恢复菜单项
-				go func() {
-					time.Sleep(5 * time.Second)
-					m.uiMutex.Lock()
-					m.menuQuitAll.SetTitle("重启核心")
-					m.menuQuitAll.Enable()
-					m.uiMutex.Unlock()
-				}()
-			}
+			m.triggerMenuAction(m.menuQuitAll, "重启核心（重启中）", "重启核心", m.onQuitAll)
 		case <-m.done:
 			return
 		}
@@ -322,7 +318,7 @@ func (m *Manager) updateMenuStatus() {
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						m.logError("托盘更新时发生错误（可能是正在退出）: %v", r)
+						m.logWarn("托盘更新时发生错误（可能是正在退出）: %v", r)
 					}
 				}()
 
@@ -340,23 +336,9 @@ func (m *Manager) updateMenuStatus() {
 					m.menuItems.DeviceStatus.SetTitle("设备状态: 未连接")
 				}
 
-				if status.CPUTemp > 0 {
-					m.menuItems.CPUTemperature.SetTitle(fmt.Sprintf("CPU温度: %d°C", status.CPUTemp))
-				} else {
-					m.menuItems.CPUTemperature.SetTitle("CPU温度: 无数据")
-				}
-
-				if status.GPUTemp > 0 {
-					m.menuItems.GPUTemperature.SetTitle(fmt.Sprintf("GPU温度: %d°C", status.GPUTemp))
-				} else {
-					m.menuItems.GPUTemperature.SetTitle("GPU温度: 无数据")
-				}
-
-				if status.CurrentRPM > 0 {
-					m.menuItems.FanSpeed.SetTitle(fmt.Sprintf("风扇转速: %d RPM", status.CurrentRPM))
-				} else {
-					m.menuItems.FanSpeed.SetTitle("风扇转速: 无数据")
-				}
+				m.menuItems.CPUTemperature.SetTitle(formatMenuValue("CPU温度", status.CPUTemp, "°C"))
+				m.menuItems.GPUTemperature.SetTitle(formatMenuValue("GPU温度", status.GPUTemp, "°C"))
+				m.menuItems.FanSpeed.SetTitle(formatMenuValue("风扇转速", int(status.CurrentRPM), " RPM"))
 
 				if status.AutoControlState {
 					m.menuItems.AutoControl.Check()
@@ -464,7 +446,7 @@ func (m *Manager) Quit() {
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				m.logDebug("退出托盘时发生错误（可忽略）: %v", r)
+				m.logWarn("退出托盘时发生错误（可忽略）: %v", r)
 			}
 		}()
 		systray.Quit()
@@ -484,12 +466,12 @@ func (m *Manager) CheckHealth() {
 
 	lastRefresh := atomic.LoadInt64(&m.lastIconRefresh)
 	if lastRefresh > 0 && time.Now().Unix()-lastRefresh > 90 {
-		m.logInfo("检测到托盘图标长时间未刷新，尝试刷新")
+		m.logWarn("检测到托盘图标长时间未刷新，尝试刷新")
 		m.refreshTrayIcon()
 	}
 
 	if atomic.LoadInt32(&m.consecutiveFails) >= 3 {
-		m.logError("检测到托盘连续失败，尝试刷新图标")
+		m.logWarn("检测到托盘连续失败，尝试刷新图标")
 		m.refreshTrayIcon()
 	}
 }
@@ -509,5 +491,11 @@ func (m *Manager) logError(format string, v ...any) {
 func (m *Manager) logDebug(format string, v ...any) {
 	if m.logger != nil {
 		m.logger.Debug(format, v...)
+	}
+}
+
+func (m *Manager) logWarn(format string, v ...any) {
+	if m.logger != nil {
+		m.logger.Warn(format, v...)
 	}
 }

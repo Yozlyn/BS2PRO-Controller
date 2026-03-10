@@ -82,15 +82,12 @@ func (m *Manager) Connect() (bool, map[string]string) {
 
 	var connectedProductID uint16
 	for _, productID := range productIDs {
-		m.logInfo("正在连接设备 - 厂商ID: 0x%04X, 产品ID: 0x%04X", VendorID, productID)
-
 		device, err = hid.OpenFirst(VendorID, productID)
 		if err == nil {
-			m.logInfo("成功连接到产品ID: 0x%04X", productID)
 			connectedProductID = productID
 			break
 		} else {
-			m.logError("产品ID 0x%04X 连接失败: %v", productID, err)
+			m.logWarn("产品ID 0x%04X 连接失败: %v", productID, err)
 		}
 	}
 
@@ -110,20 +107,24 @@ func (m *Manager) Connect() (bool, map[string]string) {
 	// 获取设备信息
 	deviceInfo, err := device.GetDeviceInfo()
 	var info map[string]string
+
+	manufacturerName := "Flydigi"
+	productName := "Flydigi " + modelName
+
 	if err == nil {
-		m.logInfo("设备连接成功: %s %s (型号: %s)", deviceInfo.MfrStr, deviceInfo.ProductStr, modelName)
+		m.logInfo("设备已连接: %s (VID:0x%04X, PID:0x%04X)", productName, VendorID, connectedProductID)
 		info = map[string]string{
-			"manufacturer": deviceInfo.MfrStr,
-			"product":      deviceInfo.ProductStr,
+			"manufacturer": manufacturerName,
+			"product":      productName,
 			"serial":       deviceInfo.SerialNbr,
 			"model":        modelName,
 			"productId":    fmt.Sprintf("0x%04X", connectedProductID),
 		}
 	} else {
-		m.logError("设备连接成功,但获取设备信息失败: %v", err)
+		m.logWarn("设备已连接但获取设备信息失败: %v", err)
 		info = map[string]string{
-			"manufacturer": "Unknown",
-			"product":      modelName,
+			"manufacturer": manufacturerName,
+			"product":      productName,
 			"serial":       "Unknown",
 			"model":        modelName,
 			"productId":    fmt.Sprintf("0x%04X", connectedProductID),
@@ -447,6 +448,34 @@ func (m *Manager) parseWorkMode(mode uint8) string {
 	}
 }
 
+// getDevice 安全地获取已连接的设备引用，未连接时返回 nil。
+func (m *Manager) getDevice() *hid.Device {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	if !m.isConnected || m.device == nil {
+		return nil
+	}
+	return m.device
+}
+
+// writeCmd 向设备发送命令（自动零填充至23字节，支持更长命令）。
+func (m *Manager) writeCmd(cmd []byte) bool {
+	dev := m.getDevice()
+	if dev == nil {
+		return false
+	}
+	size := 23
+	if len(cmd) > size {
+		size = len(cmd)
+	}
+	buf := make([]byte, size)
+	copy(buf, cmd)
+	m.deviceOpMutex.Lock()
+	_, err := dev.Write(buf)
+	m.deviceOpMutex.Unlock()
+	return err == nil
+}
+
 // validateAndGetDevice 验证转速合法性并在持锁状态下取出设备引用。
 // 返回 (nil, false) 表示验证失败，调用方应直接返回 false。
 func (m *Manager) validateAndGetDevice(rpm int, label string) (*hid.Device, bool) {
@@ -518,109 +547,51 @@ func (m *Manager) SetCustomFanSpeed(rpm int) bool {
 
 // EnterAutoMode 进入自动模式
 func (m *Manager) EnterAutoMode() error {
-	m.mutex.Lock()
-	if !m.isConnected || m.device == nil {
-		m.mutex.Unlock()
+	dev := m.getDevice()
+	if dev == nil {
 		return fmt.Errorf("设备未连接")
 	}
-	dev := m.device
-	m.mutex.Unlock()
-
-	enterModeCmd := []byte{0x02, 0x5A, 0xA5, 0x23, 0x02, 0x25, 0x00}
-	enterModeCmd = append(enterModeCmd, make([]byte, 23-len(enterModeCmd))...)
+	buf := make([]byte, 23)
+	copy(buf, []byte{0x02, 0x5A, 0xA5, 0x23, 0x02, 0x25, 0x00})
 	m.deviceOpMutex.Lock()
-	_, err := dev.Write(enterModeCmd)
+	_, err := dev.Write(buf)
 	m.deviceOpMutex.Unlock()
 	return err
 }
 
 func (m *Manager) SetManualGear(gear, level string) bool {
-	m.mutex.Lock()
-	if !m.isConnected || m.device == nil {
-		m.mutex.Unlock()
-		return false
-	}
-	dev := m.device
-	m.mutex.Unlock()
-
 	commands, exists := types.GearCommands[gear]
 	if !exists {
 		return false
 	}
-
 	var selectedCommand *types.GearCommand
 	for i := range commands {
-		cmd := &commands[i]
-		if strings.Contains(cmd.Name, level) {
-			selectedCommand = cmd
+		if strings.Contains(commands[i].Name, level) {
+			selectedCommand = &commands[i]
 			break
 		}
 	}
-
 	if selectedCommand == nil {
 		return false
 	}
-
-	cmdWithReportID := append([]byte{0x02}, selectedCommand.Command...)
-	m.deviceOpMutex.Lock()
-	_, err := dev.Write(cmdWithReportID)
-	m.deviceOpMutex.Unlock()
-	return err == nil
+	return m.writeCmd(append([]byte{0x02}, selectedCommand.Command...))
 }
 
 func (m *Manager) SetGearLight(enabled bool) bool {
-	m.mutex.Lock()
-	if !m.isConnected || m.device == nil {
-		m.mutex.Unlock()
-		return false
-	}
-	dev := m.device
-	m.mutex.Unlock()
-
-	var cmd []byte
 	if enabled {
-		cmd = []byte{0x02, 0x5A, 0xA5, 0x48, 0x03, 0x01, 0x4C}
-	} else {
-		cmd = []byte{0x02, 0x5A, 0xA5, 0x48, 0x03, 0x00, 0x4B}
+		return m.writeCmd([]byte{0x02, 0x5A, 0xA5, 0x48, 0x03, 0x01, 0x4C})
 	}
-	cmd = append(cmd, make([]byte, 23-len(cmd))...)
-	m.deviceOpMutex.Lock()
-	_, err := dev.Write(cmd)
-	m.deviceOpMutex.Unlock()
-	return err == nil
+	return m.writeCmd([]byte{0x02, 0x5A, 0xA5, 0x48, 0x03, 0x00, 0x4B})
 }
 
 func (m *Manager) SetPowerOnStart(enabled bool) bool {
-	m.mutex.Lock()
-	if !m.isConnected || m.device == nil {
-		m.mutex.Unlock()
-		return false
-	}
-	dev := m.device
-	m.mutex.Unlock()
-
-	var cmd []byte
 	if enabled {
-		cmd = []byte{0x02, 0x5A, 0xA5, 0x0C, 0x03, 0x02, 0x11}
-	} else {
-		cmd = []byte{0x02, 0x5A, 0xA5, 0x0C, 0x03, 0x01, 0x10}
+		return m.writeCmd([]byte{0x02, 0x5A, 0xA5, 0x0C, 0x03, 0x02, 0x11})
 	}
-	cmd = append(cmd, make([]byte, 23-len(cmd))...)
-	m.deviceOpMutex.Lock()
-	_, err := dev.Write(cmd)
-	m.deviceOpMutex.Unlock()
-	return err == nil
+	return m.writeCmd([]byte{0x02, 0x5A, 0xA5, 0x0C, 0x03, 0x01, 0x10})
 }
 
 func (m *Manager) SetSmartStartStop(mode string) bool {
-	m.mutex.Lock()
-	if !m.isConnected || m.device == nil {
-		m.mutex.Unlock()
-		return false
-	}
-	dev := m.device
-	m.mutex.Unlock()
-
 	var cmd []byte
 	switch mode {
 	case "off":
@@ -632,22 +603,10 @@ func (m *Manager) SetSmartStartStop(mode string) bool {
 	default:
 		return false
 	}
-	cmd = append(cmd, make([]byte, 23-len(cmd))...)
-	m.deviceOpMutex.Lock()
-	_, err := dev.Write(cmd)
-	m.deviceOpMutex.Unlock()
-	return err == nil
+	return m.writeCmd(cmd)
 }
 
 func (m *Manager) SetBrightness(percentage int) bool {
-	m.mutex.Lock()
-	if !m.isConnected || m.device == nil {
-		m.mutex.Unlock()
-		return false
-	}
-	dev := m.device
-	m.mutex.Unlock()
-
 	var cmd []byte
 	switch percentage {
 	case 0:
@@ -661,11 +620,7 @@ func (m *Manager) SetBrightness(percentage int) bool {
 		m.logError("SetBrightness: 不支持的亮度值 %d，仅支持0或100", percentage)
 		return false
 	}
-	cmd = append(cmd, make([]byte, 23-len(cmd))...)
-	m.deviceOpMutex.Lock()
-	_, err := dev.Write(cmd)
-	m.deviceOpMutex.Unlock()
-	return err == nil
+	return m.writeCmd(cmd)
 }
 
 func (m *Manager) logInfo(format string, v ...any) {
