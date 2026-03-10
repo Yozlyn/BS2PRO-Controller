@@ -15,6 +15,7 @@ import (
 	"github.com/TIANLI0/BS2PRO-Controller/internal/asus"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/config"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/device"
+	"github.com/TIANLI0/BS2PRO-Controller/internal/fanoffset"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/ipc"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/logger"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/rgb"
@@ -53,6 +54,9 @@ type CoreApp struct {
 
 	// 重连代数：每次发起新的重连任务时递增，用于取消过期的重连协程
 	reconnectGen int32
+
+	// 自动偏移控制器
+	fanOffsetCtrl *fanoffset.Controller
 }
 
 func NewCoreApp(debugMode bool) *CoreApp {
@@ -72,8 +76,6 @@ func NewCoreApp(debugMode bool) *CoreApp {
 			customLogger.Warn("日志目录初始化失败，已降级到临时目录: %s", fallbackDir)
 		}
 	} else {
-		customLogger.Info("核心服务启动")
-		customLogger.Info("安装目录: %s", installDir)
 		customLogger.CleanOldLogs()
 	}
 
@@ -85,6 +87,8 @@ func NewCoreApp(debugMode bool) *CoreApp {
 	deviceMgr := device.NewManager(customLogger)
 	tempReader := temperature.NewReader(asusClient, customLogger)
 	configMgr := config.NewManager(installDir, customLogger)
+
+	fanOffsetCtrl := fanoffset.New(fanoffset.DefaultConfig(), customLogger)
 
 	app := &CoreApp{
 		ctx:                context.Background(),
@@ -100,6 +104,7 @@ func NewCoreApp(debugMode bool) *CoreApp {
 		lastDeviceMode:     "",
 		userSetAutoControl: false,
 		debugMode:          debugMode,
+		fanOffsetCtrl:      fanOffsetCtrl,
 		guiLastResponse:    time.Now().Unix(),
 		cleanupChan:        make(chan bool, 1),
 		guiMonitorEnabled:  true,
@@ -109,8 +114,7 @@ func NewCoreApp(debugMode bool) *CoreApp {
 }
 
 func (a *CoreApp) Start() error {
-	a.logInfo("=== BS2PRO 核心服务(Windows Service) 启动 ===")
-	a.logInfo("版本: %s", version.Get())
+	a.logInfo("核心服务启动 版本: %s, 安装目录: %s", version.Get(), config.GetInstallDir())
 
 	cfg := a.configManager.Load(false)
 	if cfg.DebugMode {
@@ -545,18 +549,7 @@ func (a *CoreApp) applyConfigOnConnect() {
 		a.deviceManager.SetBrightness(cfg.Brightness)
 	}
 
-	if cfg.RGBConfig != nil {
-		params := ipc.SetRGBModeParams{
-			Mode:       cfg.RGBConfig.Mode,
-			Colors:     make([]ipc.RGBColorParam, len(cfg.RGBConfig.Colors)),
-			Speed:      cfg.RGBConfig.Speed,
-			Brightness: cfg.RGBConfig.Brightness,
-		}
-		for i, color := range cfg.RGBConfig.Colors {
-			params.Colors[i] = ipc.RGBColorParam{R: color.R, G: color.G, B: color.B}
-		}
-		a.SetRGBMode(params)
-	}
+	a.SetRGBMode(rgbParamsFromConfig(cfg))
 
 	a.logInfo("配置应用完成")
 }
@@ -571,6 +564,9 @@ func (a *CoreApp) ConnectDevice() bool {
 		a.mutex.Lock()
 		a.isConnected = true
 		a.mutex.Unlock()
+
+		// 重置自动偏移控制器（新连接从零开始）
+		a.fanOffsetCtrl.Reset()
 
 		if deviceInfo != nil && a.ipcServer != nil {
 			a.ipcServer.BroadcastEvent(ipc.EventDeviceConnected, deviceInfo)
@@ -600,6 +596,9 @@ func (a *CoreApp) DisconnectDevice() {
 	a.isConnected = false
 	a.lastDeviceMode = ""
 	a.mutex.Unlock()
+
+	// 重置自动偏移控制器
+	a.fanOffsetCtrl.Reset()
 
 	a.deviceManager.Disconnect()
 	if a.ipcServer != nil {
@@ -761,56 +760,45 @@ func (a *CoreApp) SetCustomSpeed(enabled bool, rpm int) error {
 	return err
 }
 
-func (a *CoreApp) SetGearLight(enabled bool) bool {
-	if !a.deviceManager.SetGearLight(enabled) {
+func (a *CoreApp) applyDeviceFlag(deviceCall func() bool, updateCfg func(*types.AppConfig)) bool {
+	if !deviceCall() {
 		return false
 	}
 	cfg := a.configManager.Get()
-	cfg.GearLight = enabled
+	updateCfg(&cfg)
 	a.configManager.Update(cfg)
 	if a.ipcServer != nil {
 		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
 	}
 	return true
+}
+
+func (a *CoreApp) SetGearLight(enabled bool) bool {
+	return a.applyDeviceFlag(
+		func() bool { return a.deviceManager.SetGearLight(enabled) },
+		func(cfg *types.AppConfig) { cfg.GearLight = enabled },
+	)
 }
 
 func (a *CoreApp) SetPowerOnStart(enabled bool) bool {
-	if !a.deviceManager.SetPowerOnStart(enabled) {
-		return false
-	}
-	cfg := a.configManager.Get()
-	cfg.PowerOnStart = enabled
-	a.configManager.Update(cfg)
-	if a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-	}
-	return true
+	return a.applyDeviceFlag(
+		func() bool { return a.deviceManager.SetPowerOnStart(enabled) },
+		func(cfg *types.AppConfig) { cfg.PowerOnStart = enabled },
+	)
 }
 
 func (a *CoreApp) SetSmartStartStop(mode string) bool {
-	if !a.deviceManager.SetSmartStartStop(mode) {
-		return false
-	}
-	cfg := a.configManager.Get()
-	cfg.SmartStartStop = mode
-	a.configManager.Update(cfg)
-	if a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-	}
-	return true
+	return a.applyDeviceFlag(
+		func() bool { return a.deviceManager.SetSmartStartStop(mode) },
+		func(cfg *types.AppConfig) { cfg.SmartStartStop = mode },
+	)
 }
 
 func (a *CoreApp) SetBrightness(percentage int) bool {
-	if !a.deviceManager.SetBrightness(percentage) {
-		return false
-	}
-	cfg := a.configManager.Get()
-	cfg.Brightness = percentage
-	a.configManager.Update(cfg)
-	if a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-	}
-	return true
+	return a.applyDeviceFlag(
+		func() bool { return a.deviceManager.SetBrightness(percentage) },
+		func(cfg *types.AppConfig) { cfg.Brightness = percentage },
+	)
 }
 
 func (a *CoreApp) SetRGBMode(params ipc.SetRGBModeParams) bool {
@@ -1042,6 +1030,11 @@ func (a *CoreApp) startTemperatureMonitoring() {
 				a.currentTemp = temp
 				a.mutex.Unlock()
 
+				// 将自动偏移量附加到温度数据中，供 GUI 展示
+				if cfg.FanCurveOffsetEnabled {
+					temp.AutoOffset = a.fanOffsetCtrl.GetOffset()
+				}
+
 				if a.ipcServer != nil {
 					go func(t types.TemperatureData) {
 						defer func() { recover() }()
@@ -1050,7 +1043,7 @@ func (a *CoreApp) startTemperatureMonitoring() {
 				}
 
 				// 分离式 RGB 智能温控判定
-				if cfg.RGBConfig != nil && cfg.RGBConfig.Mode == "smart" && temp.MaxTemp > 0 {
+				if cfg.RGBConfig.Mode == "smart" && temp.MaxTemp > 0 {
 					var level byte = 1
 					if temp.MaxTemp < 60 {
 						level = 1
@@ -1101,6 +1094,24 @@ func (a *CoreApp) startTemperatureMonitoring() {
 					avgTemp = avgTemp / len(tempSamples)
 
 					targetRPM := temperature.CalculateTargetRPM(avgTemp, cfg.FanCurve)
+					if cfg.FanCurveOffsetEnabled {
+						// 计算设备最大RPM (根据挡位)
+						deviceMaxRPM := 4000
+						if fd := a.deviceManager.GetCurrentFanData(); fd != nil {
+							switch fd.MaxGear {
+							case "静音":
+								deviceMaxRPM = 1900
+							case "标准":
+								deviceMaxRPM = 2760
+							case "强劲":
+								deviceMaxRPM = 3300
+							case "超频":
+								deviceMaxRPM = 4000
+							}
+						}
+						autoOffset := a.fanOffsetCtrl.Update(avgTemp, targetRPM, 1000, deviceMaxRPM)
+						targetRPM = temperature.ApplyOffset(targetRPM, autoOffset)
+					}
 					if targetRPM > 0 {
 						if fd := a.deviceManager.GetCurrentFanData(); fd != nil && fd.WorkMode == "挡位工作模式" {
 							a.logDebug("智能变频监控：设备进入手动模式，重新进入自动模式")
@@ -1187,71 +1198,53 @@ func (a *CoreApp) logDebug(format string, v ...any) {
 	}
 }
 
+// func (a *CoreApp) logWarn(format string, v ...any) {
+// 	if a.logger != nil {
+// 		a.logger.Warn(format, v...)
+// 	}
+// }
+
+// rgbParamsFromConfig 从配置构造 RGB 参数
+func rgbParamsFromConfig(cfg types.AppConfig) ipc.SetRGBModeParams {
+	params := ipc.SetRGBModeParams{
+		Mode:       cfg.RGBConfig.Mode,
+		Colors:     make([]ipc.RGBColorParam, len(cfg.RGBConfig.Colors)),
+		Speed:      cfg.RGBConfig.Speed,
+		Brightness: cfg.RGBConfig.Brightness,
+	}
+	for i, c := range cfg.RGBConfig.Colors {
+		params.Colors[i] = ipc.RGBColorParam{R: c.R, G: c.G, B: c.B}
+	}
+	return params
+}
+
 // restoreCurrentRGB 恢复当前配置的RGB设置
 func (a *CoreApp) restoreCurrentRGB() {
 	if !a.isConnected {
 		return
 	}
-	cfg := a.configManager.Get()
-	if cfg.RGBConfig != nil {
-		params := ipc.SetRGBModeParams{
-			Mode:       cfg.RGBConfig.Mode,
-			Colors:     make([]ipc.RGBColorParam, len(cfg.RGBConfig.Colors)),
-			Speed:      cfg.RGBConfig.Speed,
-			Brightness: cfg.RGBConfig.Brightness,
-		}
-		for i, color := range cfg.RGBConfig.Colors {
-			params.Colors[i] = ipc.RGBColorParam{R: color.R, G: color.G, B: color.B}
-		}
-		a.SetRGBMode(params)
-	}
+	a.SetRGBMode(rgbParamsFromConfig(a.configManager.Get()))
 }
 
-func (a *CoreApp) RestartService() bool {
-	a.logInfo("收到重启服务请求，通过 powershell Restart-Service 触发完整重启")
+func (a *CoreApp) runWindowsServiceCommand(verb string) bool {
 	const serviceName = "BS2PRO_CoreService"
-
+	a.logInfo("收到%s服务请求，通过 powershell %s-Service 触发", verb, verb)
 	go func() {
-		psCommand := fmt.Sprintf(`Restart-Service -Name "%s" -Force`, serviceName)
-		cmd := exec.Command("powershell",
-			"-NonInteractive",
-			"-Command", psCommand,
-		)
+		cmd := exec.Command("powershell", "-NonInteractive",
+			"-Command", fmt.Sprintf(`%s-Service -Name "%s" -Force`, verb, serviceName))
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			HideWindow:    true,
 			CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
 		}
 		if err := cmd.Start(); err != nil {
-			a.logError("启动 powershell Restart-Service 失败: %v", err)
-			return
+			a.logError("启动 powershell %s-Service 失败: %v", verb, err)
 		}
 	}()
-
 	return true
 }
 
-func (a *CoreApp) StopService() bool {
-	a.logInfo("收到停止服务请求，通过 powershell Stop-Service 触发停止")
-	const serviceName = "BS2PRO_CoreService"
-
-	go func() {
-		psCommand := fmt.Sprintf(`Stop-Service -Name "%s" -Force`, serviceName)
-		cmd := exec.Command("powershell",
-			"-NonInteractive",
-			"-Command", psCommand,
-		)
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			HideWindow:    true,
-			CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
-		}
-		if err := cmd.Start(); err != nil {
-			a.logError("启动 powershell Stop-Service 失败: %v", err)
-			return
-		}
-	}()
-
-	return true
-}
+func (a *CoreApp) RestartService() bool { return a.runWindowsServiceCommand("Restart") }
+func (a *CoreApp) StopService() bool    { return a.runWindowsServiceCommand("Stop") }
 
 // safeGo 安全地启动一个goroutine，自动捕获并报告panic
 func (a *CoreApp) safeGo(name string, fn func()) {
