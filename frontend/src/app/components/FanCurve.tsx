@@ -216,13 +216,13 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
   const chartBoundsRef = useRef<{ top: number; bottom: number; left: number; right: number; yMin: number; yMax: number } | null>(null);
 
   // 静态 RPM 范围 - 仅在首次初始化时计算
-  const [rpmRange, setRpmRange] = useState({ min: 1000, max: 4000, ticks: [1000, 1500, 2000, 2500, 3000, 3500, 4000] });
+  const [rpmRange, setRpmRange] = useState({ min: 500, max: 4000, ticks: [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000] });
   
   // 温度范围
   const temperatureRange = useMemo(() => ({
     min: 30,
-    max: 95,
-    ticks: Array.from({ length: 14 }, (_, i) => 30 + i * 5)
+    max: 100,
+    ticks: Array.from({ length: 15 }, (_, i) => 30 + i * 5)
   }), []);
 
   useEffect(() => {
@@ -243,7 +243,13 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
   // 仅在组件首次加载时初始化
   useEffect(() => {
     if (!isInitialized && config.fanCurve && config.fanCurve.length > 0) {
-      setLocalCurve([...config.fanCurve]);
+      // 迁移兼容：若曲线最高温度点 < 100°C，自动追加 100°C 点
+      const curve = [...config.fanCurve];
+      const lastPoint = curve[curve.length - 1];
+      if (lastPoint.temperature < 100) {
+        curve.push({ temperature: 100, rpm: lastPoint.rpm, offset: 0 });
+      }
+      setLocalCurve(curve);
       setIsInitialized(true);
       
       // 初始化 RPM 范围
@@ -255,8 +261,8 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
           case '超频': maxRpm = 4000; break;
         }
         const step = 500;
-        const ticks = Array.from({ length: Math.floor((maxRpm - 1000) / step) + 1 }, (_, i) => 1000 + i * step);
-        setRpmRange({ min: 1000, max: maxRpm, ticks });
+        const ticks = Array.from({ length: Math.floor((maxRpm - 500) / step) + 1 }, (_, i) => 500 + i * step);
+        setRpmRange({ min: 500, max: maxRpm, ticks });
       }
     }
   }, [config.fanCurve, fanData?.maxGear, isInitialized]);
@@ -407,7 +413,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
   // 重置曲线
   const resetCurve = useCallback(() => {
     const defaultCurve: types.FanCurvePoint[] = [
-      { temperature: 30, rpm: 1000, offset: 0 },
+      { temperature: 30, rpm: 500, offset: 0 },
       { temperature: 35, rpm: 1200, offset: 0 },
       { temperature: 40, rpm: 1400, offset: 0 },
       { temperature: 45, rpm: 1600, offset: 0 },
@@ -421,6 +427,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
       { temperature: 85, rpm: Math.min(3800, rpmRange.max), offset: 200 },
       { temperature: 90, rpm: rpmRange.max, offset: 0 },
       { temperature: 95, rpm: rpmRange.max, offset: 0 },
+      { temperature: 100, rpm: rpmRange.max, offset: 0 },
     ];
     
     setLocalCurve(defaultCurve);
@@ -806,11 +813,11 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
           </span>
         </div>
         
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-1.5">
+        <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-5 lg:grid-cols-5 gap-1.5">
           {localCurve.map((point, index) => {
-            const autoOffset = config.fanCurveOffsetEnabled ? (temperature?.autoOffset || 0) : 0;
+            const pointOffset = config.fanCurveOffsetEnabled ? (point.offset || 0) : 0;
             const effectiveRpm = config.fanCurveOffsetEnabled
-              ? Math.min(rpmRange.max, Math.max(rpmRange.min, Math.round((point.rpm + autoOffset) / 100) * 100))
+              ? Math.min(rpmRange.max, Math.max(rpmRange.min, Math.round((point.rpm + pointOffset) / 100) * 100))
               : point.rpm;
             return (
             <div

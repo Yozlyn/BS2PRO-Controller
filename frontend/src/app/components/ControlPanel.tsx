@@ -387,7 +387,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
                       value={customSpeedInput}
                       onChange={(e) => setCustomSpeedInput(Number(e.target.value))}
                       className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all duration-200"
-                      min={1000}
+                      min={500}
                       max={4000}
                       step={50}
                     />
