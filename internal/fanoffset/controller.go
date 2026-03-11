@@ -2,6 +2,7 @@
 package fanoffset
 
 import (
+	"math"
 	"sync"
 	"time"
 
@@ -50,7 +51,7 @@ type Config struct {
 	SpikeThreshold int
 	// MaxOffset: 每个控制点最大正偏移 (默认 500 RPM)
 	MaxOffset int
-	// MinOffset: 每个控制点最大负偏移 (默认 -300 RPM)，注意是负值
+	// MinOffset: 每个控制点最大负偏移 (默认 -300 RPM)
 	MinOffset int
 	// Step: 每次调整步长 (默认 100 RPM)
 	Step int
@@ -84,7 +85,7 @@ func DefaultConfig() Config {
 		LowTempThreshold:  45,
 		RPMHighRatio:      0.85,
 		ConvergeCount:     3,
-		ConvergeExpiry:    5 * time.Minute,
+		ConvergeExpiry:    30 * time.Minute,
 		AdjustCooldown:    3 * time.Second,
 	}
 }
@@ -146,7 +147,7 @@ func (c *Controller) Update(currentTemp int, fanCurve []types.FanCurvePoint, min
 	}
 
 	// 确保 zones 数组与曲线点数匹配
-	c.ensureZones(len(fanCurve))
+	c.ensureZones(fanCurve)
 
 	now := time.Now()
 
@@ -185,6 +186,8 @@ func (c *Controller) Update(currentTemp int, fanCurve []types.FanCurvePoint, min
 		if now.Sub(zone.convergedAt) >= c.config.ConvergeExpiry {
 			zone.converged = false
 			zone.stableCount = 0
+			// 过期后强制进入冷却期
+			zone.lastAdjustAt = now
 			if c.logger != nil {
 				c.logger.Debug("偏移区间 %d°C 收敛过期(%v)，重新评估", point.Temperature, c.config.ConvergeExpiry)
 			}
@@ -200,57 +203,64 @@ func (c *Controller) Update(currentTemp int, fanCurve []types.FanCurvePoint, min
 	}
 
 	trend := c.calculateTrend()
-	effectiveRPM := point.RPM + point.Offset
+	// 计算插值后的真实有效RPM
+	interpolatedRPM := c.interpolatedEffectiveRPM(currentTemp, fanCurve, zoneIdx)
 	highRPMLine := int(float64(maxRPM) * c.config.RPMHighRatio)
 	oldOffset := point.Offset
 
 	// 决策矩阵
+	var action string
 	switch {
 
-	// 温度快速上升 + RPM有空间 → 加速散热
-	case trend >= c.config.RiseFastDelta && effectiveRPM < highRPMLine:
-		c.adjustZoneOffset(point, c.config.Step, minRPM, maxRPM)
+	// 低温保护
+	case currentTemp < c.config.LowTempThreshold:
+		if point.Offset > 0 {
+			c.adjustZoneOffset(point, -c.config.Step, minRPM, maxRPM)
+			action = "低温回收"
+		}
 
-	// 温度快速上升 + RPM已满 → 保持
-	case trend >= c.config.RiseFastDelta && effectiveRPM >= highRPMLine:
-		// RPM已接近上限，加偏移无意义
-
-	// 温度缓慢上升 + RPM有空间 → 预加偏移
-	case trend > c.config.StableDelta && effectiveRPM < highRPMLine:
+	// 温度快速上升 + RPM未满 → 立即加速散热
+	case trend >= c.config.RiseFastDelta && interpolatedRPM < highRPMLine:
 		c.adjustZoneOffset(point, c.config.Step, minRPM, maxRPM)
+		action = "快速上升+加速"
+
+	// 温度快速上升 + RPM已满 → 无加速空间，保持
+	case trend >= c.config.RiseFastDelta:
+		action = "快速上升+RPM满"
+
+	// 温度缓慢上升 + RPM未满 → 预加偏移
+	case trend > c.config.StableDelta && interpolatedRPM < highRPMLine:
+		c.adjustZoneOffset(point, c.config.Step, minRPM, maxRPM)
+		action = "缓慢上升+加速"
 
 	// 温度缓慢上升 + RPM已满 → 保持
-	case trend > c.config.StableDelta && effectiveRPM >= highRPMLine:
-		// 不调整
+	case trend > c.config.StableDelta:
+		action = "缓慢上升+RPM满"
 
-	// 温度稳定 + 高温(≥阈值) + RPM有空间 → 安全裕度不够，继续加
-	case abs(trend) <= c.config.StableDelta && currentTemp >= c.config.HighTempThreshold && effectiveRPM < highRPMLine:
-		c.adjustZoneOffset(point, c.config.Step, minRPM, maxRPM)
+	// 温度稳定 + 有正偏移或插值转速超基准 → 试探性下探
+	// 温度稳定意味着当前散热足够，不需要继续加偏移
+	case abs(trend) <= c.config.StableDelta && (point.Offset > 0 || interpolatedRPM > point.RPM):
+		c.probeDescend(zoneIdx, currentTemp, fanCurve, minRPM, maxRPM, now)
+		action = "稳定+下探"
 
-	// 温度稳定 + 高温 + RPM已满 → 保持
-	case abs(trend) <= c.config.StableDelta && currentTemp >= c.config.HighTempThreshold:
-		// 不调整
-
-	// 温度稳定 + 非高温 → 保持当前偏移，让收敛计数增长
-	case abs(trend) <= c.config.StableDelta:
-		// 不调整 — 稳态即最优，等待收敛锁定
-
-	// 温度明确下降 → 当前转速过剩，减偏移（直到 MinOffset）
+	// 温度明确下降 → 转速过剩，主动减偏移
 	case trend < -c.config.StableDelta:
 		c.adjustZoneOffset(point, -c.config.Step, minRPM, maxRPM)
+		action = "下降+减偏移"
 
 	default:
-		// 其他情况不调整
+		action = "最优/等待收敛"
 	}
 
-	// 收敛判定（动态轮次：偏移越大，需要越多轮稳定确认）
+	if c.logger != nil && action != "" {
+		c.logger.Debug("偏移决策: %d°C zone=%d°C trend=%d RPM=%d offset=%d→%d action=%s",
+			currentTemp, point.Temperature, trend, interpolatedRPM, oldOffset, point.Offset, action)
+	}
+
+	// 收敛判定：连续 ConvergeCount 轮无变化视为收敛
 	if point.Offset == oldOffset {
 		zone.stableCount++
-		requiredCount := abs(point.Offset) / c.config.Step
-		if requiredCount < c.config.ConvergeCount {
-			requiredCount = c.config.ConvergeCount
-		}
-		if zone.stableCount >= requiredCount {
+		if zone.stableCount >= c.config.ConvergeCount {
 			zone.converged = true
 			zone.convergedAt = now
 			if c.logger != nil {
@@ -263,7 +273,39 @@ func (c *Controller) Update(currentTemp int, fanCurve []types.FanCurvePoint, min
 	// 偏移有变化，重置收敛计数，记录调整时间
 	zone.stableCount = 0
 	zone.lastAdjustAt = now
+
+	// 远离区间衰减：清理长期不在当前温度范围内的残留正偏移
+	c.decayDistantZones(zoneIdx, fanCurve, minRPM, maxRPM, now)
+
 	return true
+}
+
+// decayDistantZones 衰减距离当前区间 ≥2 格的正偏移
+func (c *Controller) decayDistantZones(currentZoneIdx int, fanCurve []types.FanCurvePoint, minRPM, maxRPM int, now time.Time) {
+	for i := range fanCurve {
+		if i == currentZoneIdx {
+			continue
+		}
+		distance := currentZoneIdx - i
+		if distance < 0 {
+			distance = -distance
+		}
+		if distance < 2 || fanCurve[i].Offset <= 0 {
+			continue
+		}
+		// 尊重冷却期，避免每个周期都减
+		if !c.zones[i].lastAdjustAt.IsZero() && now.Sub(c.zones[i].lastAdjustAt) < c.config.AdjustCooldown {
+			continue
+		}
+		c.adjustZoneOffset(&fanCurve[i], -c.config.Step, minRPM, maxRPM)
+		c.zones[i].converged = false
+		c.zones[i].stableCount = 0
+		c.zones[i].lastAdjustAt = now
+		if c.logger != nil {
+			c.logger.Debug("远离区间衰减: %d°C 偏移回收至 %d RPM (距当前%d格)",
+				fanCurve[i].Temperature, fanCurve[i].Offset, distance)
+		}
+	}
 }
 
 // handleSpike 处理温度突变
@@ -298,8 +340,9 @@ func (c *Controller) handleSpike(currentTemp, tempDelta int, fanCurve []types.Fa
 			fanCurve[lo].Temperature, fanCurve[hi].Temperature)
 	}
 
-	// 突变后清空温度历史，避免旧数据干扰趋势判断
-	c.tempHistory = c.tempHistory[:0]
+	// 突变后重置历史：保留前温度作为基准采样点
+	// 确保本轮 Update append 当前温度后有 2 个点，立即算出有效趋势，不丢失本轮决策
+	c.tempHistory = []tempSample{{temp: prevTemp, timestamp: time.Now().Add(-time.Second)}}
 }
 
 // Reset 重置运行状态（温度历史、收敛标记），不清除偏移值
@@ -341,9 +384,13 @@ func (c *Controller) GetZoneStatus() []bool {
 }
 
 // ensureZones 确保 zones 数组与曲线点数一致
-func (c *Controller) ensureZones(n int) {
+func (c *Controller) ensureZones(fanCurve []types.FanCurvePoint) {
+	n := len(fanCurve)
 	if len(c.zones) == n {
 		return
+	}
+	if c.logger != nil && len(c.zones) > 0 {
+		c.logger.Debug("风扇曲线节点数变更 %d→%d，重置所有区间状态", len(c.zones), n)
 	}
 	c.zones = make([]zoneState, n)
 }
@@ -381,12 +428,74 @@ func (c *Controller) adjustZoneOffset(point *types.FanCurvePoint, delta, minRPM,
 	// 安全边界：确保最终RPM在合法范围内
 	finalRPM := point.RPM + point.Offset
 	if finalRPM < minRPM {
-		point.Offset = minRPM - point.RPM
-		point.Offset = (point.Offset / c.config.Step) * c.config.Step
+		diff := minRPM - point.RPM
+		// 向上取整：Go 整数除法截断，ceil 才能保证 baseRPM+offset >= minRPM
+		point.Offset = ((diff + c.config.Step - 1) / c.config.Step) * c.config.Step
 	}
 	if finalRPM > maxRPM {
 		point.Offset = maxRPM - point.RPM
 		point.Offset = (point.Offset / c.config.Step) * c.config.Step
+	}
+}
+
+// interpolatedEffectiveRPM 计算插值后的有效RPM
+func (c *Controller) interpolatedEffectiveRPM(currentTemp int, fanCurve []types.FanCurvePoint, zoneIdx int) int {
+	if zoneIdx >= len(fanCurve)-1 {
+		p := fanCurve[zoneIdx]
+		return p.RPM + p.Offset
+	}
+	p1 := fanCurve[zoneIdx]
+	p2 := fanCurve[zoneIdx+1]
+	if p2.Temperature <= p1.Temperature {
+		return p1.RPM + p1.Offset
+	}
+	ratio := float64(currentTemp-p1.Temperature) / float64(p2.Temperature-p1.Temperature)
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio > 1 {
+		ratio = 1
+	}
+	baseRPM := float64(p1.RPM) + ratio*float64(p2.RPM-p1.RPM)
+	offset := float64(p1.Offset) + ratio*float64(p2.Offset-p1.Offset)
+	// 仅用于内部逻辑比较，无需取整到100的整数倍，避免临界点附近产生阶跃跳动
+	return int(math.Round(baseRPM + offset))
+}
+
+// probeDescend 试探性下探：同时调整当前区间和上界区间的偏移
+func (c *Controller) probeDescend(zoneIdx, currentTemp int, fanCurve []types.FanCurvePoint, minRPM, maxRPM int, now time.Time) {
+	point := &fanCurve[zoneIdx]
+
+	// 当前区间有正偏移 → 减当前区间（不 return，继续处理上界）
+	if point.Offset > 0 {
+		c.adjustZoneOffset(point, -c.config.Step, minRPM, maxRPM)
+	}
+
+	// 温度在两区间中间时，同时尝试减上界区间
+	// 插值过剩量 = r × (upperEff - lowerEff)，必须降低上界才能消除过剩
+	if zoneIdx < len(fanCurve)-1 && currentTemp > point.Temperature {
+		upper := &fanCurve[zoneIdx+1]
+		upperZone := &c.zones[zoneIdx+1]
+
+		// 尊重上界区间的冷却期
+		if !upperZone.lastAdjustAt.IsZero() && now.Sub(upperZone.lastAdjustAt) < c.config.AdjustCooldown {
+			return
+		}
+
+		// 上界区间 effective RPM > 当前区间的 effective RPM 时才值得减
+		// 否则插值结果已经跟区间基准平齐或更低
+		upperEff := upper.RPM + upper.Offset
+		lowerEff := point.RPM + point.Offset
+		if upperEff > lowerEff {
+			c.adjustZoneOffset(upper, -c.config.Step, minRPM, maxRPM)
+			upperZone.converged = false
+			upperZone.stableCount = 0
+			upperZone.lastAdjustAt = now
+			if c.logger != nil {
+				c.logger.Debug("试探下探上界: %d°C 偏移调整至 %d RPM (当前温度%d°C)",
+					upper.Temperature, upper.Offset, currentTemp)
+			}
+		}
 	}
 }
 
