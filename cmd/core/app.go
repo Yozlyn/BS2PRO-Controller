@@ -1121,11 +1121,21 @@ func (a *CoreApp) startTemperatureMonitoring() {
 								deviceMaxRPM = 4000
 							}
 						}
-						changed := a.fanOffsetCtrl.Update(avgTemp, cfg.FanCurve, 1000, deviceMaxRPM)
+						// Deep-copy 防止 Update 原地修改 Offset 时与 configManager 内部切片产生数据竞争
+						fanCurveCopy := make([]types.FanCurvePoint, len(cfg.FanCurve))
+						copy(fanCurveCopy, cfg.FanCurve)
+						changed := a.fanOffsetCtrl.Update(avgTemp, fanCurveCopy, 500, deviceMaxRPM)
 						if changed {
+							cfg.FanCurve = fanCurveCopy
 							a.configManager.Update(cfg)
+							if a.ipcServer != nil {
+								go func(c types.AppConfig) {
+									defer func() { recover() }()
+									a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, c)
+								}(cfg)
+							}
 						}
-						autoOffset := temperature.CalculateOffset(avgTemp, cfg.FanCurve)
+						autoOffset := temperature.CalculateOffset(avgTemp, fanCurveCopy)
 						targetRPM = temperature.ApplyOffset(targetRPM, autoOffset)
 					}
 					if targetRPM > 0 {
