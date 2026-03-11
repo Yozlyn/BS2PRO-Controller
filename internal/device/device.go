@@ -484,7 +484,7 @@ func (m *Manager) validateAndGetDevice(rpm int, label string) (*hid.Device, bool
 		m.mutex.Unlock()
 		return nil, false
 	}
-	if rpm < 1000 || rpm > 4000 {
+	if rpm < 500 || rpm > 4000 {
 		m.mutex.Unlock()
 		return nil, false
 	}

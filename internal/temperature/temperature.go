@@ -2,6 +2,7 @@
 package temperature
 
 import (
+	"math"
 	"path/filepath"
 	"runtime/debug"
 	"sync"
@@ -182,7 +183,7 @@ func (r *Reader) readNvidiaGPUTemp() int {
 	return int(temp)
 }
 
-// CalculateTargetRPM 根据温度计算目标转速
+// CalculateTargetRPM 根据温度线性插值计算目标转速
 func CalculateTargetRPM(temperature int, fanCurve []types.FanCurvePoint) int {
 	if len(fanCurve) < 2 {
 		return 0
@@ -206,11 +207,9 @@ func CalculateTargetRPM(temperature int, fanCurve []types.FanCurvePoint) int {
 			// 线性插值
 			ratio := float64(temperature-p1.Temperature) / float64(p2.Temperature-p1.Temperature)
 			rpm := float64(p1.RPM) + ratio*float64(p2.RPM-p1.RPM)
-			// 将转速调整为100的整数倍
-			roundedRPM := int((rpm+50)/100) * 100
-			// 确保在有效范围内
-			if roundedRPM < 1000 {
-				return 1000
+			roundedRPM := int(math.Round(rpm/100)) * 100
+			if roundedRPM < 500 {
+				return 500
 			}
 			if roundedRPM > 4000 {
 				return 4000
@@ -244,20 +243,19 @@ func CalculateOffset(temperature int, fanCurve []types.FanCurvePoint) int {
 		if temperature >= p1.Temperature && temperature <= p2.Temperature {
 			ratio := float64(temperature-p1.Temperature) / float64(p2.Temperature-p1.Temperature)
 			offset := float64(p1.Offset) + ratio*float64(p2.Offset-p1.Offset)
-			// 偏移量取整为100的倍数
-			return int((offset+50)/100) * 100
+			return int(math.Round(offset/100)) * 100
 		}
 	}
 
 	return 0
 }
 
-// ApplyOffset 将偏移量应用到基础转速上，结果钳位到 1000-4000 且为100的倍数
+// ApplyOffset 将偏移量应用到基础转速上，结果钳位到 500-4000 且为100的倍数
 func ApplyOffset(baseRPM, offset int) int {
 	rpm := baseRPM + offset
 	rpm = int((float64(rpm)+50)/100) * 100
-	if rpm < 1000 {
-		return 1000
+	if rpm < 500 {
+		return 500
 	}
 	if rpm > 4000 {
 		return 4000

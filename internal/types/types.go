@@ -129,7 +129,7 @@ var GearCommands = map[string][]GearCommand{
 // GetDefaultFanCurve 获取默认风扇曲线
 func GetDefaultFanCurve() []FanCurvePoint {
 	return []FanCurvePoint{
-		{Temperature: 30, RPM: 1000, Offset: 0},
+		{Temperature: 30, RPM: 500, Offset: 0},
 		{Temperature: 35, RPM: 1200, Offset: 0},
 		{Temperature: 40, RPM: 1400, Offset: 0},
 		{Temperature: 45, RPM: 1600, Offset: 0},
@@ -143,6 +143,7 @@ func GetDefaultFanCurve() []FanCurvePoint {
 		{Temperature: 85, RPM: 3800, Offset: 200},
 		{Temperature: 90, RPM: 4000, Offset: 0},
 		{Temperature: 95, RPM: 4000, Offset: 0},
+		{Temperature: 100, RPM: 4000, Offset: 0},
 	}
 }
 
@@ -182,6 +183,16 @@ func (c *AppConfig) Repair() {
 
 	if len(c.FanCurve) == 0 {
 		c.FanCurve = defaultCfg.FanCurve
+	} else {
+		// 迁移：若曲线最高温度点 < 100°C，自动追加 100°C 点
+		last := c.FanCurve[len(c.FanCurve)-1]
+		if last.Temperature < 100 {
+			c.FanCurve = append(c.FanCurve, FanCurvePoint{
+				Temperature: 100,
+				RPM:         last.RPM,
+				Offset:      0,
+			})
+		}
 	}
 	if c.SmartStartStop == "" {
 		c.SmartStartStop = defaultCfg.SmartStartStop
