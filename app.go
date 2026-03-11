@@ -152,6 +152,9 @@ func (a *App) startup(ctx context.Context) {
 	adapter := &trayLoggerAdapter{sugar: guiLogger, installDir: config.GetInstallDir()}
 	a.autostartManager = autostart.NewManager(adapter, config.GetInstallDir())
 
+	// 提前注册事件处理器，确保 Watchdog 重连时也能触发前端通知
+	a.ipcClient.SetEventHandler(a.handleCoreEvent)
+
 	// 连接到后台核心服务
 	if err := a.ipcClient.Connect(); err != nil {
 		logError("连接核心服务失败: %v", err)
@@ -164,7 +167,6 @@ func (a *App) startup(ctx context.Context) {
 		}()
 	} else {
 		logInfo("已成功连接到核心服务 IPC 管道")
-		a.ipcClient.SetEventHandler(a.handleCoreEvent)
 
 		// 启动时主动拉取一次配置，同步状态
 		cfg := a.GetConfig()
