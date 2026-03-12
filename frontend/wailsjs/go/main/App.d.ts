@@ -59,6 +59,8 @@ export function SetPowerOnStart(arg1:boolean):Promise<boolean>;
 
 export function SetRGBMode(arg1:ipc.SetRGBModeParams):Promise<boolean>;
 
+export function SendWindowsNotification(arg1:string,arg2:string):Promise<void>;
+
 export function SetSmartStartStop(arg1:string):Promise<boolean>;
 
 export function SetWindowsAutoStart(arg1:boolean):Promise<void>;
