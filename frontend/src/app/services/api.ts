@@ -8,6 +8,7 @@ import {
   UpdateConfig,
   SetFanCurve,
   GetFanCurve,
+  ApplyOffsetToCurve,
   SetAutoControl,
   GetAppVersion,
   SetManualGear,
@@ -68,6 +69,10 @@ class ApiService {
 
   async getFanCurve(): Promise<types.FanCurvePoint[]> {
     return await GetFanCurve();
+  }
+
+  async applyOffsetToCurve(): Promise<void> {
+    return await ApplyOffsetToCurve();
   }
 
   // 智能变频

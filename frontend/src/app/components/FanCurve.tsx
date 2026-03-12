@@ -527,6 +527,15 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
     }
   }, [config, onConfigChange]);
 
+  // 将当前偏移量烘焙进基础转速
+  const handleApplyOffsetToCurve = useCallback(async () => {
+    try {
+      await apiService.applyOffsetToCurve();
+    } catch (error) {
+      logger.error('应用偏移到曲线失败', 'FanCurve', error);
+    }
+  }, []);
+
   // 手动挡位选项
   const gearOptions = [
     { value: '静音', label: '静音', description: '低噪音模式' },
@@ -791,9 +800,15 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
             <span className="inline-block w-4 border-t-2 border-dashed border-amber-500" />
             <span>橙色虚线 = 基础转速 + 各点偏移量（实际生效转速）</span>
           </div>
-          <div className="text-xs text-gray-500 dark:text-gray-400">
+          <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
             系统按温度区间独立调节偏移量，收敛后自动锁定；温度突变时重新调整
           </div>
+          <button
+            onClick={handleApplyOffsetToCurve}
+            className="w-full text-xs py-1 px-2 rounded border border-amber-400 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
+          >
+            应用偏移到曲线（将偏移量烘焙入基础 RPM）
+          </button>
         </div>
       )}
 

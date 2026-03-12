@@ -252,13 +252,17 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
     { value: 'delayed', label: '延时', description: '延时响应，避免频繁启停' },
   ];
 
-  const sampleCountOptions = [
+  const allSampleCountOptions = [
     { value: 1, label: '1次 (即时响应)' },
     { value: 2, label: '2次 (2秒平均)' },
     { value: 3, label: '3次 (3秒平均)' },
     { value: 5, label: '5次 (5秒平均)' },
     { value: 10, label: '10次 (10秒平均)' },
   ];
+  // 偏移模式开启时，采样间隔被强制为至少 3 秒，1次/2次 选项无实际意义，隐藏避免误导
+  const sampleCountOptions = config.fanCurveOffsetEnabled
+    ? allSampleCountOptions.filter(o => o.value >= 3)
+    : allSampleCountOptions;
 
   const handleSampleCountChange = useCallback(async (count: number) => {
     try {
@@ -272,7 +276,10 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
 
   const handleFanCurveOffsetChange = useCallback(async (enabled: boolean) => {
     try {
-      const newConfig = types.AppConfig.createFrom({ ...config, fanCurveOffsetEnabled: enabled });
+      // 开启偏移时确保采样数至少为 3，与后端强制逻辑保持一致
+      const currentSampleCount = (config as any).tempSampleCount || 1;
+      const safeSampleCount = enabled && currentSampleCount < 3 ? 3 : currentSampleCount;
+      const newConfig = types.AppConfig.createFrom({ ...config, fanCurveOffsetEnabled: enabled, tempSampleCount: safeSampleCount });
       await apiService.updateConfig(newConfig);
       onConfigChange(newConfig);
     } catch (error) {
@@ -315,7 +322,9 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
                   </div>
                 </div>
                 <Select
-                  value={(config as any).tempSampleCount || 1}
+                  value={config.fanCurveOffsetEnabled
+                    ? Math.max((config as any).tempSampleCount || 1, 3)
+                    : ((config as any).tempSampleCount || 1)}
                   onChange={(val) => handleSampleCountChange(val as number)}
                   options={sampleCountOptions}
                   size="sm"

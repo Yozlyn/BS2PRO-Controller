@@ -71,6 +71,11 @@ export default function Home() {
       setIsConnected(deviceStatus.connected || false);
       setFanData(deviceStatus.currentData || null);
       handleTemperaturePayload(deviceStatus.temperature || null);
+
+      // 服务在线但设备未连接时，自动触发连接
+      if (!deviceStatus.connected) {
+        apiService.connectDevice().catch(() => {});
+      }
     } catch (err) {
       setIsConnected(false);
     }
