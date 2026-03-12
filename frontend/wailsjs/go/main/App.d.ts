@@ -3,6 +3,8 @@
 import {types} from '../models';
 import {ipc} from '../models';
 
+export function ApplyOffsetToCurve():Promise<void>;
+
 export function CheckWindowsAutoStart():Promise<boolean>;
 
 export function ConnectDevice():Promise<boolean>;
