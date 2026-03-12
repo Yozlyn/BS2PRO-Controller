@@ -430,6 +430,20 @@ func (a *App) SetFanCurve(curve []FanCurvePoint) error {
 	return nil
 }
 
+func (a *App) ApplyOffsetToCurve() error {
+	resp, err := a.sendRequest(ipc.ReqApplyOffsetToCurve, nil)
+	if err != nil {
+		return err
+	}
+	if resp == nil || !resp.Success {
+		if resp != nil {
+			return fmt.Errorf("%s", resp.Error)
+		}
+		return fmt.Errorf("服务响应为空")
+	}
+	return nil
+}
+
 func (a *App) GetFanCurve() []FanCurvePoint {
 	resp, err := a.sendRequest(ipc.ReqGetFanCurve, nil)
 	if err != nil || resp == nil || !resp.Success {

@@ -234,6 +234,11 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 	case ipc.ReqGetFanCurve:
 		curve := a.configManager.Get().FanCurve
 		return a.dataResponse(curve)
+	case ipc.ReqApplyOffsetToCurve:
+		if err := a.ApplyOffsetToCurve(); err != nil {
+			return a.errorResponse(err.Error())
+		}
+		return a.successResponse(true)
 	case ipc.ReqSetAutoControl:
 		var params ipc.SetAutoControlParams
 		if err := json.Unmarshal(req.Data, &params); err != nil {
@@ -636,6 +641,35 @@ func (a *CoreApp) SetFanCurve(curve []types.FanCurvePoint) error {
 	cfg := a.configManager.Get()
 	cfg.FanCurve = curve
 	return a.configManager.Update(cfg)
+}
+
+// ApplyOffsetToCurve 将当前偏移量烘焙进基线 RPM，偏移归零，重置偏移控制器
+func (a *CoreApp) ApplyOffsetToCurve() error {
+	a.mutex.Lock()
+	cfg := a.configManager.Get()
+	const minRPM, maxRPM = 500, 4000
+	for i := range cfg.FanCurve {
+		p := &cfg.FanCurve[i]
+		newRPM := p.RPM + p.Offset
+		if newRPM < minRPM {
+			newRPM = minRPM
+		}
+		if newRPM > maxRPM {
+			newRPM = maxRPM
+		}
+		p.RPM = newRPM
+		p.Offset = 0
+	}
+	err := a.configManager.Update(cfg)
+	a.mutex.Unlock()
+	if err != nil {
+		return err
+	}
+	a.fanOffsetCtrl.Reset()
+	if a.ipcServer != nil {
+		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
+	}
+	return nil
 }
 
 func (a *CoreApp) SetAutoControl(enabled bool) error {

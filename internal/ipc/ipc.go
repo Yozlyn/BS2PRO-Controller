@@ -67,6 +67,9 @@ const (
 	// 系统相关
 	ReqPing RequestType = "Ping"
 
+	// 风扇偏移
+	ReqApplyOffsetToCurve RequestType = "ApplyOffsetToCurve"
+
 	// RGB 灯效控制
 	ReqSetRGBMode        RequestType = "SetRGBMode"
 	ReqUnsubscribeEvents RequestType = "UnsubscribeEvents"
