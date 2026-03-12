@@ -13,6 +13,7 @@ import (
 	"github.com/TIANLI0/BS2PRO-Controller/internal/config"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/ipc"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/logger"
+	"github.com/TIANLI0/BS2PRO-Controller/internal/notification"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/tray"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/version"
@@ -697,6 +698,12 @@ func (a *App) GetBridgeProgramStatus() map[string]any {
 	var status map[string]any
 	json.Unmarshal(resp.Data, &status)
 	return status
+}
+
+// SendWindowsNotification 发送 Windows Toast 系统通知。
+// title 为通知标题，message 为通知正文。
+func (a *App) SendWindowsNotification(title, message string) error {
+	return notification.Send("", title, message)
 }
 
 func (a *App) UpdateGuiResponseTime() {
