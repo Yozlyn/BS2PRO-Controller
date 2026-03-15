@@ -158,9 +158,7 @@ func NewCustomLogger(debugMode bool, installDir string, prefix string) (*CustomL
 	appCore := zapcore.NewCore(
 		fileEncoder,
 		zapcore.AddSync(appLogRotate),
-		zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
-			return lvl >= zapcore.InfoLevel
-		}),
+		atom,
 	)
 
 	// 控制台输出核心
