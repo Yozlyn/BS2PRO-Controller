@@ -807,7 +807,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
             onClick={handleApplyOffsetToCurve}
             className="w-full text-xs py-1 px-2 rounded border border-amber-400 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
           >
-            应用偏移到曲线（将偏移量烘焙入基础 RPM）
+            应用偏移到曲线（将当前偏移量覆盖到基础RPM）
           </button>
         </div>
       )}

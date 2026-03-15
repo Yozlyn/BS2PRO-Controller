@@ -57,7 +57,7 @@ var guiLogger *zap.SugaredLogger
 
 func init() {
 	installDir := config.GetInstallDir()
-	customLogger, err := logger.NewCustomLogger(false, installDir)
+	customLogger, err := logger.NewCustomLogger(false, installDir, "gui")
 	if err != nil {
 		fallbackInit()
 		return

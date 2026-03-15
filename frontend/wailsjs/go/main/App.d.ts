@@ -41,6 +41,8 @@ export function QuitApp():Promise<void>;
 
 export function RestartCoreService():Promise<boolean>;
 
+export function SendWindowsNotification(arg1:string,arg2:string):Promise<void>;
+
 export function SetAutoControl(arg1:boolean):Promise<void>;
 
 export function SetBrightness(arg1:number):Promise<boolean>;
@@ -58,8 +60,6 @@ export function SetManualGear(arg1:string,arg2:string):Promise<boolean>;
 export function SetPowerOnStart(arg1:boolean):Promise<boolean>;
 
 export function SetRGBMode(arg1:ipc.SetRGBModeParams):Promise<boolean>;
-
-export function SendWindowsNotification(arg1:string,arg2:string):Promise<void>;
 
 export function SetSmartStartStop(arg1:string):Promise<boolean>;
 

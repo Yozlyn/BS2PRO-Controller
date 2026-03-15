@@ -63,14 +63,14 @@ func NewCoreApp(debugMode bool) *CoreApp {
 	installDir := config.GetInstallDir()
 	// 日志统一写入 ProgramData\BS2PRO-Controller\logs，与 GUI 进程保持一致
 	logBaseDir := filepath.Dir(config.GetLogDir()) // ProgramData\BS2PRO-Controller
-	customLogger, err := logger.NewCustomLogger(debugMode, logBaseDir)
+	customLogger, err := logger.NewCustomLogger(debugMode, logBaseDir, "core")
 	if err != nil {
 		// 降级：尝试系统临时目录，避免panic导致崩溃报告无法写入
 		fallbackDir := os.TempDir()
-		customLogger, err = logger.NewCustomLogger(debugMode, fallbackDir)
+		customLogger, err = logger.NewCustomLogger(debugMode, fallbackDir, "core")
 		if err != nil {
 			// 最坏情况：创建一个只写stderr的logger，保证后续代码不会nil panic
-			customLogger, _ = logger.NewCustomLogger(debugMode, ".")
+			customLogger, _ = logger.NewCustomLogger(debugMode, ".", "core")
 		}
 		if customLogger != nil {
 			customLogger.Warn("日志目录初始化失败，已降级到临时目录: %s", fallbackDir)
@@ -146,7 +146,11 @@ func (a *CoreApp) Start() error {
 
 	a.safeGo("delayedConnectDevice", func() {
 		time.Sleep(1 * time.Second)
-		a.ConnectDevice()
+		if !a.ConnectDevice() {
+			a.logInfo("初始化连接失败，进入自动重连模式")
+			gen := atomic.AddInt32(&a.reconnectGen, 1)
+			go a.scheduleReconnect(gen)
+		}
 	})
 
 	return nil
@@ -1172,6 +1176,7 @@ func (a *CoreApp) startTemperatureMonitoring() {
 						autoOffset := temperature.CalculateOffset(avgTemp, fanCurveCopy)
 						targetRPM = temperature.ApplyOffset(targetRPM, autoOffset)
 					}
+					a.logDebug("智能变频监控：计算出的 targetRPM=%d, avgTemp=%d, len(fanCurve)=%d", targetRPM, avgTemp, len(cfg.FanCurve))
 					if targetRPM > 0 {
 						if fd := a.deviceManager.GetCurrentFanData(); fd != nil && fd.WorkMode == "挡位工作模式" {
 							a.logDebug("智能变频监控：设备进入手动模式，重新进入自动模式")
@@ -1179,6 +1184,7 @@ func (a *CoreApp) startTemperatureMonitoring() {
 								time.Sleep(100 * time.Millisecond)
 							}
 						}
+						a.logDebug("智能变频监控：下发新风扇转速 targetRPM=%d", targetRPM)
 						a.deviceManager.SetFanSpeed(targetRPM)
 					}
 				}

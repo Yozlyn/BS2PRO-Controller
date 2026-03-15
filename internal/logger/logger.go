@@ -2,7 +2,6 @@
 package logger
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,80 +17,49 @@ import (
 // csvEncoder 自定义CSV格式编码器
 type csvEncoder struct {
 	zapcore.Encoder
-	pool bufferPool
-}
-
-type bufferPool struct {
-	pool chan *bytes.Buffer
-}
-
-func newBufferPool(size int) bufferPool {
-	return bufferPool{
-		pool: make(chan *bytes.Buffer, size),
-	}
-}
-
-func (p bufferPool) get() *bytes.Buffer {
-	select {
-	case b := <-p.pool:
-		return b
-	default:
-		return &bytes.Buffer{}
-	}
-}
-
-func (p bufferPool) put(b *bytes.Buffer) {
-	b.Reset()
-	select {
-	case p.pool <- b:
-	default:
-	}
+	pool buffer.Pool
 }
 
 // NewCSVEncoder 创建CSV格式编码器
 func NewCSVEncoder(cfg zapcore.EncoderConfig) zapcore.Encoder {
 	return &csvEncoder{
 		Encoder: zapcore.NewConsoleEncoder(cfg),
-		pool:    newBufferPool(10),
+		pool:    buffer.NewPool(),
 	}
 }
 
 // EncodeEntry 编码日志条目为CSV格式
 func (e *csvEncoder) EncodeEntry(entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
-	buf := e.pool.get()
-	defer e.pool.put(buf)
+	buf := e.pool.Get()
 
 	// 编码级别
-	buf.WriteString(`"`)
-	buf.WriteString(entry.Level.CapitalString())
-	buf.WriteString(`",`)
+	buf.AppendString(`"`)
+	buf.AppendString(entry.Level.CapitalString())
+	buf.AppendString(`",`)
 
 	// 编码时间
-	buf.WriteString(`"`)
-	buf.WriteString(entry.Time.Format("2006-01-02 15:04:05"))
-	buf.WriteString(`",`)
+	buf.AppendString(`"`)
+	buf.AppendString(entry.Time.Format("2006-01-02 15:04:05"))
+	buf.AppendString(`",`)
 
 	// 编码调用者
 	if entry.Caller.Defined {
-		buf.WriteString(`"`)
-		buf.WriteString(entry.Caller.TrimmedPath())
-		buf.WriteString(`",`)
+		buf.AppendString(`"`)
+		buf.AppendString(entry.Caller.TrimmedPath())
+		buf.AppendString(`",`)
 	} else {
-		buf.WriteString(`"",`)
+		buf.AppendString(`"",`)
 	}
 
 	// 编码消息
-	buf.WriteString(`"`)
+	buf.AppendString(`"`)
 	escapedMsg := strings.ReplaceAll(entry.Message, `"`, `\"`)
-	buf.WriteString(escapedMsg)
-	buf.WriteString(`"`)
+	buf.AppendString(escapedMsg)
+	buf.AppendString(`"`)
 
-	buf.WriteByte('\n')
+	buf.AppendByte('\n')
 
-	// 转换为buffer.Buffer
-	result := buffer.NewPool().Get()
-	result.Write(buf.Bytes())
-	return result, nil
+	return buf, nil
 }
 
 // Clone 克隆编码器
@@ -112,14 +80,18 @@ type CustomLogger struct {
 }
 
 // NewCustomLogger 创建新的日志记录器
-func NewCustomLogger(debugMode bool, installDir string) (*CustomLogger, error) {
+func NewCustomLogger(debugMode bool, installDir string, prefix string) (*CustomLogger, error) {
 	logDir := filepath.Join(installDir, "logs")
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return nil, fmt.Errorf("创建日志目录失败: %v", err)
 	}
 
+	if prefix == "" {
+		prefix = "core"
+	}
+
 	// 主日志文件路径
-	logFilePath := filepath.Join(logDir, fmt.Sprintf("core_%s.log", time.Now().Format("2006-01-02")))
+	logFilePath := filepath.Join(logDir, fmt.Sprintf("%s_%s.log", prefix, time.Now().Format("2006-01-02")))
 
 	// 创建主日志轮转配置
 	appLogRotate := &lumberjack.Logger{
@@ -203,7 +175,7 @@ func NewCustomLogger(debugMode bool, installDir string) (*CustomLogger, error) {
 
 	// 只有在debug模式开启时才创建debug日志文件
 	if debugMode {
-		debugFilePath := filepath.Join(logDir, fmt.Sprintf("debug_%s.log", time.Now().Format("2006-01-02")))
+		debugFilePath := filepath.Join(logDir, fmt.Sprintf("%s_debug_%s.log", prefix, time.Now().Format("2006-01-02")))
 		debugLogRotate := &lumberjack.Logger{
 			Filename:   debugFilePath,
 			MaxSize:    10,
