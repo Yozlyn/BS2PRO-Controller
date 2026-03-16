@@ -1,18 +1,7 @@
-'use client';
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Cpu, Heart, Lightbulb, Palette, RefreshCw, X, Zap } from 'lucide-react'
 import clsx from 'clsx';
 import { RGBConfig } from '../types';
-import {
-  CpuChipIcon,
-  ArrowPathIcon,
-  HeartIcon,
-  LightBulbIcon,
-  SwatchIcon,
-  SparklesIcon,
-  XMarkIcon,
-  BoltIcon,
-} from '@heroicons/react/24/outline';
 
 // 类型定义
 export interface RGBColor {
@@ -38,13 +27,13 @@ type LightMode =
   | 'off';
 
 const MODES: { id: LightMode; label: string; icon: React.ReactNode; maxColors?: number; minColors?: number; hasSpeed?: boolean; hasColors?: boolean }[] = [
-  { id: 'smart',         label: '智能温控', icon: <CpuChipIcon className="w-5 h-5" /> },
-  { id: 'rotation',      label: '旋转',     icon: <ArrowPathIcon className="w-5 h-5" />, hasSpeed: true, hasColors: true, minColors: 1, maxColors: 6 },
-  { id: 'breathing',     label: '呼吸',     icon: <HeartIcon className="w-5 h-5" />, hasSpeed: true, hasColors: true, minColors: 1, maxColors: 5 },
-  { id: 'static_single', label: '单色常亮', icon: <LightBulbIcon className="w-5 h-5" />, hasColors: true, minColors: 1, maxColors: 1 },
-  { id: 'static_multi',  label: '多色常亮', icon: <SwatchIcon className="w-5 h-5" />, hasColors: true, minColors: 3, maxColors: 3 },
-  { id: 'flowing',       label: '流光',     icon: <BoltIcon className="w-5 h-5" />, hasSpeed: true },
-  { id: 'off',           label: '关闭',     icon: <XMarkIcon className="w-5 h-5" /> },
+  { id: 'smart',         label: '智能温控', icon: <Cpu className="w-5 h-5" /> },
+  { id: 'rotation',      label: '旋转',     icon: <RefreshCw className="w-5 h-5" />, hasSpeed: true, hasColors: true, minColors: 1, maxColors: 6 },
+  { id: 'breathing',     label: '呼吸',     icon: <Heart className="w-5 h-5" />, hasSpeed: true, hasColors: true, minColors: 1, maxColors: 5 },
+  { id: 'static_single', label: '单色常亮', icon: <Lightbulb className="w-5 h-5" />, hasColors: true, minColors: 1, maxColors: 1 },
+  { id: 'static_multi',  label: '多色常亮', icon: <Palette className="w-5 h-5" />, hasColors: true, minColors: 3, maxColors: 3 },
+  { id: 'flowing',       label: '流光',     icon: <Zap className="w-5 h-5" />, hasSpeed: true },
+  { id: 'off',           label: '关闭',     icon: <X className="w-5 h-5" /> },
 ];
 
 const SPEED_OPTIONS = [

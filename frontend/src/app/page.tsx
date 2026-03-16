@@ -1,16 +1,5 @@
-'use client';
-
 import React, { useState, useEffect, useCallback } from 'react';
-import {
-  PresentationChartLineIcon,
-  Cog6ToothIcon,
-  ExclamationTriangleIcon,
-  XMarkIcon,
-  SwatchIcon,
-  PowerIcon,
-  InformationCircleIcon,
-  SparklesIcon
-} from '@heroicons/react/24/outline';
+import { AlertTriangle, Info, LineChart, Power, Settings, Sparkles, X } from 'lucide-react'
 
 import FanCurve from './components/FanCurve';
 import ControlPanel from './components/ControlPanel';
@@ -187,7 +176,7 @@ export default function Home() {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-[#0b0c10] flex items-center justify-center">
         <div className="text-center p-8 rounded-2xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20">
-          <ExclamationTriangleIcon className="w-12 h-12 text-red-500 mx-auto mb-4" />
+          <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
           <div className="font-bold text-slate-800 dark:text-slate-300 mb-6">{error}</div>
           <button onClick={() => initializeApp()} className="px-6 py-2 bg-red-600 text-white hover:bg-red-700 font-medium text-sm rounded-lg transition-all">
             重试连接
@@ -205,13 +194,13 @@ export default function Home() {
         {bridgeWarning && (
           <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-[120%] z-50 w-full max-w-2xl animate-in slide-in-from-top-4 duration-500">
             <div className="bg-amber-50 dark:bg-amber-950/80 px-4 py-3 rounded-xl flex items-start gap-4 border border-amber-200 dark:border-amber-800 shadow-md">
-              <ExclamationTriangleIcon className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+              <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
               <div className="flex-1">
                 <h4 className="font-bold text-amber-800 dark:text-amber-500 text-sm mb-1">温度读取受阻</h4>
                 <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">{bridgeWarning}</p>
               </div>
               <button onClick={() => setBridgeWarning(null)} className="text-amber-500 hover:text-amber-700 transition-colors">
-                <XMarkIcon className="w-5 h-5" />
+                <X className="w-5 h-5" />
               </button>
             </div>
           </div>
@@ -271,7 +260,7 @@ export default function Home() {
                 onClick={() => isConnected ? handleDisconnect() : handleConnect()}
                 className={`flex items-center gap-2 text-sm font-semibold transition-colors px-4 py-2 rounded-xl ${isConnected ? 'bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-red-900/30 dark:hover:text-red-400' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
               >
-                <PowerIcon className="w-4 h-4" /> {isConnected ? '断开连接' : '连接设备'}
+                <Power className="w-4 h-4" /> {isConnected ? '断开连接' : '连接设备'}
               </button>
             </div>
           </div>
@@ -368,10 +357,10 @@ export default function Home() {
           <div className="px-6 pt-5 pb-3 flex justify-between items-end border-b border-slate-100 dark:border-slate-800 shrink-0">
             <div className="flex gap-6">
               {[
-                { id: 'curve', label: '风扇曲线', icon: <PresentationChartLineIcon className="w-4 h-4" /> },
-                { id: 'rgb', label: 'RGB 灯效', icon: <SparklesIcon className="w-4 h-4" /> },
-                { id: 'control', label: '控制面板', icon: <Cog6ToothIcon className="w-4 h-4" /> },
-                { id: 'about', label: '关于软件', icon: <InformationCircleIcon className="w-4 h-4" /> },
+                { id: 'curve', label: '风扇曲线', icon: <LineChart className="w-4 h-4" /> },
+                { id: 'rgb', label: 'RGB 灯效', icon: <Sparkles className="w-4 h-4" /> },
+                { id: 'control', label: '控制面板', icon: <Settings className="w-4 h-4" /> },
+                { id: 'about', label: '关于软件', icon: <Info className="w-4 h-4" /> },
               ].map(tab => {
                 const isActive = activeTab === tab.id;
                 return (

@@ -1,15 +1,6 @@
-'use client';
-
 import React, { useState, useEffect, useCallback, memo, useMemo, useRef } from 'react';
+import { Check, Download, Info, RefreshCw, SlidersHorizontal, Upload } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import {
-  ArrowPathIcon,
-  CheckIcon,
-  InformationCircleIcon,
-  ArrowDownTrayIcon,
-  ArrowUpTrayIcon,
-  AdjustmentsHorizontalIcon,
-} from '@heroicons/react/24/outline';
 import { apiService } from '../services/api';
 import { logger } from '../services/logger';
 import { types } from '../../../wailsjs/go/models';
@@ -680,10 +671,12 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
                   fontSize: 12
                 }}
               />
-              <Tooltip 
-                formatter={(value: number, name: string) => {
-                  if (name === 'effectiveRpm') return [`${value} RPM`, '实际转速(含偏移)'];
-                  return [`${value} RPM`, '基础转速'];
+              <Tooltip
+                formatter={(value: any, name: any) => {
+                  const numValue = typeof value === 'number' ? value : 0;
+                  const nameStr = typeof name === 'string' ? name : '';
+                  if (nameStr === 'effectiveRpm') return [`${numValue} RPM`, '实际转速(含偏移)'];
+                  return [`${numValue} RPM`, '基础转速'];
                 }}
                 labelFormatter={(value) => `温度: ${value}°C`}
                 contentStyle={{
@@ -746,7 +739,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
           variant="secondary"
           size="sm"
           onClick={resetCurve}
-          icon={<ArrowPathIcon className="w-3 h-3" />}
+          icon={<RefreshCw className="w-3 h-3" />}
         >
           重置
         </Button>
@@ -756,7 +749,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
           onClick={saveCurve}
           disabled={!hasUnsavedChanges}
           loading={isSaving}
-          icon={<CheckIcon className="w-3 h-3" />}
+          icon={<Check className="w-3 h-3" />}
         >
           保存
         </Button>
@@ -764,7 +757,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
           variant="secondary"
           size="sm"
           onClick={exportFanConfig}
-          icon={<ArrowDownTrayIcon className="w-3 h-3" />}
+          icon={<Download className="w-3 h-3" />}
         >
           导出
         </Button>
@@ -772,7 +765,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
           variant="secondary"
           size="sm"
           onClick={importFanConfig}
-          icon={<ArrowUpTrayIcon className="w-3 h-3" />}
+          icon={<Upload className="w-3 h-3" />}
         >
           导入
         </Button>
@@ -781,7 +774,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
       {/* 偏移开关 */}
       <div className="flex items-center justify-between mb-2 px-1">
         <div className="flex items-center gap-1.5">
-          <AdjustmentsHorizontalIcon className="w-3.5 h-3.5 text-amber-500" />
+          <SlidersHorizontal className="w-3.5 h-3.5 text-amber-500" />
           <span className="text-xs font-medium text-gray-700 dark:text-gray-300">自动曲线偏移</span>
           {config.fanCurveOffsetEnabled && (
             <Badge variant="warning" size="sm">
@@ -907,7 +900,7 @@ const FanCurve = memo(function FanCurve({ config, onConfigChange, isConnected, f
       {/* 说明卡片 */}
       <div className="p-2 rounded-md bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border border-blue-200 dark:border-blue-800">
         <div className="flex gap-1.5">
-          <InformationCircleIcon className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+          <Info className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
           <div className="text-xs text-blue-800 dark:text-blue-200 space-y-0.5">
             <p className="font-medium">使用说明</p>
             <ul className="space-y-0.5 text-blue-700 dark:text-blue-300">

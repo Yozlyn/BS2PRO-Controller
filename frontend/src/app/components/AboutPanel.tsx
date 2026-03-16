@@ -1,7 +1,5 @@
-'use client';
-
 import React, { useState, useEffect } from 'react';
-import { InformationCircleIcon } from '@heroicons/react/24/outline';
+import { Info } from 'lucide-react'
 import { apiService } from '../services/api';
 import { BrowserOpenURL } from '../../../wailsjs/runtime/runtime';
 import { Card } from './ui';
@@ -69,7 +67,7 @@ export default function AboutPanel() {
           <div className="px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-600">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <InformationCircleIcon className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                <Info className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                 <span className="font-medium text-gray-900 dark:text-gray-300">关于 & 更新</span>
               </div>
               <button

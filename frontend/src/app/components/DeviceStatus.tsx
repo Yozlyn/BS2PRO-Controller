@@ -1,19 +1,5 @@
-'use client';
-
 import React, { memo } from 'react';
-import { 
-  ExclamationTriangleIcon,
-  CpuChipIcon,
-  BoltIcon,
-  ArrowPathIcon,
-  ComputerDesktopIcon,
-  WifiIcon,
-  SignalIcon,
-  CogIcon,
-} from '@heroicons/react/24/outline';
-import {
-  CheckCircleIcon,
-} from '@heroicons/react/24/solid';
+import { Cpu, RefreshCw, Signal, Wifi } from 'lucide-react'
 import { types } from '../../../wailsjs/go/models';
 import { apiService } from '../services/api';
 import { logger } from '../services/logger';
@@ -182,7 +168,7 @@ export default function DeviceStatus({
           <Card className="p-5" hover>
             <div className="flex items-center gap-2 mb-4">
               <div className="p-2 rounded-lg bg-orange-50 dark:bg-orange-900/20">
-                <CpuChipIcon className="w-5 h-5 text-orange-500" />
+                <Cpu className="w-5 h-5 text-orange-500" />
               </div>
               <span className="text-sm font-medium text-gray-600 dark:text-gray-400">CPU 温度</span>
             </div>
@@ -214,7 +200,7 @@ export default function DeviceStatus({
           <Card className="p-5" hover>
             <div className="flex items-center gap-2 mb-4">
               <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-900/20">
-                <SignalIcon className="w-5 h-5 text-blue-500" />
+                <Signal className="w-5 h-5 text-blue-500" />
               </div>
               <span className="text-sm font-medium text-gray-600 dark:text-gray-400">风扇转速</span>
             </div>
@@ -233,7 +219,7 @@ export default function DeviceStatus({
         <Card className="p-8">
           <div className="text-center">
             <div className="w-16 h-16 mx-auto mb-4 rounded-xl bg-gray-100 dark:bg-gray-700 flex items-center justify-center">
-              <WifiIcon className="w-8 h-8 text-gray-400" />
+              <Wifi className="w-8 h-8 text-gray-400" />
             </div>
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-300 mb-2">
               设备未连接
@@ -241,7 +227,7 @@ export default function DeviceStatus({
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-6 max-w-xs mx-auto">
               请将 BS2/BS2PRO 散热器通过 蓝牙 连接到电脑
             </p>
-            <Button onClick={onConnect} icon={<ArrowPathIcon className="w-4 h-4" />}>
+            <Button onClick={onConnect} icon={<RefreshCw className="w-4 h-4" />}>
               连接设备
             </Button>
           </div>
