@@ -1,19 +1,23 @@
 @echo off
 setlocal enabledelayedexpansion
+
+echo Synchronizing Versions across project...
+powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\sync_version.ps1"
+
 echo Building BS2PRO-Controller (DEBUG VERSION)...
 
 REM 提取版本号
 for /f "tokens=2 delims=:, " %%a in ('findstr /C:"\"productVersion\"" wails.json') do (
-    set VERSION=%%a
-    set VERSION=!VERSION:"=!
+    set DISPLAY_VERSION=%%a
+    set DISPLAY_VERSION=!DISPLAY_VERSION:"=!
 )
 
-if "!VERSION!"=="" (
-    set VERSION=dev
+if "!DISPLAY_VERSION!"=="" (
+    set DISPLAY_VERSION=dev
 )
 
-set CORE_LDFLAGS=-X github.com/TIANLI0/BS2PRO-Controller/internal/version.BuildVersion=!VERSION!-debug
-set WAILS_LDFLAGS=-X github.com/TIANLI0/BS2PRO-Controller/internal/version.BuildVersion=!VERSION!-debug
+set CORE_LDFLAGS=-X github.com/TIANLI0/BS2PRO-Controller/internal/version.BuildVersion=!DISPLAY_VERSION!-debug
+set WAILS_LDFLAGS=-X github.com/TIANLI0/BS2PRO-Controller/internal/version.BuildVersion=!DISPLAY_VERSION!-debug
 
 echo [1/2] Building core service (DEBUG)...
 if exist "cmd\core\winres\winres.json" (
