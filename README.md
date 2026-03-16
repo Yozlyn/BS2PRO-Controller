@@ -3,6 +3,7 @@
 > 飞智空间站 BS2/BS2PRO 的第三方替代控制器
 
 一个基于 Wails + Go + Next.js 开发的桌面应用，用于控制飞智空间站 BS2/BS2PRO 散热器设备，提供风扇控制、温度监控等功能。
+需求：ASUS System Control Interface v3
 
 ## 功能特性
 
