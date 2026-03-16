@@ -13,9 +13,13 @@ import (
 type Controller struct {
 	mu sync.Mutex
 
-	tempHistory       []tempSample
-	windowSize        int
+	tempRing   []tempSample
+	ringHead   int
+	ringCount  int
+	windowSize int
+
 	zones             []zoneState
+	lastCurveTemps    []int
 	lastTemp          int
 	lastTempChangedAt time.Time
 
@@ -70,6 +74,10 @@ type Config struct {
 	HighTempBoostThreshold int
 
 	// 弹性基准线与高温滞留检测
+	// 安全基准线以 maxRPM 为锚点，随温度升高线性收紧。
+	// CriticalTemp: 极限温度，达到此温度不允许任何负偏移，安全下限强制为原始 RPM (default 90)
+	// SafeTemp: 安全温度，低于此温度安全下限仅为硬件最低转速，允许最大幅度降噪 (default 60)
+	// StagnationDuration: 高温下温度长期不变时，主动触发一次升速的等待时间 (default 15s)
 	CriticalTemp       int
 	SafeTemp           int
 	StagnationDuration time.Duration
@@ -150,7 +158,9 @@ func New(cfg Config, logger types.Logger) *Controller {
 	return &Controller{
 		config:            cfg,
 		windowSize:        cfg.WindowSize,
-		tempHistory:       make([]tempSample, 0, cfg.WindowSize),
+		tempRing:          make([]tempSample, cfg.WindowSize),
+		ringHead:          0,
+		ringCount:         0,
 		lastTemp:          -1,
 		lastTempChangedAt: time.Now(),
 		logger:            logger,
@@ -183,11 +193,12 @@ func (c *Controller) Update(currentTemp int, fanCurve []types.FanCurvePoint, min
 	c.lastTemp = currentTemp
 
 	// 维护温度历史窗口
-	c.tempHistory = append(c.tempHistory, tempSample{temp: currentTemp})
-	if len(c.tempHistory) > c.windowSize {
-		c.tempHistory = c.tempHistory[len(c.tempHistory)-c.windowSize:]
+	c.tempRing[c.ringHead] = tempSample{temp: currentTemp}
+	c.ringHead = (c.ringHead + 1) % c.windowSize
+	if c.ringCount < c.windowSize {
+		c.ringCount++
 	}
-	if len(c.tempHistory) < 2 {
+	if c.ringCount < 2 {
 		return false
 	}
 
@@ -559,7 +570,7 @@ func (c *Controller) setZoneEffectiveRPM(point *types.FanCurvePoint, targetRPM, 
 	c.adjustZoneOffset(point, targetRPM-(point.RPM+point.Offset), minRPM, maxRPM)
 }
 
-func (c *Controller) handleVerifying(zoneIdx int, fanCurve []types.FanCurvePoint, currentTemp, trend int, now time.Time, minRPM, maxRPM int) bool {
+func (c *Controller) handleVerifying(zoneIdx int, fanCurve []types.FanCurvePoint, currentTemp, trend int, now time.Time, minRPM, maxRPM int) {
 	zone := &c.zones[zoneIdx]
 	point := &fanCurve[zoneIdx]
 
@@ -593,17 +604,17 @@ func (c *Controller) handleVerifying(zoneIdx int, fanCurve []types.FanCurvePoint
 			c.logger.Info("[验证中断] %d°C 验证期因升温打断(trend=%d): offset %d->%d",
 				point.Temperature, trend, oldOffset, point.Offset)
 		}
-		return true
+		return
 	}
 
 	if zone.verifyTempHigh-zone.verifyTempLow > c.config.VerifyMaxDelta {
 		zone.verifying = false
 		zone.stableCount = 0
-		return false
+		return
 	}
 
 	if now.Sub(zone.verifyStartAt) < c.config.VerifyDuration {
-		return false
+		return
 	}
 
 	zone.verifying = false
@@ -614,7 +625,6 @@ func (c *Controller) handleVerifying(zoneIdx int, fanCurve []types.FanCurvePoint
 	if c.logger != nil {
 		c.logger.Info("[收敛] %d°C 成功收敛, 维持偏移 offset=%d", point.Temperature, point.Offset)
 	}
-	return false
 }
 
 func (c *Controller) startVerifying(zone *zoneState, currentTemp int, now time.Time) {
@@ -677,15 +687,19 @@ func (c *Controller) handleSpike(currentTemp, tempDelta int, fanCurve []types.Fa
 	if c.logger != nil {
 		c.logger.Info("[瞬变检测] 捕捉到温度瞬变 %d°C -> %d°C, 重置区间状态", prevTemp, currentTemp)
 	}
-	c.tempHistory = []tempSample{{temp: prevTemp}}
+	c.tempRing[0] = tempSample{temp: prevTemp}
+	c.ringHead = 1 % c.windowSize
+	c.ringCount = 1
 }
 
 func (c *Controller) Reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.tempHistory = c.tempHistory[:0]
+	c.ringHead = 0
+	c.ringCount = 0
 	c.lastTemp = -1
 	c.lastTempChangedAt = time.Now()
+	c.lastCurveTemps = c.lastCurveTemps[:0]
 	for i := range c.zones {
 		c.zones[i] = zoneState{}
 	}
@@ -694,9 +708,11 @@ func (c *Controller) Reset() {
 func (c *Controller) ResetOffsets(fanCurve []types.FanCurvePoint) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.tempHistory = c.tempHistory[:0]
+	c.ringHead = 0
+	c.ringCount = 0
 	c.lastTemp = -1
 	c.lastTempChangedAt = time.Now()
+	c.lastCurveTemps = c.lastCurveTemps[:0]
 	for i := range c.zones {
 		c.zones[i] = zoneState{}
 	}
@@ -723,15 +739,58 @@ type ZoneInfo struct {
 	Verifying bool `json:"verifying"`
 }
 
+// ensureZones 按温度点匹配继承已有zoneState
 func (c *Controller) ensureZones(fanCurve []types.FanCurvePoint) {
 	n := len(fanCurve)
 	if len(c.zones) == n {
-		return
+		changed := false
+		for i, p := range fanCurve {
+			if i >= len(c.lastCurveTemps) || c.lastCurveTemps[i] != p.Temperature {
+				changed = true
+				break
+			}
+		}
+		if !changed {
+			return
+		}
+		// 温度点被编辑，同样走继承逻辑
 	}
-	c.zones = make([]zoneState, n)
-}
 
+	oldByTemp := make(map[int]zoneState, len(c.lastCurveTemps))
+	for i, t := range c.lastCurveTemps {
+		if i < len(c.zones) {
+			oldByTemp[t] = c.zones[i]
+		}
+	}
+
+	newZones := make([]zoneState, n)
+	inherited, reset := 0, 0
+	for i, p := range fanCurve {
+		if old, ok := oldByTemp[p.Temperature]; ok {
+			newZones[i] = old
+			inherited++
+		} else {
+			reset++
+		}
+	}
+
+	if c.logger != nil && (len(c.zones) != n || reset > 0) {
+		c.logger.Info("[确保区域] 曲线节点变更: %d -> %d 节点, 继承 %d 个区间状态, 重置 %d 个",
+			len(c.zones), n, inherited, reset)
+	}
+
+	c.zones = newZones
+
+	// 刷新温度缓存
+	c.lastCurveTemps = make([]int, n)
+	for i, p := range fanCurve {
+		c.lastCurveTemps[i] = p.Temperature
+	}
+}
 func (c *Controller) findZoneIndex(temp int, fanCurve []types.FanCurvePoint) int {
+	if len(fanCurve) == 0 {
+		return 0
+	}
 	if temp <= fanCurve[0].Temperature {
 		return 0
 	}
@@ -788,10 +847,12 @@ func (c *Controller) getMinSafeRPM(temp, minRPM, maxRPM int) int {
 
 // calculateTrend 基于温度历史窗口计算趋势。
 func (c *Controller) calculateTrend() int {
-	if len(c.tempHistory) < 2 {
+	if c.ringCount < 2 {
 		return 0
 	}
-	return c.tempHistory[len(c.tempHistory)-1].temp - c.tempHistory[0].temp
+	oldestIdx := (c.ringHead + c.windowSize - c.ringCount) % c.windowSize
+	newestIdx := (c.ringHead - 1 + c.windowSize) % c.windowSize
+	return c.tempRing[newestIdx].temp - c.tempRing[oldestIdx].temp
 }
 
 func iabs(x int) int {
