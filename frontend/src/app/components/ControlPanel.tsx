@@ -137,7 +137,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
   const [loadingStates, setLoadingStates] = useState<Record<string, boolean>>({});
   const [debugInfo, setDebugInfo] = useState<DebugInfo | null>(null);
   const [debugInfoLoading, setDebugInfoLoading] = useState(false);
-  const [showCustomSpeedWarning, setShowCustomSpeedWarning] = useState(false);
   const [customSpeedInput, setCustomSpeedInput] = useState<number>((config as any).customSpeedRPM || 2000);
 
   const setLoading = (key: string, value: boolean) => {
@@ -183,7 +182,7 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
 
   const handleCustomSpeedToggle = useCallback((enabled: boolean) => {
     if (enabled) {
-      setShowCustomSpeedWarning(true);
+      handleCustomSpeedApply(true, customSpeedInput);
     } else {
       handleCustomSpeedApply(false, customSpeedInput);
     }
@@ -389,73 +388,65 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
             />
           )}
 
-          <div className="py-4">
-            <div className={clsx(
-              'p-4 rounded-xl border-2 transition-all duration-300',
-              (config as any).customSpeedEnabled 
-                ? 'border-orange-300 dark:border-orange-600 bg-orange-50/50 dark:bg-orange-900/10' 
-                : 'border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/50'
-            )}>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-4">
-                  <div className={clsx(
-                    'p-2.5 rounded-xl transition-all duration-300',
-                    (config as any).customSpeedEnabled 
-                      ? 'bg-orange-100 dark:bg-orange-900/30 scale-105' 
-                      : 'bg-gray-100 dark:bg-gray-700'
-                  )}>
-                    <Flame className={clsx(
-                      'w-5 h-5 transition-colors duration-300',
-                      (config as any).customSpeedEnabled 
-                        ? 'text-orange-600 dark:text-orange-400' 
-                        : 'text-gray-500 dark:text-gray-400'
-                    )} />
-                  </div>
-                  <div>
-                    <div className="font-medium text-gray-900 dark:text-gray-300">自定义转速</div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">
-                      固定风扇转速，适合特殊场景使用
-                    </div>
+          <div className="py-4 px-4 -mx-4 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-all duration-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className={clsx(
+                  'p-2.5 rounded-xl transition-all duration-300',
+                  (config as any).customSpeedEnabled
+                    ? 'bg-blue-100 dark:bg-blue-900/30 scale-105'
+                    : 'bg-gray-100 dark:bg-gray-700'
+                )}>
+                  <Flame className={clsx(
+                    'w-5 h-5 transition-colors duration-300',
+                    (config as any).customSpeedEnabled
+                      ? 'text-blue-600 dark:text-blue-400'
+                      : 'text-gray-500 dark:text-gray-400'
+                  )} />
+                </div>
+                <div>
+                  <div className="font-medium text-gray-900 dark:text-gray-300">自定义转速</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">
+                    固定风扇转速，适合特殊场景使用
                   </div>
                 </div>
-                <ToggleSwitch
-                  enabled={(config as any).customSpeedEnabled || false}
-                  onChange={handleCustomSpeedToggle}
-                  disabled={!isConnected}
-                  loading={loadingStates.customSpeed}
-                  color="orange"
-                />
               </div>
-              
-              {(config as any).customSpeedEnabled && (
-                <div className="pt-4 border-t border-orange-200 dark:border-orange-800">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    目标转速 (RPM)
-                  </label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="number"
-                      value={customSpeedInput}
-                      onChange={(e) => setCustomSpeedInput(Number(e.target.value))}
-                      className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all duration-200"
-                      min={500}
-                      max={4000}
-                      step={50}
-                    />
-                    <Button
-                      variant="primary"
-                      onClick={() => handleCustomSpeedApply(true, customSpeedInput)}
-                      className="!bg-orange-600 hover:!bg-orange-700"
-                    >
-                      应用
-                    </Button>
-                  </div>
-                  <p className="text-xs text-orange-600 dark:text-orange-400 mt-2">
-                    ⚠️ 自定义转速会禁用智能温控，请谨慎使用
-                  </p>
-                </div>
-              )}
+              <ToggleSwitch
+                enabled={(config as any).customSpeedEnabled || false}
+                onChange={handleCustomSpeedToggle}
+                disabled={!isConnected}
+                loading={loadingStates.customSpeed}
+                color="blue"
+              />
             </div>
+            
+            {(config as any).customSpeedEnabled && (
+              <div className="pt-4 border-t border-gray-200 dark:border-gray-700 mt-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  目标转速 (RPM)
+                </label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="number"
+                    value={customSpeedInput}
+                    onChange={(e) => setCustomSpeedInput(Number(e.target.value))}
+                    className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
+                    min={500}
+                    max={4000}
+                    step={50}
+                  />
+                  <Button
+                    variant="primary"
+                    onClick={() => handleCustomSpeedApply(true, customSpeedInput)}
+                  >
+                    应用
+                  </Button>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                  启用自定义转速时会暂时禁用智能温控功能
+                </p>
+              </div>
+            )}
           </div>
 
           <SettingItem
@@ -596,62 +587,6 @@ export default function ControlPanel({ config, onConfigChange, isConnected }: Co
         <DebugPanel config={config} toggleDebugMode={toggleDebugMode} toggleGuiMonitoring={toggleGuiMonitoring} fetchDebugInfo={fetchDebugInfo} debugInfo={debugInfo} debugInfoLoading={debugInfoLoading} />
 
       </Card>
-
-      {showCustomSpeedWarning && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full p-6">
-            <div className="flex justify-center mb-4">
-              <div className="w-16 h-16 bg-orange-100 dark:bg-orange-900/30 rounded-full flex items-center justify-center">
-                <AlertTriangle className="w-10 h-10 text-orange-600 dark:text-orange-400" />
-              </div>
-            </div>
-
-            <h3 className="text-xl font-bold text-gray-900 dark:text-gray-300 text-center mb-3">
-              ⚠️ 风险提示
-            </h3>
-
-            <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-xl p-4 mb-4">
-              <p className="text-sm text-gray-700 dark:text-gray-300 mb-2 font-medium">
-                启用自定义转速模式后：
-              </p>
-              <ul className="space-y-1 text-sm text-gray-600 dark:text-gray-400">
-                <li>• 智能温控将被禁用</li>
-                <li>• 风扇将以固定转速运行</li>
-                <li>• 可能导致散热不足</li>
-                <li>• 请确保了解相关风险</li>
-              </ul>
-            </div>
-
-            <div className="bg-gray-50 dark:bg-gray-900/50 rounded-xl p-3 mb-4">
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">当前设置转速：</p>
-              <p className="text-2xl font-bold text-orange-600 dark:text-orange-400 text-center">
-                {customSpeedInput} RPM
-              </p>
-            </div>
-
-            <div className="flex gap-3">
-              <Button
-                variant="secondary"
-                onClick={() => setShowCustomSpeedWarning(false)}
-                className="flex-1"
-              >
-                取消
-              </Button>
-              <Button
-                variant="primary"
-                onClick={() => {
-                  setShowCustomSpeedWarning(false);
-                  handleCustomSpeedApply(true, customSpeedInput);
-                }}
-                className="flex-1 !bg-orange-600 hover:!bg-orange-700"
-                icon={<CheckCircle className="w-5 h-5" />}
-              >
-                我已了解风险
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 }
