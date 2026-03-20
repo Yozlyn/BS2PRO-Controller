@@ -128,7 +128,7 @@ func main() {
 		Windows: &windows.Options{
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,
-			DisableWindowIcon:    true, // 禁用窗口图标
+			DisableWindowIcon:    false,
 			WebviewUserDataPath:  getWebView2DataPath(),
 			Theme:                windows.SystemDefault, // 系统默认主题
 		},

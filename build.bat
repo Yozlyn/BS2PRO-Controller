@@ -29,6 +29,13 @@ if exist "cmd\core\winres\winres.json" (
 )
 go build -trimpath -ldflags "!CORE_LDFLAGS!" -o build/bin/BS2PRO-CoreService.exe ./cmd/core/
 
+REM Build monitor probe
+echo Building monitor probe...
+if exist "cmd\bs2pro-monitor\winres\winres.json" (
+    go-winres make --in cmd/bs2pro-monitor/winres/winres.json --out cmd/bs2pro-monitor/rsrc
+)
+go build -trimpath -ldflags "!CORE_LDFLAGS!" -o build/bin/BS2PRO-Monitor.exe ./cmd/bs2pro-monitor/
+
 REM Add NSIS to PATH for installer creation
 set PATH=%PATH%;C:\Program Files (x86)\NSIS\Bin
 
@@ -36,11 +43,18 @@ REM Build main application with wails
 echo Building main application...
 wails build -nsis -trimpath -webview2 browser -ldflags "!WAILS_LDFLAGS!"
 
-REM Ensure core service is in the bin directory for installer
+REM Ensure core service and monitor are in the bin directory for installer
 if exist "build\bin\BS2PRO-CoreService.exe" (
     echo Core service built successfully
 ) else (
     echo ERROR: Core service build failed!
+    exit /b 1
+)
+
+if exist "build\bin\BS2PRO-Monitor.exe" (
+    echo Monitor probe built successfully
+) else (
+    echo ERROR: Monitor probe build failed!
     exit /b 1
 )
 

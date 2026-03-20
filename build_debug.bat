@@ -25,7 +25,13 @@ if exist "cmd\core\winres\winres.json" (
 )
 go build -ldflags "!CORE_LDFLAGS!" -o build/bin/BS2PRO-CoreService.exe ./cmd/core/
 
-echo [2/2] Building main application (DEBUG)...
+echo [2/3] Building monitor probe (DEBUG)...
+if exist "cmd\bs2pro-monitor\winres\winres.json" (
+    go-winres make --in cmd/bs2pro-monitor/winres/winres.json --out cmd/bs2pro-monitor/rsrc
+)
+go build -trimpath -ldflags "!CORE_LDFLAGS!" -o build/bin/BS2PRO-Monitor.exe ./cmd/bs2pro-monitor/
+
+echo [3/3] Building main application (DEBUG)...
 REM Wails 会生成带F12开发者工具的程序
 wails build -debug -ldflags "!WAILS_LDFLAGS!"
 

@@ -95,6 +95,62 @@ Function StopRunningInstances
     ${EndIf}
     
     DetailPrint "控制台进程停止完成"
+
+    DetailPrint "检查 BS2PRO-Monitor.exe 进程..."
+    nsExec::ExecToStack '"$SYSDIR\tasklist.exe" /FI "IMAGENAME eq BS2PRO-Monitor.exe"'
+    Pop $0
+    Pop $1
+    ${If} $0 == 0
+        DetailPrint "正在停止 BS2PRO-Monitor.exe..."
+        nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO-Monitor.exe" /T'
+        Pop $0
+        Pop $1
+        ${If} $0 == 0
+            Sleep 300
+        ${EndIf}
+    ${Else}
+        DetailPrint "BS2PRO-Monitor.exe 进程不存在，跳过终止"
+    ${EndIf}
+FunctionEnd
+
+Function WaitForFileRelease
+    Exch $0
+    Push $1
+    Push $2
+    StrCpy $1 0
+wait_loop:
+    ${IfNot} ${FileExists} $0
+        Goto wait_done
+    ${EndIf}
+    Sleep 300
+    IntOp $1 $1 + 1
+    ${If} $1 < 20
+        Goto wait_loop
+    ${EndIf}
+wait_done:
+    Pop $2
+    Pop $1
+    Exch $0
+FunctionEnd
+
+Function un.WaitForFileRelease
+    Exch $0
+    Push $1
+    Push $2
+    StrCpy $1 0
+un_wait_loop:
+    ${IfNot} ${FileExists} $0
+        Goto un_wait_done
+    ${EndIf}
+    Sleep 300
+    IntOp $1 $1 + 1
+    ${If} $1 < 20
+        Goto un_wait_loop
+    ${EndIf}
+un_wait_done:
+    Pop $2
+    Pop $1
+    Exch $0
 FunctionEnd
 
 Function un.StopRunningInstances
@@ -119,6 +175,22 @@ Function un.StopRunningInstances
     ${EndIf}
     
     DetailPrint "控制台进程停止完成"
+
+    DetailPrint "检查 BS2PRO-Monitor.exe 进程..."
+    nsExec::ExecToStack '"$SYSDIR\tasklist.exe" /FI "IMAGENAME eq BS2PRO-Monitor.exe"'
+    Pop $0
+    Pop $1
+    ${If} $0 == 0
+        DetailPrint "正在停止 BS2PRO-Monitor.exe..."
+        nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO-Monitor.exe" /T'
+        Pop $0
+        Pop $1
+        ${If} $0 == 0
+            Sleep 300
+        ${EndIf}
+    ${Else}
+        DetailPrint "BS2PRO-Monitor.exe 进程不存在，跳过终止"
+    ${EndIf}
 FunctionEnd
 
 Function LaunchAsNormalUser
@@ -149,6 +221,13 @@ Section "主程序" SEC_MAIN
         Call StopRunningInstances
         Delete "$INSTDIR\${PRODUCT_EXECUTABLE}"
         Delete "$INSTDIR\BS2PRO-CoreService.exe"
+        Delete "$INSTDIR\BS2PRO-Monitor.exe"
+        Push "$INSTDIR\${PRODUCT_EXECUTABLE}"
+        Call WaitForFileRelease
+        Push "$INSTDIR\BS2PRO-CoreService.exe"
+        Call WaitForFileRelease
+        Push "$INSTDIR\BS2PRO-Monitor.exe"
+        Call WaitForFileRelease
     ${EndIf}
     
     !insertmacro wails.webview2runtime
@@ -156,6 +235,7 @@ Section "主程序" SEC_MAIN
     !insertmacro wails.files
     
     File "..\..\bin\BS2PRO-CoreService.exe"
+    File "..\..\bin\BS2PRO-Monitor.exe"
     
     DetailPrint "正在注册核心服务..."
     nsExec::ExecToStack '"$INSTDIR\BS2PRO-CoreService.exe" install'
@@ -172,7 +252,14 @@ Section "主程序" SEC_MAIN
 
     !insertmacro wails.associateFiles
     !insertmacro wails.associateCustomProtocols
+    ClearErrors
     !insertmacro wails.writeUninstaller
+    ${If} ${Errors}
+        DetailPrint "卸载器写入失败，等待后重试..."
+        Sleep 500
+        ClearErrors
+        !insertmacro wails.writeUninstaller
+    ${EndIf}
 SectionEnd
 
 Section /o "开始菜单快捷方式" SEC_STARTMENU
@@ -260,6 +347,10 @@ Section "uninstall"
     ${EndIf}
     
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "BS2PRO-Controller"
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "BS2PRO-Monitor"
+    Delete "$INSTDIR\BS2PRO-Monitor.exe"
+    Push "$INSTDIR\BS2PRO-Monitor.exe"
+    Call un.WaitForFileRelease
 
     DetailPrint "正在移除控制台应用缓存数据..."
     SetShellVarContext current
@@ -267,7 +358,7 @@ Section "uninstall"
     SetShellVarContext all
 
     DetailPrint "正在删除安装目录..."
-    RMDir /r $INSTDIR
+    RMDir /r /REBOOTOK $INSTDIR
 
     Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"
     Delete "$DESKTOP\${INFO_PRODUCTNAME}.lnk"
