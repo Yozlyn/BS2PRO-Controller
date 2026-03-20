@@ -20,7 +20,7 @@
       <div v-if="open"
            class="absolute z-40 mt-2 w-full rounded-2xl border p-1 shadow-xl backdrop-blur-md max-h-72 overflow-y-auto"
            :class="[
-             isDark ? 'bg-[#1e2330]/95 border-white/10' : 'bg-white/95 border-slate-100',
+             isDark ? 'surface-card border-white/10' : 'surface-card border-slate-100',
              dropdownClass,
            ]">
         <button v-for="option in options"
@@ -41,7 +41,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ChevronRight } from 'lucide-vue-next'
 
 interface SelectOption {
@@ -71,6 +71,8 @@ const emit = defineEmits<{ 'update:modelValue': [value: string | number] }>()
 
 const open = ref(false)
 const rootEl = ref<HTMLElement | null>(null)
+const selectedValue = computed(() => String(props.modelValue ?? ''))
+const optionSignature = computed(() => props.options.map((option) => String(option.value)).join('\u0001'))
 
 const selectedLabel = computed(() => {
   const selected = props.options.find(o => o.value === props.modelValue)
@@ -95,6 +97,21 @@ function handleClickOutside(e: MouseEvent) {
 function handleEscape(e: KeyboardEvent) {
   if (e.key === 'Escape') open.value = false
 }
+
+watch(selectedValue, (next, prev) => {
+  if (!open.value || next === prev) return
+  const prevExists = props.options.some((option) => String(option.value) === prev)
+  const nextExists = props.options.some((option) => String(option.value) === next)
+  if (!prevExists && nextExists) return
+  open.value = false
+})
+
+watch(optionSignature, (next, prev) => {
+  if (!open.value || !prev || next === prev) return
+  const currentExists = props.options.some((option) => String(option.value) === selectedValue.value)
+  if (currentExists) return
+  open.value = false
+})
 
 onMounted(() => {
   document.addEventListener('mousedown', handleClickOutside)

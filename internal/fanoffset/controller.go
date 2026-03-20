@@ -328,7 +328,7 @@ NORMAL_LOGIC:
 
 			if zone.trendUpCount < requiredConfirm {
 				if c.logger != nil {
-					c.logger.Info("[升温防抖] %d°C 升温防抖(trend=%d): %d/%d",
+					c.logger.Debug("[升温防抖] %d°C 升温防抖(trend=%d): %d/%d",
 						point.Temperature, trend, zone.trendUpCount, requiredConfirm)
 				}
 				break NORMAL_LOGIC
@@ -346,7 +346,7 @@ NORMAL_LOGIC:
 			zone.stableCount = 0
 
 			if c.logger != nil {
-				c.logger.Info("[确认升温] %d°C 确认升温: offset %d->%d", point.Temperature, oldOffset, point.Offset)
+				c.logger.Debug("[确认升温] %d°C 确认升温: offset %d->%d", point.Temperature, oldOffset, point.Offset)
 			}
 
 		case trend <= -c.config.StableDelta:
@@ -390,7 +390,7 @@ NORMAL_LOGIC:
 				c.adjustZoneOffset(point, -dropStep, minRPM, maxRPM)
 				zone.stableCount = 0
 				if c.logger != nil {
-					c.logger.Info("[确认降温] %d°C 降温(%s): offset %d->%d",
+					c.logger.Debug("[确认降温] %d°C 降温(%s): offset %d->%d",
 						point.Temperature, dropReason, oldOffset, point.Offset)
 				}
 			}
@@ -445,7 +445,7 @@ NORMAL_LOGIC:
 					}
 					c.adjustZoneOffset(point, rebound, minRPM, maxRPM)
 					if c.logger != nil {
-						c.logger.Info("[回弹] %d°C 柔和回弹至基准线: offset->%d", point.Temperature, point.Offset)
+						c.logger.Debug("[回弹] %d°C 柔和回弹至基准线: offset->%d", point.Temperature, point.Offset)
 					}
 					break NORMAL_LOGIC
 				}
@@ -488,7 +488,7 @@ NORMAL_LOGIC:
 				} else {
 					zone.probeActive = true
 					if c.logger != nil {
-						c.logger.Info("[试探下调] %d°C 温度稳定, 试探下调: offset %d->%d",
+						c.logger.Debug("[试探下调] %d°C 温度稳定, 试探下调: offset %d->%d",
 							point.Temperature, zone.probeOffset, point.Offset)
 					}
 				}
@@ -618,7 +618,7 @@ func (c *Controller) handleVerifying(zoneIdx int, fanCurve []types.FanCurvePoint
 		c.adjustZoneOffset(point, step, minRPM, maxRPM)
 		zone.lastAdjustAt = now
 		if c.logger != nil {
-			c.logger.Info("[验证中断] %d°C 验证期因升温打断(trend=%d): offset %d->%d",
+			c.logger.Debug("[验证中断] %d°C 验证期因升温打断(trend=%d): offset %d->%d",
 				point.Temperature, trend, oldOffset, point.Offset)
 		}
 		return
@@ -640,7 +640,7 @@ func (c *Controller) handleVerifying(zoneIdx int, fanCurve []types.FanCurvePoint
 	zone.stableCount = 0
 	zone.driftCount = 0
 	if c.logger != nil {
-		c.logger.Info("[收敛] %d°C 成功收敛, 维持偏移 offset=%d", point.Temperature, point.Offset)
+		c.logger.Debug("[收敛] %d°C 成功收敛, 维持偏移 offset=%d", point.Temperature, point.Offset)
 	}
 }
 
@@ -670,7 +670,7 @@ func (c *Controller) checkDrift(zone *zoneState, currentTemp int, point *types.F
 			zone.driftCount = 0
 			zone.verifying = false
 			if c.logger != nil {
-				c.logger.Info("[漂移重置] %d°C 检测到温度漂移, 解除收敛状态", point.Temperature)
+				c.logger.Debug("[漂移重置] %d°C 检测到温度漂移, 解除收敛状态", point.Temperature)
 			}
 		}
 	} else {
@@ -702,7 +702,7 @@ func (c *Controller) handleSpike(currentTemp, tempDelta int, fanCurve []types.Fa
 		z.trendDownCount = 0
 	}
 	if c.logger != nil {
-		c.logger.Info("[瞬变检测] 捕捉到温度瞬变 %d°C -> %d°C, 重置区间状态", prevTemp, currentTemp)
+		c.logger.Debug("[瞬变检测] 捕捉到温度瞬变 %d°C -> %d°C, 重置区间状态", prevTemp, currentTemp)
 	}
 	c.tempRing[0] = tempSample{temp: prevTemp}
 	c.ringHead = 1 % c.windowSize
@@ -818,7 +818,7 @@ func (c *Controller) ensureZones(fanCurve []types.FanCurvePoint) {
 	}
 
 	if c.logger != nil && (len(c.zones) != n || reset > 0) {
-		c.logger.Info("[确保区域] 曲线节点变更: %d -> %d 节点, 继承 %d 个区间状态, 重置 %d 个",
+		c.logger.Debug("[确保区域] 曲线节点变更: %d -> %d 节点, 继承 %d 个区间状态, 重置 %d 个",
 			len(c.zones), n, inherited, reset)
 	}
 

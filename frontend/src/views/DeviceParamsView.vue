@@ -7,10 +7,10 @@
     <div class="grid grid-cols-1 gap-6">
       <!-- 自动化逻辑 -->
       <div class="grid grid-cols-2 gap-6">
-        <div class="p-6 rounded-[2rem] border space-y-6 surface-card">
+        <div class="p-6 rounded-[2.5rem] border space-y-6 surface-card">
           <div class="flex items-center justify-between">
             <div>
-              <h3 class="text-sm font-bold text-slate-700 dark:text-slate-300">自动温控</h3>
+              <h3 class="text-sm font-bold text-slate-700 dark:text-slate-300">智能变频</h3>
               <p class="text-[10px] text-slate-400">根据温度曲线自动调节风扇转速</p>
             </div>
             <LedToggle :active="config.autoControl" @click="handleAutoControlToggle"
@@ -25,7 +25,7 @@
                        :disabled="!isConnected || !config.autoControl" />
           </div>
         </div>
-        <div class="p-6 rounded-[2rem] border flex flex-col justify-between surface-card">
+        <div class="p-6 rounded-[2.5rem] border flex flex-col justify-between surface-card">
           <div>
             <h3 class="text-sm font-bold text-slate-700 dark:text-slate-300">温度采样次数</h3>
             <p class="text-[10px] text-slate-400 mt-1">设置响应灵敏度，次数越高越平滑</p>
@@ -52,11 +52,11 @@
                       @click="handleGearChange(mode)"
                       @mousedown="startButtonAnim(`preset-${mode}`)"
                       :disabled="!isConnected || config.autoControl || config.customSpeedEnabled"
-                      class="h-12 rounded-2xl font-bold text-xs transition-all flex items-center justify-center space-x-2 border disabled:opacity-40"
+                      class="h-12 rounded-2xl font-bold text-xs transition-all flex items-center justify-center space-x-2 border cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                       :class="[
                         config.manualGear === mode
                           ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-200'
-                          : 'bg-slate-50 dark:bg-white/[0.04] text-slate-500 dark:text-slate-400 border-slate-100 dark:border-white/8 hover:bg-slate-100 dark:hover:bg-white/[0.07]',
+                          : 'surface-tile text-slate-600 dark:text-slate-300 border-slate-200/70 dark:border-white/10 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-700/30',
                         clickedButton === `preset-${mode}` ? 'mode-clicked' : ''
                       ]">
                 <span>{{ mode }}</span>
@@ -99,7 +99,7 @@
       </div>
 
      <!-- 自定义转速 -->
-     <div class="p-6 rounded-[2rem] border space-y-4 relative overflow-hidden surface-card">
+     <div class="p-6 rounded-[2.5rem] border space-y-4 relative overflow-hidden surface-card">
        <div class="absolute -right-4 -bottom-4 w-32 h-32 rounded-full bg-blue-500/5 blur-[40px]" />
        <div class="flex justify-between items-start">
          <div>
@@ -121,10 +121,10 @@
           </div>
           <button @click="handleCustomSpeedApply" @mousedown="startButtonAnim('custom-apply')"
                   :disabled="!config.customSpeedEnabled || !isConnected || loadingCustomSpeed || !isCustomSpeedInputValid"
-                  class="h-11 px-6 rounded-xl font-bold text-xs transition-all disabled:opacity-40"
+                  class="h-11 px-6 rounded-xl font-bold text-xs transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   :class="[
                     config.customSpeedEnabled && isConnected
-                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-200 hover:bg-blue-700'
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-200 hover:bg-blue-700 hover:shadow-blue-300/60'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-300 dark:text-slate-600',
                     clickedButton === 'custom-apply' ? 'mode-clicked' : ''
                   ]">

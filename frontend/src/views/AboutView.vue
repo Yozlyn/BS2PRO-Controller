@@ -42,7 +42,7 @@
       <!-- 开发者 + 关于链接 两栏 -->
       <div class="grid grid-cols-2 gap-5">
         <!-- 开发者 -->
-        <div class="rounded-[2rem] border p-6 flex flex-col gap-4 surface-card">
+        <div class="rounded-[2.5rem] border p-6 flex flex-col gap-4 surface-card">
           <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Developer</p>
           <div class="flex items-center gap-3 flex-1">
             <img src="https://q1.qlogo.cn/g?b=qq&nk=507249007&s=640"
@@ -60,7 +60,7 @@
         </div>
 
         <!-- 链接 -->
-        <div class="rounded-[2rem] border p-6 flex flex-col gap-4 surface-card">
+        <div class="rounded-[2.5rem] border p-6 flex flex-col gap-4 surface-card">
           <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Links</p>
           <div class="space-y-3 flex-1">
             <button @click="openUrl('https://blog.tianli0.top/pages/bs2pro')"
@@ -88,7 +88,7 @@
 
       <!-- 版权/许可 - 移到页面底部 -->
       <div class="mt-5">
-        <div class="rounded-[2rem] border p-6 surface-card">
+        <div class="rounded-[2.5rem] border p-6 surface-card">
           <div class="flex items-center gap-3 mb-3">
             <div class="w-8 h-8 rounded-xl flex items-center justify-center bg-emerald-50 dark:bg-emerald-500/10 shrink-0">
               <svg class="w-4 h-4 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

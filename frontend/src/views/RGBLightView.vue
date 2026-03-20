@@ -27,11 +27,11 @@
       <button v-for="mode in MODES" :key="mode.id"
               @click="selectMode(mode.id)"
               :disabled="!isConnected"
-              class="p-3 rounded-2xl border transition-all flex flex-col items-center space-y-2 disabled:opacity-40 disabled:cursor-not-allowed"
+              class="p-3 rounded-2xl border transition-all duration-200 ease-out will-change-transform flex flex-col items-center space-y-2 disabled:opacity-40 disabled:cursor-not-allowed"
               :class="[
                 activeMode === mode.id
-                  ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200'
-                  : 'surface-tile text-slate-600 dark:text-slate-300 border-slate-200/70 dark:border-white/10 hover:bg-white/80 dark:hover:bg-white/[0.12]',
+                  ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200 hover:bg-blue-600/95 hover:shadow-blue-300/45 hover:-translate-y-px'
+                  : 'surface-tile text-slate-600 dark:text-slate-300 border-slate-200/70 dark:border-white/10 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white/72 dark:hover:bg-white/[0.10] hover:border-blue-300/50 dark:hover:border-blue-400/20 hover:shadow-sm hover:shadow-slate-200/45 dark:hover:shadow-blue-900/10 hover:-translate-y-px',
                 justClicked === mode.id ? 'mode-clicked' : ''
               ]"
               @mousedown="startClickAnim(mode.id)">
@@ -181,9 +181,9 @@
               <div class="flex surface-tile p-1.5 rounded-2xl w-fit border">
                 <button v-for="s in SPEED_OPTIONS" :key="s.id"
                         @click="setSpeed(s.id)" :disabled="!isConnected"
-                        class="px-8 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-40"
+                        class="px-8 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                         :class="speed === s.id
-                          ? 'surface-tile text-blue-600 dark:text-blue-400 border border-slate-200/70 dark:border-white/10'
+                          ? 'surface-tile text-blue-600 dark:text-blue-400 border border-slate-200/70 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/[0.08]'
                           : 'text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300'">
                   {{ s.label }}
                 </button>
@@ -217,7 +217,7 @@
                 </div>
                 <div v-if="currentModeConfig.maxColors && currentModeConfig.maxColors > displayColors.length" class="space-y-2">
                   <button @click="addColor" :disabled="!isConnected"
-                          class="w-full aspect-square rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 flex items-center justify-center transition-all disabled:opacity-40 group">
+                          class="w-full aspect-square rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 flex items-center justify-center transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed group">
                     <Plus :size="20" class="text-slate-300 dark:text-slate-600 group-hover:text-blue-400 transition-colors" />
                   </button>
                   <div class="text-[9px] font-mono font-bold text-slate-500 dark:text-slate-600 text-center uppercase tracking-tighter">添加</div>
@@ -233,7 +233,7 @@
                          :style="{ backgroundColor: `rgb(${displayColors[pickerIndex].r},${displayColors[pickerIndex].g},${displayColors[pickerIndex].b})` }" />
                     <span class="text-xs font-black text-slate-600 dark:text-slate-400 uppercase tracking-wider">拾色器</span>
                   </div>
-                  <button @click="pickerIndex = null" class="w-6 h-6 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">
+                  <button @click="pickerIndex = null" class="w-6 h-6 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">
                     <X :size="12" />
                   </button>
                 </div>
@@ -250,7 +250,7 @@
                   </div>
                   <button @click="handleColorChange(pickerIndex!, randomColor())"
                           class="w-8 h-8 shrink-0 rounded-lg bg-white dark:bg-white/[0.05] hover:bg-slate-100 dark:hover:bg-white/[0.08] flex items-center justify-center transition-colors border border-slate-200 dark:border-white/10" title="随机颜色">
-                    <RefreshCw :size="12" class="text-slate-400" />
+                            <RefreshCw :size="12" class="text-slate-400" />
                   </button>
                 </div>
                 <div class="space-y-2 mt-3 pt-3 border-t border-slate-200/60 dark:border-slate-700/60">
@@ -594,11 +594,11 @@ onUnmounted(() => {
 
 /* 模式按钮关键帧 */
 @keyframes mode-press {
-  0%   { transform: scale(1); }
-  40%  { transform: scale(0.88); }
-  100% { transform: scale(1); }
+  0%   { transform: translateY(0) scale(1); }
+  35%  { transform: translateY(0.5px) scale(0.985); }
+  100% { transform: translateY(0) scale(1); }
 }
-.mode-clicked { animation: mode-press 0.18s cubic-bezier(0.4, 0, 0.2, 1); }
+.mode-clicked { animation: mode-press 0.18s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
 
 /* 旧版脉冲动画已移除 */
 </style>

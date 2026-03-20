@@ -41,16 +41,18 @@
         </button>
         <button
           @click="createProfile"
+          @mousedown="startButtonAnim('create')"
           class="fan-curve-action-btn px-3 py-2 rounded-xl text-[11px] font-bold transition-all cursor-pointer"
-          :class="isDark ? 'surface-tile text-slate-300 hover:text-slate-200 hover:bg-slate-700/30' : 'surface-tile text-slate-600 hover:text-slate-700 hover:bg-slate-200/60'"
+          :class="[isDark ? 'surface-tile text-slate-300 hover:text-slate-200 hover:bg-slate-700/30' : 'surface-tile text-slate-600 hover:text-slate-700 hover:bg-slate-200/60', clickedButton === 'create' ? 'mode-clicked' : '']"
         >
           新建
         </button>
         <button
           @click="deleteProfile"
+          @mousedown="startButtonAnim('delete')"
           :disabled="selectedProfileId === DEVICE_PROFILE_ID"
           class="fan-curve-action-btn px-3 py-2 rounded-xl text-[11px] font-bold transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
-          :class="isDark ? 'surface-tile text-slate-300 hover:text-slate-200 hover:bg-slate-700/30' : 'surface-tile text-slate-600 hover:text-slate-700 hover:bg-slate-200/60'"
+          :class="[isDark ? 'surface-tile text-slate-300 hover:text-slate-200 hover:bg-slate-700/30' : 'surface-tile text-slate-600 hover:text-slate-700 hover:bg-slate-200/60', clickedButton === 'delete' ? 'mode-clicked' : '']"
         >
           删除
         </button>
@@ -268,8 +270,16 @@ function curvesEqual(a: types.FanCurvePoint[], b: types.FanCurvePoint[]) {
   return a.every((p, i) => p.temperature === b[i].temperature && p.rpm === b[i].rpm && (p.offset || 0) === (b[i].offset || 0))
 }
 
+function getCurrentProfileBaseline() {
+  if (selectedProfileId.value === DEVICE_PROFILE_ID) {
+    return props.config.fanCurve || []
+  }
+  const target = curveProfiles.value.find(profile => profile.id === selectedProfileId.value)
+  return target?.curve || []
+}
+
 function refreshUnsavedFlag() {
-  hasUnsavedChanges.value = !curvesEqual(ensureCurve(localCurve.value), ensureCurve(props.config.fanCurve || []))
+  hasUnsavedChanges.value = !curvesEqual(ensureCurve(localCurve.value), ensureCurve(getCurrentProfileBaseline()))
 }
 
 async function persistProfiles() {
@@ -576,7 +586,6 @@ function updatePoint(index: number, newRpm: number) {
   const next = [...localCurve.value]
   next[index] = { ...next[index], rpm: clamped }
   localCurve.value = next
-  updateSelectedProfileCurve()
   refreshUnsavedFlag()
 }
 
@@ -588,6 +597,8 @@ async function saveCurve() {
     await apiService.setFanCurve(localCurve.value)
     const defaultProfile = curveProfiles.value.find(profile => profile.id === DEVICE_PROFILE_ID)
     if (defaultProfile) defaultProfile.curve = cloneCurve(localCurve.value)
+    updateSelectedProfileCurve()
+    void persistProfiles()
     emit('config-change', types.AppConfig.createFrom({ ...props.config, fanCurve: localCurve.value }))
     refreshUnsavedFlag()
   } catch (e) { frontendLogger.error('风扇曲线', '保存风扇曲线失败', e) }
@@ -614,8 +625,7 @@ async function applyOffsetCurve() {
 }
 
 function cancelChanges() {
-  localCurve.value = cloneCurve(props.config.fanCurve)
-  updateSelectedProfileCurve()
+  localCurve.value = cloneCurve(getCurrentProfileBaseline())
   refreshUnsavedFlag()
 }
 function resetCurve() {
@@ -630,7 +640,6 @@ function resetCurve() {
     { temperature: 90, rpm: m, offset: 0 }, { temperature: 95, rpm: m, offset: 0 },
     { temperature: 100, rpm: m, offset: 0 },
   ].map(p => types.FanCurvePoint.createFrom(p))
-  updateSelectedProfileCurve()
   refreshUnsavedFlag()
 }
 function exportConfig() {

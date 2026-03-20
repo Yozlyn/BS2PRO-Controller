@@ -30,8 +30,8 @@
         <!-- 智能变频开关 -->
         <div class="flex items-center space-x-3 px-4 py-2 rounded-2xl border"
              :class="isDark
-               ? 'bg-slate-800/35 border-white/8 text-slate-200'
-               : 'bg-white/58 border-slate-300/55 text-slate-700'">
+               ? 'surface-tile border-white/10 text-slate-200'
+               : 'surface-tile border-slate-200/70 text-slate-700'">
           <span class="text-xs font-bold text-slate-500 dark:text-slate-400">智能变频</span>
           <LedToggle :active="isSmartFreq"
                      @click="$emit('update:isSmartFreq', !isSmartFreq)"
@@ -39,9 +39,9 @@
         </div>
         <!-- 断开/连接 -->
         <button @click="isConnected ? $emit('disconnect') : $emit('connect')"
-                class="h-10 flex items-center space-x-2 px-4 rounded-2xl text-xs font-bold transition-all border"
+                class="h-10 flex items-center space-x-2 px-4 rounded-2xl text-xs font-bold transition-all border cursor-pointer"
                 :class="isConnected
-                  ? 'bg-white/58 border-slate-300/55 dark:bg-slate-800/35 dark:border-white/8 text-slate-700 dark:text-slate-200 hover:text-red-500'
+                  ? 'surface-tile border-slate-200/70 dark:border-white/10 text-slate-700 dark:text-slate-200 hover:text-red-500 hover:bg-slate-200/60 dark:hover:bg-slate-700/30'
                   : 'bg-blue-600 border-blue-600 text-white hover:bg-blue-700'">
           <Power :size="14" />
           <span>{{ isConnected ? '断开连接' : '连接设备' }}</span>
