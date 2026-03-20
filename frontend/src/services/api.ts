@@ -1,13 +1,16 @@
-// Wails API 服务封装
-import { EventsOn, EventsOff } from '../../../wailsjs/runtime/runtime';
+// 前端调用后端能力的服务封装
+import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime';
 import { 
   ConnectDevice, 
   DisconnectDevice, 
+  ExportFanCurveProfilesZip,
   GetDeviceStatus,
   GetConfig,
   UpdateConfig,
   SetFanCurve,
   GetFanCurve,
+  GetFanCurveProfileConfigs,
+  ImportFanCurveProfilesZip,
   ApplyOffsetToCurve,
   SetAutoControl,
   GetAppVersion,
@@ -22,18 +25,18 @@ import {
   TestTemperatureReading,
   GetDebugInfo,
   SetDebugMode,
-  UpdateGuiResponseTime,
   SetCustomSpeed,
   SetRGBMode,
   CheckWindowsAutoStart,
+  CheckProcessSwitchNow,
+  ListRunningProcessNames,
   SetWindowsAutoStart,
-} from '../../../wailsjs/go/main/App';
+  SaveFanCurveProfileConfigs,
+  LogFrontendError,
+} from '../../wailsjs/go/main/App';
 
-import { types } from '../../../wailsjs/go/models';
+import { main, types } from '../../wailsjs/go/models';
 
-import type { 
-  DeviceInfo 
-} from '../types/app';
 
 class ApiService {
   // 设备连接
@@ -69,6 +72,22 @@ class ApiService {
 
   async getFanCurve(): Promise<types.FanCurvePoint[]> {
     return await GetFanCurve();
+  }
+
+  async getFanCurveProfileConfigs(): Promise<main.FanCurveProfileConfig[]> {
+    return await GetFanCurveProfileConfigs();
+  }
+
+  async saveFanCurveProfileConfigs(profiles: main.FanCurveProfileConfig[]): Promise<void> {
+    return await SaveFanCurveProfileConfigs(profiles);
+  }
+
+  async exportFanCurveProfilesZip(): Promise<void> {
+    return await ExportFanCurveProfilesZip();
+  }
+
+  async importFanCurveProfilesZip(): Promise<void> {
+    return await ImportFanCurveProfilesZip();
   }
 
   async applyOffsetToCurve(): Promise<void> {
@@ -116,13 +135,21 @@ class ApiService {
     return await SetRGBMode(params as any);
   }
 
-  // Windows自启动相关
+  // 系统开机自启动相关
   async checkWindowsAutoStart(): Promise<boolean> {
     return await CheckWindowsAutoStart();
   }
 
   async setWindowsAutoStart(enabled: boolean): Promise<void> {
     return await SetWindowsAutoStart(enabled);
+  }
+
+  async checkProcessSwitchNow(): Promise<boolean> {
+    return await CheckProcessSwitchNow();
+  }
+
+  async listRunningProcessNames(): Promise<string[]> {
+    return await ListRunningProcessNames();
   }
 
   // 数据获取
@@ -138,7 +165,7 @@ class ApiService {
     return await TestTemperatureReading();
   }
 
-  // 桥接程序相关
+  // 桥接程序能力
   async getBridgeProgramStatus(): Promise<any> {
     return await (window as any).go?.main?.App?.GetBridgeProgramStatus();
   }
@@ -148,7 +175,7 @@ class ApiService {
   }
 
   // 事件监听
-  onDeviceConnected(callback: (data: DeviceInfo) => void): () => void {
+  onDeviceConnected(callback: (data: any) => void): () => void {
     EventsOn('device-connected', callback);
     return () => EventsOff('device-connected');
   }
@@ -189,6 +216,16 @@ class ApiService {
     return () => EventsOff('core-service-connected');
   }
 
+  onWindowShown(callback: () => void): () => void {
+    EventsOn('window-shown', callback);
+    return () => EventsOff('window-shown');
+  }
+
+  onWindowHidden(callback: () => void): () => void {
+    EventsOn('window-hidden', callback);
+    return () => EventsOff('window-hidden');
+  }
+
   // 调试相关方法
   async getDebugInfo(): Promise<any> {
     return await GetDebugInfo();
@@ -198,9 +235,12 @@ class ApiService {
     return await SetDebugMode(enabled);
   }
 
-  async updateGuiResponseTime(): Promise<void> {
-    return await UpdateGuiResponseTime();
+  async reportFrontendLog(level: string, source: string, message: string, stack = ''): Promise<void> {
+    try {
+      await LogFrontendError(level, source, message, stack);
+    } catch {}
   }
+
 }
 
 export const apiService = new ApiService();

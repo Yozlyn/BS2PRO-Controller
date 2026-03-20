@@ -1,0 +1,321 @@
+@import "tailwindcss";
+
+/* Tailwind v4 主题变量 */
+@theme {
+  /* 项目使用的颜色变量 */
+  --color-slate-50:  #f8fafc;
+  --color-slate-100: #f1f5f9;
+  --color-slate-200: #e2e8f0;
+  --color-slate-300: #cbd5e1;
+  --color-slate-400: #94a3b8;
+  --color-slate-500: #64748b;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-slate-800: #1e293b;
+  --color-slate-900: #0f172a;
+
+  --color-blue-50:  #eff6ff;
+  --color-blue-100: #dbeafe;
+  --color-blue-200: #bfdbfe;
+  --color-blue-300: #93c5fd;
+  --color-blue-400: #60a5fa;
+  --color-blue-500: #3b82f6;
+  --color-blue-600: #2563eb;
+  --color-blue-700: #1d4ed8;
+  --color-blue-800: #1e40af;
+  --color-blue-900: #1e3a8a;
+
+  --color-emerald-50:  #ecfdf5;
+  --color-emerald-100: #d1fae5;
+  --color-emerald-200: #a7f3d0;
+  --color-emerald-300: #6ee7b7;
+  --color-emerald-400: #34d399;
+  --color-emerald-500: #10b981;
+  --color-emerald-600: #059669;
+  --color-emerald-700: #047857;
+  --color-emerald-800: #065f46;
+  --color-emerald-900: #064e3b;
+
+  --color-orange-50:  #fff7ed;
+  --color-orange-100: #ffedd5;
+  --color-orange-200: #fed7aa;
+  --color-orange-300: #fdba74;
+  --color-orange-400: #fb923c;
+  --color-orange-500: #f97316;
+  --color-orange-600: #ea580c;
+  --color-orange-700: #c2410c;
+  --color-orange-800: #9a3412;
+  --color-orange-900: #7c2d12;
+
+  /* 动画变量 */
+  --animate-rainbow-spin: rainbow-spin 4s linear infinite;
+  --animate-pulse-soft:   pulse-soft 2s ease-in-out infinite;
+  --animate-fan-spin:     fan-spin 4s linear infinite;
+
+  @keyframes rainbow-spin {
+    0%   { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+  @keyframes pulse-soft {
+    0%, 100% { opacity: 0.4; transform: scale(1); }
+    50%       { opacity: 0.8; transform: scale(1.05); }
+  }
+  @keyframes fan-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+}
+
+/* 暗色模式使用 class 策略 */
+@variant dark (&:where(.dark, .dark *));
+
+/* 基础样式 */
+@layer base {
+  :root {
+    color-scheme: light;
+    --ui-surface-bg: rgba(255, 255, 255, 0.62);
+    --ui-surface-border: rgba(203, 213, 225, 0.60);
+  }
+  .dark {
+    color-scheme: dark;
+    --ui-surface-bg: rgba(42, 42, 46, 0.34);
+    --ui-surface-border: rgba(255, 255, 255, 0.08);
+  }
+
+  html, body, #app {
+    @apply h-full w-full overflow-hidden antialiased;
+    margin: 0;
+    font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  /* 允许输入框与文本域选择文本 */
+  input, textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  body {
+    background-color: transparent;
+    color: #1e293b;
+    background-image: none;
+  }
+
+  .dark body {
+    background-color: transparent;
+    color: #f1f5f9;
+    background-image: none;
+  }
+}
+
+/* Wails 原生窗口拖拽区域 */
+.window-drag {
+  -webkit-user-select: none;
+  user-select: none;
+  --wails-draggable: drag;
+}
+.window-no-drag {
+  --wails-draggable: no-drag;
+}
+
+/* Windows 风格滚动条 */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(156, 163, 175, 0.5);
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(107, 114, 128, 0.8);
+}
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(75, 85, 99, 0.5);
+}
+
+/* 扇叶旋转动画 */
+.fan-spin-connected {
+  animation: fan-spin 4s linear infinite;
+}
+
+/* RGB 预览光晕 */
+.preview-glow {
+  filter: blur(30px);
+}
+
+/* 风扇曲线拖拽点 */
+.curve-dot:hover {
+  r: 6;
+  cursor: grab;
+}
+
+/* 全局细滚动条，移除上下箭头 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
+}
+*::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 99px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.6);
+}
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.dark *::-webkit-scrollbar-thumb {
+  background: rgba(71, 85, 105, 0.5);
+}
+.dark *::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.7);
+}
+
+/* 按钮点击反馈动画 */
+@keyframes mode-press {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(0.88); }
+  100% { transform: scale(1); }
+}
+.mode-clicked {
+  animation: mode-press 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 全局按钮点击反馈（胶囊开关除外） */
+button:not(.capsule-switch):not(.no-global-press) {
+  transition: transform 0.12s ease;
+  transform-origin: center;
+}
+button:not(.capsule-switch):not(.no-global-press):not(:disabled):active {
+  animation: mode-press 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 应用层微透明材质 */
+.app-mica-surface {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(253, 254, 255, 0.99));
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+  backdrop-filter: saturate(1.02) blur(0.8px);
+  -webkit-backdrop-filter: saturate(1.02) blur(0.8px);
+}
+.dark .app-mica-surface {
+  background: linear-gradient(180deg, rgba(34, 35, 39, 0.88), rgba(26, 27, 31, 0.92));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.26);
+  backdrop-filter: saturate(1.06) blur(1.8px);
+  -webkit-backdrop-filter: saturate(1.06) blur(1.8px);
+}
+
+/* 统一背景底板：菜单与所有卡片共用 */
+.surface-base {
+  background: var(--ui-surface-bg);
+  border-color: var(--ui-surface-border);
+}
+
+/* 统一卡片层级：主卡片 */
+.surface-card {
+  background: var(--ui-surface-bg);
+  border: 1px solid var(--ui-surface-border);
+  box-shadow: none;
+}
+.dark .surface-card {
+  background: var(--ui-surface-bg);
+  border: 1px solid var(--ui-surface-border);
+  box-shadow: none;
+}
+
+/* 统一卡片层级：次级条目卡 */
+.surface-tile {
+  background: var(--ui-surface-bg);
+  border: 1px solid var(--ui-surface-border);
+  box-shadow: none;
+}
+.dark .surface-tile {
+  background: var(--ui-surface-bg);
+  border: 1px solid var(--ui-surface-border);
+  box-shadow: none;
+}
+
+/* 亮色模式：卡片内灰字整体提亮可读性（不影响暗色） */
+:root .surface-card .text-slate-300,
+:root .surface-tile .text-slate-300 {
+  color: #64748b !important;
+}
+
+:root .surface-card .text-slate-400,
+:root .surface-tile .text-slate-400 {
+  color: #64748b !important;
+}
+
+:root .surface-card .text-slate-500,
+:root .surface-tile .text-slate-500 {
+  color: #475569 !important;
+}
+
+/* 例外：开关下方简介继续保持弱化 */
+:root .surface-card .setting-desc,
+:root .surface-tile .setting-desc {
+  color: #94a3b8 !important;
+}
+
+/* 非首页页面：统一两级文字颜色（主/次） */
+.panel-two-tone .text-slate-800,
+.panel-two-tone .text-slate-700,
+.panel-two-tone .text-slate-600 {
+  color: #334155 !important;
+}
+
+.panel-two-tone .text-slate-500,
+.panel-two-tone .text-slate-400,
+.panel-two-tone .text-slate-300 {
+  color: #64748b !important;
+}
+
+.dark .panel-two-tone .text-slate-800,
+.dark .panel-two-tone .text-slate-700,
+.dark .panel-two-tone .text-slate-600 {
+  color: #e2e8f0 !important;
+}
+
+.dark .panel-two-tone .text-slate-500,
+.dark .panel-two-tone .text-slate-400,
+.dark .panel-two-tone .text-slate-300 {
+  color: #94a3b8 !important;
+}
+
+/* 窗口恢复后短暂禁用交互，避免悬停状态残留 */
+.disable-hover,
+.disable-hover * {
+  pointer-events: none !important;
+}
+
+/* 风扇曲线页按钮悬停反馈 */
+.fan-curve-action-btn {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+.fan-curve-action-btn:not(:disabled):hover {
+  color: #334155 !important;
+}
+.panel-two-tone .fan-curve-action-btn:not(:disabled):hover {
+  background-color: rgba(226, 232, 240, 0.72) !important;
+}
+.dark .panel-two-tone .fan-curve-action-btn:not(:disabled):hover {
+  background-color: rgba(51, 65, 85, 0.45) !important;
+  color: #e2e8f0 !important;
+}
