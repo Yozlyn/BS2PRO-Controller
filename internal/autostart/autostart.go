@@ -74,6 +74,38 @@ func (m *Manager) CheckWindowsAutoStart() bool {
 	return err == nil
 }
 
+func (m *Manager) SetProcessSwitchMonitorAutoStart(enable bool) error {
+	key, err := registry.OpenKey(registry.CURRENT_USER, `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, registry.SET_VALUE)
+	if err != nil {
+		return fmt.Errorf("打开注册表失败: %v", err)
+	}
+	defer key.Close()
+
+	const valueName = "BS2PRO-Monitor"
+	if enable {
+		if m.installDir == "" {
+			return fmt.Errorf("安装目录未设置")
+		}
+		monitorPath := filepath.Join(m.installDir, "BS2PRO-Monitor.exe")
+		if _, err := os.Stat(monitorPath); os.IsNotExist(err) {
+			return fmt.Errorf("Monitor程序不存在: %s", monitorPath)
+		}
+		val := fmt.Sprintf(`"%s"`, monitorPath)
+		if err := key.SetStringValue(valueName, val); err != nil {
+			return fmt.Errorf("设置 Monitor 自启动失败: %v", err)
+		}
+		m.logger.Info("已设置进程联动 Monitor 开机自启动，路径: %s", monitorPath)
+		return nil
+	}
+
+	err = key.DeleteValue(valueName)
+	if err != nil && err != registry.ErrNotExist {
+		return fmt.Errorf("删除 Monitor 自启动失败: %v", err)
+	}
+	m.logger.Info("已移除进程联动 Monitor 开机自启动")
+	return nil
+}
+
 // DetectAutoStartLaunch 检测是否为自启动启动
 func DetectAutoStartLaunch(args []string) bool {
 	for _, arg := range args {

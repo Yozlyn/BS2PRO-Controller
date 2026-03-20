@@ -16,6 +16,8 @@ export function DisconnectDevice():Promise<void>;
 
 export function ExportFanCurveProfilesZip():Promise<void>;
 
+export function ExportRecentLogsZip():Promise<void>;
+
 export function GetAppVersion():Promise<string>;
 
 export function GetAvailableGears():Promise<Record<string, Array<types.GearCommand>>>;

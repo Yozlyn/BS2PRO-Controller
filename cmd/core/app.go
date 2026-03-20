@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,10 +62,14 @@ type CoreApp struct {
 	fanOffsetCtrl *fanoffset.Controller
 
 	// 进程联动风扇配置
-	processSwitcher          *procswitch.Switcher
-	processSwitchStop        chan struct{}
-	processSwitchWG          sync.WaitGroup
-	activeProcessProfilePath string
+	processSwitcher               *procswitch.Switcher
+	processSwitchStop             chan struct{}
+	processSwitchWG               sync.WaitGroup
+	processSwitchHTTPServer       *http.Server
+	activeProcessProfilePath      string
+	baseFanCurveBeforeSwitch      []types.FanCurvePoint
+	baseOffsetEnabledBeforeSwitch *bool
+	lastReportedForegroundProcess string
 }
 
 func NewCoreApp(debugMode bool) *CoreApp {
@@ -156,6 +161,7 @@ func (a *CoreApp) Start() error {
 	}
 
 	a.startProcessSwitchMonitoring()
+	a.startProcessSwitchHTTPServer()
 
 	a.safeGo("delayedConnectDevice", func() {
 		time.Sleep(1 * time.Second)
@@ -174,6 +180,11 @@ func (a *CoreApp) Stop() {
 	a.logInfo("Stop路径: cleanup -> DisconnectDevice -> CloseIPC")
 	close(a.processSwitchStop)
 	a.processSwitchWG.Wait()
+	if a.processSwitchHTTPServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = a.processSwitchHTTPServer.Shutdown(ctx)
+		cancel()
+	}
 	a.cleanup()
 	a.DisconnectDevice()
 	if a.asusClient != nil {
@@ -737,19 +748,59 @@ func (a *CoreApp) startProcessSwitchMonitoring() {
 	})
 }
 
+type processSwitchForegroundReport struct {
+	ProcessName string `json:"processName"`
+	ReportedAt  string `json:"reportedAt"`
+}
+
+func (a *CoreApp) startProcessSwitchHTTPServer() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/process-switch/foreground", a.handleProcessSwitchForegroundReport)
+	server := &http.Server{
+		Addr:    "127.0.0.1:20026",
+		Handler: mux,
+	}
+	a.processSwitchHTTPServer = server
+	a.safeGo("processSwitchHTTPServer", func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			a.logError("进程联动 HTTP 服务启动失败: %v", err)
+		}
+	})
+}
+
+func (a *CoreApp) handleProcessSwitchForegroundReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	defer r.Body.Close()
+	var report processSwitchForegroundReport
+	if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	a.mutex.Lock()
+	a.lastReportedForegroundProcess = strings.ToLower(strings.TrimSpace(report.ProcessName))
+	a.mutex.Unlock()
+	a.logDebug("进程联动收到探针上报前台进程: %s", report.ProcessName)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *CoreApp) runProcessSwitchCheck(cfg types.AppConfig) {
 	if a.processSwitcher == nil {
 		return
 	}
 
-	procs, err := a.processSwitcher.ListProcessNames()
-	if err != nil {
-		a.logDebug("进程联动读取进程列表失败: %v", err)
-		return
-	}
+	a.mutex.RLock()
+	foregroundProcess := a.lastReportedForegroundProcess
+	a.mutex.RUnlock()
+	procs := a.processSwitcher.ListProcessNames(foregroundProcess)
+	a.logDebug("进程联动当前前台进程集合: %+v", procs)
 
 	rule := a.processSwitcher.MatchRule(cfg.ProcessSwitchRules, procs)
 	if rule == nil {
+		a.logDebug("进程联动未命中，准备恢复原始风扇曲线")
+		a.restoreBaseFanCurveAfterProcessSwitch()
 		a.mutex.Lock()
 		a.activeProcessProfilePath = ""
 		a.mutex.Unlock()
@@ -761,6 +812,7 @@ func (a *CoreApp) runProcessSwitchCheck(cfg types.AppConfig) {
 	alreadyApplied := strings.EqualFold(a.activeProcessProfilePath, resolved)
 	a.mutex.RUnlock()
 	if alreadyApplied {
+		a.logDebug("进程联动命中但已应用，无需重复切换: process=%s path=%s", rule.ProcessName, resolved)
 		return
 	}
 
@@ -781,7 +833,16 @@ func (a *CoreApp) runProcessSwitchCheck(cfg types.AppConfig) {
 func (a *CoreApp) applyProcessCurve(curve []types.FanCurvePoint, profilePath string) error {
 	a.mutex.Lock()
 	cfg := a.configManager.Get()
-	cfg.FanCurve = curve
+	if a.activeProcessProfilePath == "" {
+		a.baseFanCurveBeforeSwitch = cloneFanCurvePoints(cfg.FanCurve)
+		baseOffsetEnabled := cfg.FanCurveOffsetEnabled
+		a.baseOffsetEnabledBeforeSwitch = &baseOffsetEnabled
+	}
+	cfg.FanCurve = cloneFanCurvePoints(curve)
+	for i := range cfg.FanCurve {
+		cfg.FanCurve[i].Offset = 0
+	}
+	cfg.FanCurveOffsetEnabled = false
 	err := a.configManager.Update(cfg)
 	isConnected := a.isConnected
 	currentTemp := a.currentTemp.MaxTemp
@@ -804,6 +865,43 @@ func (a *CoreApp) applyProcessCurve(curve []types.FanCurvePoint, profilePath str
 		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
 	}
 	return nil
+}
+
+func (a *CoreApp) restoreBaseFanCurveAfterProcessSwitch() {
+	a.mutex.Lock()
+	if a.activeProcessProfilePath == "" || len(a.baseFanCurveBeforeSwitch) == 0 {
+		a.mutex.Unlock()
+		return
+	}
+	a.logDebug("进程联动退出前台，恢复原始风扇曲线: previous=%s", a.activeProcessProfilePath)
+	cfg := a.configManager.Get()
+	cfg.FanCurve = cloneFanCurvePoints(a.baseFanCurveBeforeSwitch)
+	if a.baseOffsetEnabledBeforeSwitch != nil {
+		cfg.FanCurveOffsetEnabled = *a.baseOffsetEnabledBeforeSwitch
+	}
+	err := a.configManager.Update(cfg)
+	if err == nil {
+		a.logDebug("进程联动恢复完成: restoredCurvePoints=%d restoredOffsetEnabled=%v", len(cfg.FanCurve), cfg.FanCurveOffsetEnabled)
+		a.baseFanCurveBeforeSwitch = nil
+		a.baseOffsetEnabledBeforeSwitch = nil
+	}
+	a.mutex.Unlock()
+	if err != nil {
+		a.logError("恢复原始风扇曲线失败: %v", err)
+		return
+	}
+	if a.ipcServer != nil {
+		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
+	}
+}
+
+func cloneFanCurvePoints(src []types.FanCurvePoint) []types.FanCurvePoint {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]types.FanCurvePoint, len(src))
+	copy(dst, src)
+	return dst
 }
 
 func (a *CoreApp) CheckProcessSwitchNow() bool {

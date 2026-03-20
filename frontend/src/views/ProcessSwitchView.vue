@@ -2,14 +2,14 @@
   <div class="p-8 flex flex-col h-full space-y-6 overflow-y-auto">
     <header>
       <h2 class="text-xl font-bold tracking-tight text-slate-800 dark:text-white">进程联动风扇配置</h2>
-      <p class="text-xs text-slate-400 mt-1">当前仅按前台窗口进程联动，适合游戏或正在操作的全屏应用</p>
+      <p class="text-xs text-slate-400 mt-1">开启后自动按前台窗口进程匹配风扇配置，适合游戏或全屏应用场景</p>
     </header>
 
     <div class="space-y-6 max-w-5xl">
       <div class="p-1 rounded-[2.5rem] border surface-card">
         <SettingItem
           title="启用进程联动"
-          desc="按规则扫描进程并自动应用对应风扇配置"
+          desc="按规则扫描进程并自动应用对应风扇配置，启动并设置监控探针程序自启动"
           :active="localEnabled"
           :loading="saving"
           @toggle="handleToggleEnabled"
@@ -20,37 +20,28 @@
         <div class="p-6 flex items-center justify-between gap-4">
           <div class="space-y-1">
             <h3 class="text-sm font-bold text-slate-700 dark:text-slate-300">扫描周期</h3>
-            <p class="text-xs text-slate-400">每隔多久扫描一次进程列表</p>
+            <p class="text-xs text-slate-400">每隔多久同步一次前台进程匹配状态</p>
           </div>
-          <div class="flex items-center gap-3">
-            <UnifiedSelect
-              :model-value="localInterval"
-              :options="intervalOptions"
-              :is-dark="isDark"
-              width-class="w-40"
-              :disabled="saving"
-              @update:model-value="handleIntervalChange"
-            />
-            <button
-              @click="runCheckNow"
-              :disabled="!localEnabled || saving || checking"
-              class="px-4 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-              :class="isDark ? 'surface-tile text-slate-300 hover:text-slate-200 hover:bg-slate-700/30' : 'surface-tile text-slate-600 hover:text-slate-700 hover:bg-slate-200/60'"
-            >
-              {{ checking ? '检测中...' : '立即检测' }}
-            </button>
-          </div>
+          <UnifiedSelect
+            :model-value="localInterval"
+            :options="intervalOptions"
+            :is-dark="isDark"
+            width-class="w-40"
+            :disabled="saving"
+            @update:model-value="handleIntervalChange"
+          />
         </div>
       </div>
 
-      <div class="p-6 rounded-[2rem] border surface-card space-y-4">
+      <div class="p-6 rounded-[2.5rem] border surface-card space-y-4">
         <div class="flex items-center justify-between">
           <h3 class="text-sm font-bold text-slate-700 dark:text-slate-300">联动规则</h3>
           <button
             @click="addRule"
             :disabled="saving"
-            class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all disabled:opacity-40"
-            :class="isDark ? 'surface-tile text-slate-300 hover:text-slate-200 hover:bg-slate-700/30' : 'surface-tile text-slate-600 hover:text-slate-700 hover:bg-slate-200/60'"
+            @mousedown="startButtonAnim('add-rule')"
+            class="fan-curve-action-btn px-3 py-2 rounded-xl text-[11px] font-bold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            :class="[isDark ? 'surface-tile text-slate-300 hover:text-slate-200 hover:bg-slate-700/30' : 'surface-tile text-slate-600 hover:text-slate-700 hover:bg-slate-200/60', clickedButton === 'add-rule' ? 'mode-clicked' : '']"
           >新增规则</button>
         </div>
 
@@ -103,8 +94,9 @@
           <button
             @click="saveRules"
             :disabled="saving"
-            class="px-5 py-2.5 rounded-xl text-xs font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-            :class="isDark ? 'surface-tile text-slate-300 hover:text-slate-200 hover:bg-slate-700/30' : 'surface-tile text-slate-600 hover:text-slate-700 hover:bg-slate-200/60'"
+            class="fan-curve-action-btn px-5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            :class="[isDark ? 'surface-tile text-slate-300 hover:text-slate-200 hover:bg-slate-700/30' : 'surface-tile text-slate-600 hover:text-slate-700 hover:bg-slate-200/60', clickedButton === 'save-rules' ? 'mode-clicked' : '']"
+            @mousedown="startButtonAnim('save-rules')"
           >
             {{ saving ? '保存中...' : '保存规则' }}
           </button>
@@ -131,12 +123,13 @@ const props = defineProps<Props>()
 const emit = defineEmits<{ 'config-change': [config: types.AppConfig] }>()
 
 const saving = ref(false)
-const checking = ref(false)
+const clickedButton = ref<string | null>(null)
 const localEnabled = ref(false)
 const localInterval = ref(3)
 const localRules = ref<types.ProcessFanRule[]>([])
 const processOptions = ref<{ value: string; label: string }[]>([])
 const profileOptions = ref<{ value: string; label: string }[]>([])
+let buttonAnimTimer: ReturnType<typeof setTimeout> | null = null
 
 const intervalOptions = [
   { value: 1, label: '1 秒' },
@@ -164,6 +157,12 @@ watch(
 
 function buildNextConfig(patch: Partial<types.AppConfig>) {
   return types.AppConfig.createFrom({ ...props.config, ...patch })
+}
+
+function startButtonAnim(key: string) {
+  clickedButton.value = key
+  if (buttonAnimTimer) clearTimeout(buttonAnimTimer)
+  buttonAnimTimer = setTimeout(() => { clickedButton.value = null }, 200)
 }
 
 async function updateConfig(patch: Partial<types.AppConfig>) {
@@ -323,16 +322,5 @@ async function saveRules() {
   await updateConfig({ processSwitchRules: sanitizeRules() as any })
 }
 
-async function runCheckNow() {
-  checking.value = true
-  try {
-    await saveRules()
-    await apiService.checkProcessSwitchNow()
-  } catch (e) {
-    frontendLogger.error('进程联动', '立即检测失败', e)
-  } finally {
-    checking.value = false
-  }
-}
 </script>
 

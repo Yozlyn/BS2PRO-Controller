@@ -36,16 +36,17 @@ func (s *Switcher) ResolveProfilePath(path string) string {
 	return filepath.Join(s.baseDir, trimmed)
 }
 
-func (s *Switcher) ListProcessNames() (map[string]struct{}, error) {
-	name, err := getForegroundProcessName()
-	if err != nil {
-		return nil, err
-	}
+func (s *Switcher) ListProcessNames(name string) map[string]struct{} {
 	result := make(map[string]struct{}, 1)
 	if name != "" {
+		if s.logger != nil {
+			s.logger.Debug("进程联动前台进程: %s", name)
+		}
 		result[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+	} else if s.logger != nil {
+		s.logger.Debug("进程联动前台进程为空")
 	}
-	return result, nil
+	return result
 }
 
 func (s *Switcher) MatchRule(rules []types.ProcessFanRule, processNames map[string]struct{}) *types.ProcessFanRule {
@@ -58,9 +59,18 @@ func (s *Switcher) MatchRule(rules []types.ProcessFanRule, processNames map[stri
 		if pname == "" {
 			continue
 		}
+		if s.logger != nil {
+			s.logger.Debug("进程联动规则检查: ruleProcess=%s enabled=%v", pname, rule.Enabled)
+		}
 		if _, ok := processNames[pname]; ok {
+			if s.logger != nil {
+				s.logger.Debug("进程联动规则命中: %s", pname)
+			}
 			return &rule
 		}
+	}
+	if s.logger != nil {
+		s.logger.Debug("进程联动未命中任何规则")
 	}
 	return nil
 }

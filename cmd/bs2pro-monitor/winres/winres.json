@@ -1,0 +1,60 @@
+{
+  "RT_GROUP_ICON": {
+    "APP": {
+      "0000": [
+        "../../core/winres/icon.png"
+      ]
+    }
+  },
+  "RT_MANIFEST": {
+    "#1": {
+      "0409": {
+        "identity": {
+          "name": "BS2PRO-Monitor",
+          "version": "1.0.0.0"
+        },
+        "description": "BS2PRO Monitor",
+        "minimum-os": "win10",
+        "execution-level": "asInvoker",
+        "ui-access": false,
+        "auto-elevate": false,
+        "dpi-awareness": "system",
+        "disable-theming": false,
+        "disable-window-filtering": false,
+        "high-resolution-scrolling-aware": false,
+        "ultra-high-resolution-scrolling-aware": false,
+        "long-path-aware": false,
+        "printer-driver-isolation": false,
+        "gdi-scaling": false,
+        "segment-heap": false,
+        "use-common-controls-v6": false
+      }
+    }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0000": {
+        "fixed": {
+          "file_version": "2.7.0.1",
+          "product_version": "2.7.0.1"
+        },
+        "info": {
+          "0409": {
+            "Comments": "BS2PRO Foreground Process Monitor",
+            "CompanyName": "TIANLI0",
+            "FileDescription": "BS2PRO Monitor",
+            "FileVersion": "2.7.0-r1",
+            "InternalName": "BS2PRO-Monitor",
+            "LegalCopyright": "Copyright (c) 2025 TIANLI0",
+            "LegalTrademarks": "",
+            "OriginalFilename": "BS2PRO-Monitor.exe",
+            "PrivateBuild": "",
+            "ProductName": "BS2PRO Controller",
+            "ProductVersion": "2.7.0-r1",
+            "SpecialBuild": ""
+          }
+        }
+      }
+    }
+  }
+}

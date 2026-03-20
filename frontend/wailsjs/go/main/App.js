@@ -26,6 +26,10 @@ export function ExportFanCurveProfilesZip() {
   return window['go']['main']['App']['ExportFanCurveProfilesZip']();
 }
 
+export function ExportRecentLogsZip() {
+  return window['go']['main']['App']['ExportRecentLogsZip']();
+}
+
 export function GetAppVersion() {
   return window['go']['main']['App']['GetAppVersion']();
 }

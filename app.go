@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	stdruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -412,6 +413,7 @@ func (a *App) GetConfig() AppConfig {
 }
 
 func (a *App) UpdateConfig(cfg AppConfig) error {
+	oldCfg := a.GetConfig()
 	resp, err := a.sendRequest(ipc.ReqUpdateConfig, cfg)
 	if err != nil {
 		return err
@@ -422,7 +424,49 @@ func (a *App) UpdateConfig(cfg AppConfig) error {
 		}
 		return fmt.Errorf("服务返回为空")
 	}
+	if oldCfg.ProcessSwitchEnabled != cfg.ProcessSwitchEnabled {
+		a.syncProcessSwitchMonitor(cfg.ProcessSwitchEnabled)
+	}
 	return nil
+}
+
+func (a *App) syncProcessSwitchMonitor(enabled bool) {
+	if enabled {
+		if err := a.startProcessSwitchMonitor(); err != nil {
+			logError("启动进程联动 Monitor 失败: %v", err)
+		}
+		if a.autostartManager != nil {
+			if err := a.autostartManager.SetProcessSwitchMonitorAutoStart(true); err != nil {
+				logError("设置进程联动 Monitor 自启动失败: %v", err)
+			}
+		}
+		return
+	}
+	if a.autostartManager != nil {
+		if err := a.autostartManager.SetProcessSwitchMonitorAutoStart(false); err != nil {
+			logError("移除进程联动 Monitor 自启动失败: %v", err)
+		}
+	}
+	if err := a.stopProcessSwitchMonitor(); err != nil {
+		logError("停止进程联动 Monitor 失败: %v", err)
+	}
+}
+
+func (a *App) startProcessSwitchMonitor() error {
+	monitorPath := filepath.Join(config.GetInstallDir(), "BS2PRO-Monitor.exe")
+	if _, err := os.Stat(monitorPath); err != nil {
+		return fmt.Errorf("Monitor程序不存在: %s", monitorPath)
+	}
+	cmd := exec.Command(monitorPath)
+	cmd.Dir = filepath.Dir(monitorPath)
+	platformutil.HideCommandWindow(cmd)
+	return cmd.Start()
+}
+
+func (a *App) stopProcessSwitchMonitor() error {
+	cmd := exec.Command("taskkill", "/F", "/IM", "BS2PRO-Monitor.exe", "/T")
+	platformutil.HideCommandWindow(cmd)
+	return cmd.Run()
 }
 
 func (a *App) SetFanCurve(curve []FanCurvePoint) error {
@@ -714,6 +758,147 @@ func (a *App) ImportFanCurveProfilesZip() error {
 		return err
 	}
 	return nil
+}
+
+func (a *App) ExportRecentLogsZip() error {
+	if a.ctx == nil {
+		return fmt.Errorf("窗口上下文不可用")
+	}
+
+	savePath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "导出最近7天日志",
+		DefaultFilename: fmt.Sprintf("bs2pro-logs-%s.zip", time.Now().Format("20060102")),
+		Filters: []runtime.FileFilter{
+			{DisplayName: "ZIP 文件", Pattern: "*.zip"},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(savePath) == "" {
+		return nil
+	}
+
+	logDir := config.GetLogDir()
+	entries, err := os.ReadDir(logDir)
+	if err != nil {
+		return err
+	}
+	cutoff := time.Now().AddDate(0, 0, -7)
+
+	f, err := os.Create(savePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	zw := zip.NewWriter(f)
+	defer zw.Close()
+
+	count := 0
+	diag, diagErr := a.buildFeedbackDiagnostics()
+	if diagErr == nil {
+		w, err := zw.Create("diagnostics/system-info.json")
+		if err != nil {
+			return err
+		}
+		if _, err := w.Write(diag); err != nil {
+			return err
+		}
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(strings.ToLower(name), ".log") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().Before(cutoff) {
+			continue
+		}
+		fullPath := filepath.Join(logDir, name)
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			continue
+		}
+		w, err := zw.Create(filepath.Join("logs", name))
+		if err != nil {
+			return err
+		}
+		if _, err := w.Write(data); err != nil {
+			return err
+		}
+		count++
+	}
+	if count == 0 {
+		return fmt.Errorf("最近7天没有可导出的日志")
+	}
+	return zw.Close()
+}
+
+func (a *App) buildFeedbackDiagnostics() ([]byte, error) {
+	cfg := a.GetConfig()
+	debugInfo := map[string]any{}
+	if info, err := a.sendRequest(ipc.ReqGetDebugInfo, nil); err == nil && info != nil && info.Success {
+		_ = json.Unmarshal(info.Data, &debugInfo)
+	}
+	frontendEnv := map[string]any{}
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "collect-frontend-diagnostics", nil)
+	}
+	webviewVersion := detectWebView2RuntimeVersion()
+	hostname, _ := os.Hostname()
+	payload := map[string]any{
+		"exportedAt":          time.Now().Format(time.RFC3339),
+		"appVersion":          version.Get(),
+		"goos":                stdruntime.GOOS,
+		"goarch":              stdruntime.GOARCH,
+		"hostname":            hostname,
+		"webview2Runtime":     webviewVersion,
+		"config":              cfg,
+		"coreDebugInfo":       debugInfo,
+		"frontendDiagnostics": frontendEnv,
+	}
+	return json.MarshalIndent(payload, "", "  ")
+}
+
+func detectWebView2RuntimeVersion() string {
+	queries := [][2]string{
+		{`HKLM\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`, "pv"},
+		{`HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`, "pv"},
+		{`HKCU\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`, "pv"},
+		{`HKLM\SOFTWARE\Microsoft\EdgeUpdate\ClientState\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`, "pv"},
+		{`HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\ClientState\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`, "pv"},
+		{`HKCU\SOFTWARE\Microsoft\EdgeUpdate\ClientState\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`, "pv"},
+	}
+	for _, q := range queries {
+		if version := queryRegistryStringValue(q[0], q[1]); version != "" {
+			return version
+		}
+	}
+	return "unknown"
+}
+
+func queryRegistryStringValue(keyPath, valueName string) string {
+	cmd := exec.Command("reg", "query", keyPath, "/v", valueName)
+	platformutil.HideCommandWindow(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "REG_SZ") {
+			parts := strings.Fields(line)
+			if len(parts) > 0 {
+				return parts[len(parts)-1]
+			}
+		}
+	}
+	return ""
 }
 
 func readFanProfilesBundleZip(path string) (*fanCurveProfilesBundle, error) {

@@ -45,18 +45,25 @@
                      :active="config.debugMode" @toggle="handleDebugMode" />
       </div>
 
+      <!-- 反馈工具 -->
+      <div class="p-6 rounded-[2.5rem] border surface-card flex items-center justify-between gap-4">
+        <div class="space-y-1">
+          <h3 class="text-sm font-bold text-slate-700 dark:text-slate-300">反馈日志导出</h3>
+          <p class="text-xs text-slate-400 setting-desc">一键打包最近7天的运行日志，便于提交问题反馈</p>
+        </div>
+        <button @click="exportRecentLogs" @mousedown="startButtonAnim('export-logs')" :disabled="exportLogsLoading"
+                class="fan-curve-action-btn flex items-center space-x-2 px-5 py-2.5 border rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                :class="[isDark ? 'surface-tile border-white/10 text-slate-300 hover:text-slate-200 hover:bg-slate-700/30' : 'surface-tile border-slate-200/70 text-slate-600 hover:text-slate-700 hover:bg-slate-200/60', clickedButton === 'export-logs' ? 'mode-clicked' : '']">
+          <span>{{ exportLogsLoading ? '导出中...' : '导出日志包' }}</span>
+        </button>
+      </div>
+
       <!-- 版本信息 -->
       <div class="pt-4 flex items-center justify-between">
         <div class="flex items-center space-x-2 text-[10px] text-slate-400 font-bold uppercase tracking-wider">
           <Terminal :size="12" />
           <span>App Version: {{ appVersion || '加载中...' }}</span>
         </div>
-        <button @click="fetchDebugInfo" @mousedown="startButtonAnim('refresh-debug')" :disabled="debugInfoLoading"
-                class="flex items-center space-x-2 px-6 py-2.5 bg-slate-50 dark:bg-white/[0.04] text-slate-500 dark:text-slate-400 rounded-xl text-xs font-bold hover:bg-slate-100 dark:hover:bg-white/[0.07] transition-all border border-slate-100 dark:border-white/8 disabled:opacity-40"
-                :class="clickedButton === 'refresh-debug' ? 'mode-clicked' : ''">
-          <RefreshCw :size="14" :class="debugInfoLoading ? 'animate-spin' : ''" />
-          <span>刷新调试信息</span>
-        </button>
       </div>
 
       <!-- 调试信息 -->
@@ -67,7 +74,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { Terminal, RefreshCw } from 'lucide-vue-next'
+import { Terminal } from 'lucide-vue-next'
 import SettingItem from '../components/ui/SettingItem.vue'
 import UnifiedSelect from '../components/ui/UnifiedSelect.vue'
 import { apiService } from '../services/api'
@@ -84,7 +91,7 @@ const emit = defineEmits<{ 'config-change': [config: types.AppConfig] }>()
 
 const appVersion = ref('')
 const debugInfo = ref<any>(null)
-const debugInfoLoading = ref(false)
+const exportLogsLoading = ref(false)
 const clickedButton = ref<string | null>(null)
 let buttonAnimTimer: ReturnType<typeof setTimeout> | null = null
 const loading = ref({ gearLight: false, powerOnStart: false, windowsAutoStart: false })
@@ -158,10 +165,15 @@ async function handleDebugMode() {
   } catch (e) { frontendLogger.error('系统设置', '切换调试模式失败', e) }
 }
 
-async function fetchDebugInfo() {
-  debugInfoLoading.value = true
-  try { debugInfo.value = await apiService.getDebugInfo() }
-  catch (e) { frontendLogger.error('系统设置', '获取调试信息失败', e) }
-  finally { debugInfoLoading.value = false }
+async function exportRecentLogs() {
+  exportLogsLoading.value = true
+  try {
+    await apiService.exportRecentLogsZip()
+  } catch (e) {
+    frontendLogger.error('系统设置', '导出日志包失败', e)
+    alert(`导出日志包失败：${e}`)
+  } finally {
+    exportLogsLoading.value = false
+  }
 }
 </script>

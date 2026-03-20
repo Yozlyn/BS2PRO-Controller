@@ -4,6 +4,7 @@ import {
   ConnectDevice, 
   DisconnectDevice, 
   ExportFanCurveProfilesZip,
+  ExportRecentLogsZip,
   GetDeviceStatus,
   GetConfig,
   UpdateConfig,
@@ -84,6 +85,10 @@ class ApiService {
 
   async exportFanCurveProfilesZip(): Promise<void> {
     return await ExportFanCurveProfilesZip();
+  }
+
+  async exportRecentLogsZip(): Promise<void> {
+    return await ExportRecentLogsZip();
   }
 
   async importFanCurveProfilesZip(): Promise<void> {
