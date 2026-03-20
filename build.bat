@@ -27,14 +27,14 @@ echo Building core service...
 if exist "cmd\core\winres\winres.json" (
     go-winres make --in cmd/core/winres/winres.json --out cmd/core/rsrc
 )
-go build -ldflags "!CORE_LDFLAGS!" -o build/bin/BS2PRO-CoreService.exe ./cmd/core/
+go build -trimpath -ldflags "!CORE_LDFLAGS!" -o build/bin/BS2PRO-CoreService.exe ./cmd/core/
 
 REM Add NSIS to PATH for installer creation
 set PATH=%PATH%;C:\Program Files (x86)\NSIS\Bin
 
 REM Build main application with wails
 echo Building main application...
-wails build -nsis -ldflags "!WAILS_LDFLAGS!"
+wails build -nsis -trimpath -webview2 browser -ldflags "!WAILS_LDFLAGS!"
 
 REM Ensure core service is in the bin directory for installer
 if exist "build\bin\BS2PRO-CoreService.exe" (

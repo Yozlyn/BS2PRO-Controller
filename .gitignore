@@ -1,6 +1,6 @@
 build/bin
 node_modules
-frontend/dist
+frontend/out
 __pycache__/
 *.exe
 bridge/TempBridge/obj

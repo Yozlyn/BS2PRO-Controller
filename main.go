@@ -23,7 +23,7 @@ var assets embed.FS
 //go:embed build/windows/icon.ico
 var iconData []byte
 
-// guiCapturePanic 捕获GUI进程的panic，写入crash文件和日志
+// guiCapturePanic 捕获 GUI 进程异常，写入崩溃文件和日志
 func guiCapturePanic(recovered any) {
 	stack := debug.Stack()
 	logDir := config.GetLogDir()
@@ -33,25 +33,25 @@ func guiCapturePanic(recovered any) {
 	filePath := filepath.Join(logDir, fileName)
 
 	var b strings.Builder
-	b.WriteString("=== BS2PRO GUI Crash Report ===\n")
-	b.WriteString(fmt.Sprintf("time:  %s\n", time.Now().Format(time.RFC3339Nano)))
-	b.WriteString(fmt.Sprintf("panic: %v\n", recovered))
-	b.WriteString(fmt.Sprintf("pid:   %d\n", os.Getpid()))
-	b.WriteString(fmt.Sprintf("args:  %v\n", os.Args))
-	b.WriteString("\n--- stack ---\n")
+	b.WriteString("=== BS2PRO 图形界面崩溃报告 ===\n")
+	b.WriteString(fmt.Sprintf("时间:      %s\n", time.Now().Format(time.RFC3339Nano)))
+	b.WriteString(fmt.Sprintf("异常:      %v\n", recovered))
+	b.WriteString(fmt.Sprintf("进程ID:    %d\n", os.Getpid()))
+	b.WriteString(fmt.Sprintf("启动参数:  %v\n", os.Args))
+	b.WriteString("\n--- 调用栈 ---\n")
 	b.Write(stack)
 	b.WriteString("\n")
 
 	if err := os.WriteFile(filePath, []byte(b.String()), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "写入GUI崩溃报告失败: %v\npanic: %v\n%s\n", err, recovered, stack)
+		fmt.Fprintf(os.Stderr, "写入GUI崩溃报告失败: %v\n异常: %v\n%s\n", err, recovered, stack)
 	} else {
-		fmt.Fprintf(os.Stderr, "GUI进程发生panic，崩溃报告已写入: %s\n", filePath)
+		fmt.Fprintf(os.Stderr, "GUI进程发生异常，崩溃报告已写入: %s\n", filePath)
 	}
 
 	// 同步写入运行日志
 	if guiLogger != nil {
-		guiLogger.Errorf("[GUI crash] panic: %v", recovered)
-		guiLogger.Errorf("[GUI crash] stack:\n%s", string(stack))
+		guiLogger.Errorf("界面崩溃异常: %v", recovered)
+		guiLogger.Errorf("界面崩溃调用栈:\n%s", string(stack))
 		guiLogger.Sync()
 	}
 }
@@ -87,11 +87,14 @@ func main() {
 
 	// 启动 Wails 框架
 	err := wails.Run(&options.App{
-		Title:     "BS2PRO-控制台",
-		Width:     1024,
-		Height:    720,
-		MinWidth:  850,
-		MinHeight: 600,
+		Title:           "BS2PRO-Controller",
+		Width:           900,
+		Height:          620,
+		MinWidth:        900,
+		MinHeight:       620,
+		Frameless:       true,                // 无边框窗口
+		CSSDragProperty: "--wails-draggable", // CSS拖拽属性
+		CSSDragValue:    "drag",              // CSS拖拽值
 
 		// 开机自启时直接藏入托盘，不弹出窗口
 		StartHidden: isAutoStart,
@@ -116,7 +119,7 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
+		BackgroundColour: &options.RGBA{R: 20, G: 24, B: 32, A: 255},
 		OnStartup:        app.startup,
 		OnBeforeClose:    app.OnWindowClosing,
 		Bind: []interface{}{
@@ -125,8 +128,9 @@ func main() {
 		Windows: &windows.Options{
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,
-			DisableWindowIcon:    false,
+			DisableWindowIcon:    true, // 禁用窗口图标
 			WebviewUserDataPath:  getWebView2DataPath(),
+			Theme:                windows.SystemDefault, // 系统默认主题
 		},
 	})
 
