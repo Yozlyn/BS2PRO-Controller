@@ -1,11 +1,18 @@
 package main
 
 import (
+	"archive/zip"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +21,7 @@ import (
 	"github.com/TIANLI0/BS2PRO-Controller/internal/ipc"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/logger"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/notification"
+	"github.com/TIANLI0/BS2PRO-Controller/internal/platformutil"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/tray"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/version"
@@ -261,7 +269,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 	defer func() {
 		if r := recover(); r != nil {
 			if guiLogger != nil {
-				logError("[handleCoreEvent] panic: %v, event type: %v", r, event.Type)
+				logError("处理核心事件发生异常: %v，事件类型: %v", r, event.Type)
 			}
 		}
 	}()
@@ -269,7 +277,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 		return
 	}
 
-	logDebug("handleCoreEvent: 收到事件类型=%v", event.Type)
+	logDebug("收到核心事件，类型=%v", event.Type)
 
 	switch event.Type {
 	case ipc.EventFanDataUpdate:
@@ -311,7 +319,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 
 	case ipc.EventServiceConnected:
 		logInfo("核心服务连接事件 - UI 刷新")
-		// 服务重新连接后，延迟半秒等待硬件和 IPC 管道彻底就绪
+		// 服务重连后延迟刷新
 		go func() {
 			time.Sleep(500 * time.Millisecond)
 			cfg := a.GetConfig()
@@ -325,11 +333,11 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 			a.mutex.Unlock()
 
 			if a.ctx != nil {
-				// 发送恢复信号给前端
+				// 发送恢复事件
 				runtime.EventsEmit(a.ctx, "core-service-connected", nil)
 				runtime.EventsEmit(a.ctx, "config-update", cfg)
 
-				// 如果核心服务汇报设备在线，一并通知前端设备在线
+				// 设备在线时同步通知前端
 				if a.isConnected {
 					runtime.EventsEmit(a.ctx, "device-connected", status["currentData"])
 				}
@@ -350,7 +358,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 	case ipc.EventConfigUpdate:
 		var cfg types.AppConfig
 		if err := json.Unmarshal(event.Data, &cfg); err == nil {
-			// 用注册表真实状态覆盖配置中的windowsAutoStart，保持两者一致
+			// 用注册表状态覆盖配置值
 			cfg.WindowsAutoStart = a.CheckWindowsAutoStart()
 			a.mutex.Lock()
 			a.autoControlState = cfg.AutoControl
@@ -399,7 +407,7 @@ func (a *App) GetConfig() AppConfig {
 	}
 	var cfg AppConfig
 	json.Unmarshal(resp.Data, &cfg)
-	cfg.Repair() // 补全缺失部分配置项
+	cfg.Repair() // 补全缺失配置
 	return cfg
 }
 
@@ -412,7 +420,7 @@ func (a *App) UpdateConfig(cfg AppConfig) error {
 		if resp != nil {
 			return fmt.Errorf("%s", resp.Error)
 		}
-		return fmt.Errorf("服务响应为空")
+		return fmt.Errorf("服务返回为空")
 	}
 	return nil
 }
@@ -426,7 +434,7 @@ func (a *App) SetFanCurve(curve []FanCurvePoint) error {
 		if resp != nil {
 			return fmt.Errorf("%s", resp.Error)
 		}
-		return fmt.Errorf("服务响应为空")
+		return fmt.Errorf("服务返回为空")
 	}
 	return nil
 }
@@ -440,7 +448,7 @@ func (a *App) ApplyOffsetToCurve() error {
 		if resp != nil {
 			return fmt.Errorf("%s", resp.Error)
 		}
-		return fmt.Errorf("服务响应为空")
+		return fmt.Errorf("服务返回为空")
 	}
 	return nil
 }
@@ -455,6 +463,362 @@ func (a *App) GetFanCurve() []FanCurvePoint {
 	return curve
 }
 
+type FanCurveProfileConfig struct {
+	Name        string          `json:"name"`
+	ProfilePath string          `json:"profilePath,omitempty"`
+	FanCurve    []FanCurvePoint `json:"fanCurve"`
+}
+
+type fanCurveProfilesAppSettings struct {
+	AutoControl bool   `json:"autoControl"`
+	ManualGear  string `json:"manualGear"`
+	ManualLevel string `json:"manualLevel"`
+}
+
+type fanCurveProfilesBundle struct {
+	Version     string                      `json:"version"`
+	ExportDate  string                      `json:"exportDate"`
+	DeviceCurve []FanCurvePoint             `json:"deviceCurve"`
+	Profiles    []FanCurveProfileConfig     `json:"profiles"`
+	AppSettings fanCurveProfilesAppSettings `json:"appSettings"`
+}
+
+type fanCurveProfileFile struct {
+	Name     string          `json:"name"`
+	FanCurve []FanCurvePoint `json:"fanCurve"`
+	SavedAt  string          `json:"savedAt,omitempty"`
+}
+
+func (a *App) GetFanCurveProfileConfigs() []FanCurveProfileConfig {
+	cfg := a.GetConfig()
+	dir := a.getFanCurveProfileDir(cfg)
+	if dir == "" {
+		return []FanCurveProfileConfig{}
+	}
+
+	files, err := filepath.Glob(filepath.Join(dir, "*-fan-config.json"))
+	if err != nil || len(files) == 0 {
+		return []FanCurveProfileConfig{}
+	}
+
+	result := make([]FanCurveProfileConfig, 0, len(files))
+	for _, p := range files {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+
+		var payload fanCurveProfileFile
+		if err := json.Unmarshal(data, &payload); err != nil {
+			continue
+		}
+		if len(payload.FanCurve) == 0 {
+			continue
+		}
+		if payload.Name == "" {
+			base := filepath.Base(p)
+			payload.Name = strings.TrimSuffix(base, "-fan-config.json")
+		}
+		result = append(result, FanCurveProfileConfig{
+			Name:        payload.Name,
+			ProfilePath: filepath.Base(p),
+			FanCurve:    payload.FanCurve,
+		})
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return strings.ToLower(result[i].Name) < strings.ToLower(result[j].Name)
+	})
+	return result
+}
+
+func (a *App) SaveFanCurveProfileConfigs(profiles []FanCurveProfileConfig) error {
+	cfg := a.GetConfig()
+	dir := a.getFanCurveProfileDir(cfg)
+	if dir == "" {
+		return fmt.Errorf("无法定位配置目录")
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	oldFiles, _ := filepath.Glob(filepath.Join(dir, "*-fan-config.json"))
+	for _, p := range oldFiles {
+		_ = os.Remove(p)
+	}
+
+	used := map[string]int{}
+	for i, profile := range profiles {
+		name := strings.TrimSpace(profile.Name)
+		if name == "" {
+			name = "配置" + strconv.Itoa(i+1)
+		}
+		base := sanitizeProfileName(name)
+		if base == "" {
+			base = "config-" + strconv.Itoa(i+1)
+		}
+		seq := used[base]
+		used[base] = seq + 1
+		fileBase := base
+		if seq > 0 {
+			fileBase = fmt.Sprintf("%s-%d", base, seq+1)
+		}
+
+		outPath := filepath.Join(dir, fileBase+"-fan-config.json")
+		payload := fanCurveProfileFile{
+			Name:     name,
+			FanCurve: profile.FanCurve,
+			SavedAt:  time.Now().Format(time.RFC3339),
+		}
+		data, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(outPath, data, 0644); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (a *App) getFanCurveProfileDir(cfg AppConfig) string {
+	if cfg.ConfigPath != "" {
+		return filepath.Dir(cfg.ConfigPath)
+	}
+	programData := os.Getenv("PROGRAMDATA")
+	if programData != "" {
+		return filepath.Join(programData, "BS2PRO-Controller")
+	}
+	return filepath.Join(config.GetInstallDir(), "config")
+}
+
+func sanitizeProfileName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	b := strings.Builder{}
+	for _, r := range name {
+		switch r {
+		case '\\', '/', ':', '*', '?', '"', '<', '>', '|':
+			b.WriteRune('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func (a *App) ExportFanCurveProfilesZip() error {
+	if a.ctx == nil {
+		return fmt.Errorf("窗口上下文不可用")
+	}
+
+	savePath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "导出风扇配置包",
+		DefaultFilename: fmt.Sprintf("bs2pro-fan-profiles-%s.zip", time.Now().Format("20060102")),
+		Filters: []runtime.FileFilter{
+			{DisplayName: "ZIP 文件", Pattern: "*.zip"},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(savePath) == "" {
+		return nil
+	}
+
+	bundle := fanCurveProfilesBundle{
+		Version:     "fan-profiles-zip-v1",
+		ExportDate:  time.Now().Format(time.RFC3339),
+		DeviceCurve: a.GetConfig().FanCurve,
+		Profiles:    a.GetFanCurveProfileConfigs(),
+		AppSettings: fanCurveProfilesAppSettings{
+			AutoControl: a.GetConfig().AutoControl,
+			ManualGear:  a.GetConfig().ManualGear,
+			ManualLevel: a.GetConfig().ManualLevel,
+		},
+	}
+
+	data, err := json.MarshalIndent(bundle, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	f, err := os.Create(savePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	zw := zip.NewWriter(f)
+	w, err := zw.Create("fan-profiles.json")
+	if err != nil {
+		zw.Close()
+		return err
+	}
+	if _, err := w.Write(data); err != nil {
+		zw.Close()
+		return err
+	}
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *App) ImportFanCurveProfilesZip() error {
+	if a.ctx == nil {
+		return fmt.Errorf("窗口上下文不可用")
+	}
+
+	openPath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "导入风扇配置包",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "ZIP 文件", Pattern: "*.zip"},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(openPath) == "" {
+		return nil
+	}
+
+	bundle, err := readFanProfilesBundleZip(openPath)
+	if err != nil {
+		return err
+	}
+	if err := validateFanProfilesBundle(bundle); err != nil {
+		return err
+	}
+
+	if err := a.SaveFanCurveProfileConfigs(bundle.Profiles); err != nil {
+		return err
+	}
+
+	cfg := a.GetConfig()
+	if len(bundle.DeviceCurve) > 0 {
+		cfg.FanCurve = bundle.DeviceCurve
+	}
+	cfg.AutoControl = bundle.AppSettings.AutoControl
+	if strings.TrimSpace(bundle.AppSettings.ManualGear) != "" {
+		cfg.ManualGear = bundle.AppSettings.ManualGear
+	}
+	if strings.TrimSpace(bundle.AppSettings.ManualLevel) != "" {
+		cfg.ManualLevel = bundle.AppSettings.ManualLevel
+	}
+
+	if err := a.UpdateConfig(cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+func readFanProfilesBundleZip(path string) (*fanCurveProfilesBundle, error) {
+	r, err := zip.OpenReader(path)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	var target *zip.File
+	for _, f := range r.File {
+		if strings.EqualFold(filepath.Base(f.Name), "fan-profiles.json") {
+			target = f
+			break
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("无效配置包：缺少 fan-profiles.json")
+	}
+
+	rc, err := target.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, err
+	}
+
+	var bundle fanCurveProfilesBundle
+	if err := json.Unmarshal(data, &bundle); err != nil {
+		return nil, fmt.Errorf("无效配置包：JSON 解析失败")
+	}
+	return &bundle, nil
+}
+
+func validateFanProfilesBundle(bundle *fanCurveProfilesBundle) error {
+	if bundle == nil {
+		return fmt.Errorf("无效配置包")
+	}
+	if bundle.Version != "fan-profiles-zip-v1" {
+		return fmt.Errorf("无效配置包：版本不匹配")
+	}
+	if len(bundle.Profiles) == 0 {
+		return fmt.Errorf("无效配置包：没有可导入的风扇配置")
+	}
+	for i, profile := range bundle.Profiles {
+		if strings.TrimSpace(profile.Name) == "" {
+			return fmt.Errorf("无效配置包：第 %d 个配置缺少名称", i+1)
+		}
+		if len(profile.FanCurve) == 0 {
+			return fmt.Errorf("无效配置包：配置 %s 曲线为空", profile.Name)
+		}
+	}
+	return nil
+}
+
+func (a *App) CheckProcessSwitchNow() bool {
+	resp, err := a.sendRequest(ipc.ReqCheckProcessSwitchNow, nil)
+	if err != nil || resp == nil || !resp.Success {
+		return false
+	}
+	var success bool
+	json.Unmarshal(resp.Data, &success)
+	return success
+}
+
+func (a *App) ListRunningProcessNames() []string {
+	cmd := exec.Command("tasklist", "/FO", "CSV", "/NH")
+	platformutil.HideCommandWindow(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return []string{}
+	}
+
+	r := csv.NewReader(strings.NewReader(string(out)))
+	records, err := r.ReadAll()
+	if err != nil {
+		return []string{}
+	}
+
+	nameSet := map[string]struct{}{}
+	for _, rec := range records {
+		if len(rec) == 0 {
+			continue
+		}
+		name := strings.TrimSpace(rec[0])
+		if name == "" {
+			continue
+		}
+		nameSet[name] = struct{}{}
+	}
+
+	result := make([]string, 0, len(nameSet))
+	for name := range nameSet {
+		result = append(result, name)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return strings.ToLower(result[i]) < strings.ToLower(result[j])
+	})
+	return result
+}
+
 func (a *App) SetAutoControl(enabled bool) error {
 	resp, err := a.sendRequest(ipc.ReqSetAutoControl, ipc.SetAutoControlParams{Enabled: enabled})
 	if err != nil {
@@ -464,7 +828,7 @@ func (a *App) SetAutoControl(enabled bool) error {
 		if resp != nil {
 			return fmt.Errorf("%s", resp.Error)
 		}
-		return fmt.Errorf("服务响应为空")
+		return fmt.Errorf("服务返回为空")
 	}
 	return nil
 }
@@ -498,7 +862,7 @@ func (a *App) SetCustomSpeed(enabled bool, rpm int) error {
 		if resp != nil {
 			return fmt.Errorf("%s", resp.Error)
 		}
-		return fmt.Errorf("服务响应为空")
+		return fmt.Errorf("服务返回为空")
 	}
 	return nil
 }
@@ -593,18 +957,18 @@ func (a *App) CheckWindowsAutoStart() bool {
 	return a.getAutostartManager().CheckWindowsAutoStart()
 }
 
-func (a *App) IsAutoStartLaunch() bool {
-	return autostart.DetectAutoStartLaunch(os.Args)
-}
-
 func (a *App) ShowWindow() {
 	if a.ctx != nil {
+		logDebug("ShowWindow 调用")
 		runtime.WindowShow(a.ctx)
+		runtime.EventsEmit(a.ctx, "window-shown", nil)
 	}
 }
 
 func (a *App) HideWindow() {
 	if a.ctx != nil {
+		logDebug("HideWindow 调用")
+		runtime.EventsEmit(a.ctx, "window-hidden", nil)
 		runtime.WindowHide(a.ctx)
 	}
 }
@@ -706,10 +1070,6 @@ func (a *App) SendWindowsNotification(title, message string) error {
 	return notification.Send("", title, message)
 }
 
-func (a *App) UpdateGuiResponseTime() {
-	a.sendRequest(ipc.ReqUpdateGuiResponseTime, nil)
-}
-
 func (a *App) GetDebugInfo() map[string]any {
 	resp, err := a.sendRequest(ipc.ReqGetDebugInfo, nil)
 	if err != nil || resp == nil {
@@ -743,33 +1103,38 @@ func (a *App) LogFrontendError(level, source, message, stack string) {
 	if guiLogger == nil {
 		return
 	}
-	entry := fmt.Sprintf("[frontend][%s] %s\n  stack: %s", source, message, stack)
+	entry := fmt.Sprintf("来源=%s 内容=%s", source, message)
+	if stack != "" {
+		entry = fmt.Sprintf("%s 调用栈=%s", entry, stack)
+	}
 	switch level {
+	case "debug":
+		logDebug("%s", entry)
 	case "warn":
 		logWarn("%s", entry)
 	case "crash", "error":
 		logError("%s", entry)
 	default:
-		logInfo("%s", entry)
+		logDebug("%s", entry)
 	}
 }
 
 // startConnectionHealthCheck 启动连接健康检查
 func (a *App) startConnectionHealthCheck() {
-	logInfo("启动核心服务Watchdog")
+	logInfo("启动核心服务健康检查")
 
-	baseInterval := 3 * time.Second     // 基础探测频率：3秒
-	maxInterval := 30 * time.Second     // 最大探测频率：30秒 (休眠期)
-	maxRetryDuration := 5 * time.Minute // 最大重试时长：5分钟
+	baseInterval := 3 * time.Second     // 基础探测频率
+	maxInterval := 30 * time.Second     // 最大探测频率
+	maxRetryDuration := 5 * time.Minute // 最大重试时长
 	currentInterval := baseInterval
 	retryStartTime := time.Now()
 	retryStopped := false
 
 	for {
 		if !a.ipcClient.IsConnected() {
-			// 检查是否超过最大重试时长
+			// 检查重试时长
 			if !retryStopped && time.Since(retryStartTime) > maxRetryDuration {
-				logWarn("Watchdog: 超过5分钟仍无法连接核心服务，停止重试")
+				logWarn("健康检查: 超过5分钟仍无法连接核心服务，停止重试")
 				if a.ctx != nil {
 					runtime.EventsEmit(a.ctx, "core-service-error", "核心服务长时间无法连接，请检查服务状态")
 				}
@@ -777,49 +1142,49 @@ func (a *App) startConnectionHealthCheck() {
 			}
 
 			if retryStopped {
-				// 保持基本的心跳检查
+				// 维持低频探测
 				time.Sleep(30 * time.Second)
 				continue
 			}
 
-			logInfo("Watchdog: 检测到核心服务离线，尝试重连...")
+			logInfo("健康检查: 检测到核心服务离线，开始重连")
 
 			if err := a.ipcClient.Connect(); err == nil {
-				logInfo("Watchdog: 核心服务重连成功！")
-				currentInterval = baseInterval // 重连成功，重置为基础心跳频率
-				retryStartTime = time.Now()    // 重置重试开始时间
-				retryStopped = false           // 重置停止标志
+				logInfo("健康检查: 核心服务重连成功")
+				currentInterval = baseInterval // 重置探测频率
+				retryStartTime = time.Now()    // 重置重试起点
+				retryStopped = false           // 重置停止标记
 			} else {
-				// 连接失败，推送UI状态
+				// 连接失败时推送状态
 				if a.ctx != nil {
 					runtime.EventsEmit(a.ctx, "core-service-error", "核心服务已停止，正在等待服务启动...")
 					runtime.EventsEmit(a.ctx, "device-disconnected", nil)
 				}
 
-				// 指数退避，拉长下次探测的时间
+				// 指数退避延长探测间隔
 				currentInterval *= 2
 				if currentInterval > maxInterval {
 					currentInterval = maxInterval
 				}
-				logDebug("Watchdog: 重连失败，下次探测将在 %v 后进行", currentInterval)
+				logDebug("健康检查: 重连失败，下次探测间隔 %v", currentInterval)
 			}
 		} else {
-			// 连接正常的情况下，发送Ping测活
+			// 连接正常时发送心跳
 			resp, err := a.sendRequest(ipc.ReqPing, nil)
 			if err != nil || resp == nil || !resp.Success {
-				logError("Watchdog: Ping 失败，判定管道假死，主动切断连接")
+				logError("健康检查: 心跳失败，判定管道异常并主动断开")
 				a.ipcClient.Close()
-				currentInterval = baseInterval // 准备立即开始快速重连
-				retryStartTime = time.Now()    // 重置重试开始时间
-				retryStopped = false           // 重置停止标志
+				currentInterval = baseInterval // 准备快速重连
+				retryStartTime = time.Now()    // 重置重试起点
+				retryStopped = false           // 重置停止标记
 			} else {
-				currentInterval = baseInterval // 保持正常的3秒心跳频率
-				retryStartTime = time.Now()    // 重置重试开始时间
-				retryStopped = false           // 重置停止标志
+				currentInterval = baseInterval // 保持正常探测频率
+				retryStartTime = time.Now()    // 重置重试起点
+				retryStopped = false           // 重置停止标记
 			}
 		}
 
-		// 统一在此处休眠
+		// 统一休眠
 		time.Sleep(currentInterval)
 	}
 }

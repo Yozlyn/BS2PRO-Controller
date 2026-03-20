@@ -33,13 +33,14 @@ type GearCommand struct {
 
 // TemperatureData 温度数据
 type TemperatureData struct {
-	CPUTemp    int    `json:"cpuTemp"`       // CPU温度
-	GPUTemp    int    `json:"gpuTemp"`       // GPU温度
-	MaxTemp    int    `json:"maxTemp"`       // 最高温度
-	UpdateTime int64  `json:"updateTime"`    // 更新时间戳
-	BridgeOk   bool   `json:"bridgeOk"`      // 桥接程序是否正常
-	BridgeMsg  string `json:"bridgeMessage"` // 桥接故障提示
-	AutoOffset int    `json:"autoOffset"`    // 自动偏移量 (由 fanoffset 控制器计算)
+	CPUTemp     int    `json:"cpuTemp"`       // CPU温度
+	GPUTemp     int    `json:"gpuTemp"`       // GPU温度
+	MaxTemp     int    `json:"maxTemp"`       // 最高温度
+	UpdateTime  int64  `json:"updateTime"`    // 更新时间戳
+	BridgeOk    bool   `json:"bridgeOk"`      // 桥接程序是否正常
+	BridgeMsg   string `json:"bridgeMessage"` // 桥接故障提示
+	AutoOffset  int    `json:"autoOffset"`    // 自动偏移量 (由 fanoffset 控制器计算)
+	EngineState string `json:"engineState"`   // 当前温度区间引擎状态（补偿中/回收中/稳定）
 }
 
 // BridgeTemperatureData 桥接程序返回的温度数据
@@ -67,27 +68,37 @@ type RGBConfig struct {
 	Brightness int              `json:"brightness"`
 }
 
+// ProcessFanRule 进程联动规则
+type ProcessFanRule struct {
+	ProcessName string `json:"processName"` // 进程名，如 game.exe
+	ProfilePath string `json:"profilePath"` // 风扇曲线文件路径
+	Enabled     bool   `json:"enabled"`     // 规则开关
+}
+
 // AppConfig 应用配置
 type AppConfig struct {
-	AutoControl             bool            `json:"autoControl"`             // 智能变频开关
-	FanCurve                []FanCurvePoint `json:"fanCurve"`                // 风扇曲线
-	GearLight               bool            `json:"gearLight"`               // 挡位灯
-	PowerOnStart            bool            `json:"powerOnStart"`            // 通电自启动
-	WindowsAutoStart        bool            `json:"windowsAutoStart"`        // Windows开机自启动
-	SmartStartStop          string          `json:"smartStartStop"`          // 智能启停
-	Brightness              int             `json:"brightness"`              // 亮度
-	TempUpdateRate          int             `json:"tempUpdateRate"`          // 温度更新频率(秒)
-	TempSampleCount         int             `json:"tempSampleCount"`         // 温度采样次数(用于平均)
-	ConfigPath              string          `json:"configPath"`              // 配置文件路径
-	ManualGear              string          `json:"manualGear"`              // 手动挡位设置
-	ManualLevel             string          `json:"manualLevel"`             // 手动挡位级别(低中高)
-	DebugMode               bool            `json:"debugMode"`               // 调试模式
-	GuiMonitoring           bool            `json:"guiMonitoring"`           // GUI监控开关
-	CustomSpeedEnabled      bool            `json:"customSpeedEnabled"`      // 自定义转速开关
-	CustomSpeedRPM          int             `json:"customSpeedRPM"`          // 自定义转速值(无上下限)
-	IgnoreDeviceOnReconnect bool            `json:"ignoreDeviceOnReconnect"` // 断连后忽略设备状态(保持APP配置)
-	FanCurveOffsetEnabled   bool            `json:"fanCurveOffsetEnabled"`   // 风扇曲线偏移开关
-	RGBConfig               *RGBConfig      `json:"rgbConfig"`               // RGB灯效配置
+	AutoControl             bool             `json:"autoControl"`             // 智能变频开关
+	FanCurve                []FanCurvePoint  `json:"fanCurve"`                // 风扇曲线
+	GearLight               bool             `json:"gearLight"`               // 挡位灯
+	PowerOnStart            bool             `json:"powerOnStart"`            // 通电自启动
+	WindowsAutoStart        bool             `json:"windowsAutoStart"`        // Windows开机自启动
+	SmartStartStop          string           `json:"smartStartStop"`          // 智能启停
+	Brightness              int              `json:"brightness"`              // 亮度
+	TempUpdateRate          int              `json:"tempUpdateRate"`          // 温度更新频率(秒)
+	TempSampleCount         int              `json:"tempSampleCount"`         // 温度采样次数(用于平均)
+	ConfigPath              string           `json:"configPath"`              // 配置文件路径
+	ManualGear              string           `json:"manualGear"`              // 手动挡位设置
+	ManualLevel             string           `json:"manualLevel"`             // 手动挡位级别(低中高)
+	DebugMode               bool             `json:"debugMode"`               // 调试模式
+	GuiMonitoring           bool             `json:"guiMonitoring"`           // GUI监控开关
+	CustomSpeedEnabled      bool             `json:"customSpeedEnabled"`      // 自定义转速开关
+	CustomSpeedRPM          int              `json:"customSpeedRPM"`          // 自定义转速值(无上下限)
+	IgnoreDeviceOnReconnect bool             `json:"ignoreDeviceOnReconnect"` // 断连后忽略设备状态(保持APP配置)
+	FanCurveOffsetEnabled   bool             `json:"fanCurveOffsetEnabled"`   // 风扇曲线偏移开关
+	ProcessSwitchEnabled    bool             `json:"processSwitchEnabled"`    // 进程联动风扇配置
+	ProcessSwitchInterval   int              `json:"processSwitchInterval"`   // 进程扫描周期(秒)
+	ProcessSwitchRules      []ProcessFanRule `json:"processSwitchRules"`      // 进程联动规则
+	RGBConfig               *RGBConfig       `json:"rgbConfig"`               // RGB灯效配置
 }
 
 // Logger 日志记录器接口
@@ -168,6 +179,9 @@ func GetDefaultConfig(isAutoStart bool) AppConfig {
 		CustomSpeedRPM:          2000,
 		IgnoreDeviceOnReconnect: true, // 默认开启，防止断连后误判用户手动切换
 		FanCurveOffsetEnabled:   false,
+		ProcessSwitchEnabled:    false,
+		ProcessSwitchInterval:   3,
+		ProcessSwitchRules:      []ProcessFanRule{},
 		RGBConfig: &RGBConfig{
 			Mode:       "smart",
 			Colors:     []RGBColorConfig{{R: 0, G: 0, B: 255}, {R: 255, G: 0, B: 0}, {R: 0, G: 255, B: 0}},
@@ -211,6 +225,12 @@ func (c *AppConfig) Repair() {
 	}
 	if c.CustomSpeedRPM <= 0 {
 		c.CustomSpeedRPM = defaultCfg.CustomSpeedRPM
+	}
+	if c.ProcessSwitchInterval <= 0 {
+		c.ProcessSwitchInterval = defaultCfg.ProcessSwitchInterval
+	}
+	if c.ProcessSwitchRules == nil {
+		c.ProcessSwitchRules = []ProcessFanRule{}
 	}
 
 	if c.RGBConfig == nil {

@@ -6,6 +6,10 @@ export function ApplyOffsetToCurve() {
   return window['go']['main']['App']['ApplyOffsetToCurve']();
 }
 
+export function CheckProcessSwitchNow() {
+  return window['go']['main']['App']['CheckProcessSwitchNow']();
+}
+
 export function CheckWindowsAutoStart() {
   return window['go']['main']['App']['CheckWindowsAutoStart']();
 }
@@ -16,6 +20,10 @@ export function ConnectDevice() {
 
 export function DisconnectDevice() {
   return window['go']['main']['App']['DisconnectDevice']();
+}
+
+export function ExportFanCurveProfilesZip() {
+  return window['go']['main']['App']['ExportFanCurveProfilesZip']();
 }
 
 export function GetAppVersion() {
@@ -50,6 +58,10 @@ export function GetFanCurve() {
   return window['go']['main']['App']['GetFanCurve']();
 }
 
+export function GetFanCurveProfileConfigs() {
+  return window['go']['main']['App']['GetFanCurveProfileConfigs']();
+}
+
 export function GetTemperature() {
   return window['go']['main']['App']['GetTemperature']();
 }
@@ -58,12 +70,16 @@ export function HideWindow() {
   return window['go']['main']['App']['HideWindow']();
 }
 
+export function ImportFanCurveProfilesZip() {
+  return window['go']['main']['App']['ImportFanCurveProfilesZip']();
+}
+
 export function InitSystemTray() {
   return window['go']['main']['App']['InitSystemTray']();
 }
 
-export function IsAutoStartLaunch() {
-  return window['go']['main']['App']['IsAutoStartLaunch']();
+export function ListRunningProcessNames() {
+  return window['go']['main']['App']['ListRunningProcessNames']();
 }
 
 export function LogFrontendError(arg1, arg2, arg3, arg4) {
@@ -76,6 +92,10 @@ export function QuitApp() {
 
 export function RestartCoreService() {
   return window['go']['main']['App']['RestartCoreService']();
+}
+
+export function SaveFanCurveProfileConfigs(arg1) {
+  return window['go']['main']['App']['SaveFanCurveProfileConfigs'](arg1);
 }
 
 export function SendWindowsNotification(arg1, arg2) {
@@ -144,8 +164,4 @@ export function TestTemperatureReading() {
 
 export function UpdateConfig(arg1) {
   return window['go']['main']['App']['UpdateConfig'](arg1);
-}
-
-export function UpdateGuiResponseTime() {
-  return window['go']['main']['App']['UpdateGuiResponseTime']();
 }

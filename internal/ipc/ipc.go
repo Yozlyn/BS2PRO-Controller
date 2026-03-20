@@ -34,10 +34,11 @@ const (
 	ReqGetCurrentFanData RequestType = "GetCurrentFanData"
 
 	// 配置相关
-	ReqGetConfig    RequestType = "GetConfig"
-	ReqUpdateConfig RequestType = "UpdateConfig"
-	ReqSetFanCurve  RequestType = "SetFanCurve"
-	ReqGetFanCurve  RequestType = "GetFanCurve"
+	ReqGetConfig             RequestType = "GetConfig"
+	ReqUpdateConfig          RequestType = "UpdateConfig"
+	ReqSetFanCurve           RequestType = "SetFanCurve"
+	ReqGetFanCurve           RequestType = "GetFanCurve"
+	ReqCheckProcessSwitchNow RequestType = "CheckProcessSwitchNow"
 
 	// 控制相关
 	ReqSetAutoControl    RequestType = "SetAutoControl"
@@ -60,9 +61,8 @@ const (
 	ReqQuitApp    RequestType = "QuitApp"
 
 	// 调试相关
-	ReqGetDebugInfo          RequestType = "GetDebugInfo"
-	ReqSetDebugMode          RequestType = "SetDebugMode"
-	ReqUpdateGuiResponseTime RequestType = "UpdateGuiResponseTime"
+	ReqGetDebugInfo RequestType = "GetDebugInfo"
+	ReqSetDebugMode RequestType = "SetDebugMode"
 
 	// 系统相关
 	ReqPing RequestType = "Ping"
@@ -177,7 +177,7 @@ func (s *Server) acceptConnections() {
 		s.clients[conn] = true
 		s.mutex.Unlock()
 
-		s.logInfo("新的 IPC 客户端已连接")
+		s.logDebug("新的 IPC 客户端已连接")
 		go s.handleClient(conn)
 	}
 }
@@ -194,7 +194,7 @@ func (s *Server) handleClient(conn net.Conn) {
 		delete(s.clients, conn)
 		s.mutex.Unlock()
 		conn.Close()
-		s.logInfo("IPC 客户端已断开")
+		s.logDebug("IPC 客户端已断开")
 	}()
 
 	reader := bufio.NewReader(conn)
@@ -392,22 +392,21 @@ func (c *Client) Connect() error {
 	return nil
 }
 
-// readLoop 统一的消息读取循环
-// gen是goroutine启动时的连接代数，当检测到代数变化时主动退出，
-// 确保每次Connect() 后只有最新的readLoop在运行。
+// readLoop 统一读取消息循环
+// gen 表示连接代数，变化时主动退出旧循环
 func (c *Client) readLoop(gen int64) {
-	c.logInfo("readLoop(gen=%d) 启动", gen)
+	c.logInfo("读取循环启动，连接代数=%d", gen)
 	for {
-		// 检查连接代数，若已被新连接取代则主动退出
+		// 连接代数变化时退出旧循环
 		if atomic.LoadInt64(&c.connGeneration) != gen {
-			c.logInfo("readLoop(gen=%d) 检测到新连接，主动退出", gen)
+			c.logInfo("读取循环退出，检测到新连接，连接代数=%d", gen)
 			return
 		}
 
 		c.connMutex.RLock()
 		if !c.connected || c.reader == nil {
 			c.connMutex.RUnlock()
-			c.logInfo("readLoop(gen=%d) 连接已断开或reader为空，退出", gen)
+			c.logInfo("读取循环退出，连接已断开或读取器为空，连接代数=%d", gen)
 			return
 		}
 		reader := c.reader
@@ -415,16 +414,16 @@ func (c *Client) readLoop(gen int64) {
 
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
-			// 再次检查generation，若已被新连接取代，静默退出即可
+			// 若已被新连接取代则直接退出
 			if atomic.LoadInt64(&c.connGeneration) != gen {
-				c.logInfo("readLoop(gen=%d) 读取失败但已有新连接，退出", gen)
+				c.logInfo("读取循环退出，读取失败但已有新连接，连接代数=%d", gen)
 				return
 			}
-			c.logInfo("readLoop(gen=%d) 读取消息失败，连接可能已断开: %v", gen, err)
+			c.logInfo("读取消息失败，连接可能已断开，连接代数=%d: %v", gen, err)
 			c.connMutex.Lock()
 			c.connected = false
 			c.connMutex.Unlock()
-			c.logInfo("readLoop(gen=%d) 已标记连接断开", gen)
+			c.logInfo("已标记连接断开，连接代数=%d", gen)
 
 			// 触发服务断开事件
 			if c.eventHandler != nil {
@@ -482,8 +481,7 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 	c.logInfo("SendRequest: 类型=%v, needsConnect=%v", reqType, needsConnect)
 
 	if needsConnect {
-		// Connect() 内部持 connMutex.Lock()，最多阻塞5秒，
-		// 但此时c.mutex尚未持有，其他调用方不会被阻塞在此。
+		// 先连接后加请求锁，避免阻塞其他请求方
 		c.logInfo("SendRequest: 尝试连接服务器")
 		if err := c.Connect(); err != nil {
 			c.logInfo("SendRequest: 连接服务器失败: %v", err)
@@ -506,13 +504,13 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 		return nil, fmt.Errorf("序列化请求失败: %v", err)
 	}
 
-	// c.mutex保证同一时刻只有一个请求在管道上传输（请求-响应配对）。
+	// 保证请求与响应一一配对
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
-		// 获取当前连接快照（在c.mutex内，connMutex.RLock不会死锁）
+		// 获取当前连接快照
 		c.connMutex.RLock()
 		connected := c.connected
 		conn := c.conn
@@ -521,7 +519,7 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 		c.logInfo("SendRequest: 尝试 %d, connected=%v, conn=%v", attempt+1, connected, conn != nil)
 
 		if !connected || conn == nil {
-			// 已断连，尝试重新建立连接
+			// 断连后尝试重连
 			c.logWarn("SendRequest: 连接已断开，尝试重新连接")
 			if err := c.Connect(); err != nil {
 				lastErr = fmt.Errorf("重连失败: %v", err)
@@ -539,7 +537,7 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 			c.logInfo("SendRequest: 重连成功")
 		}
 
-		// 清空可能残留的旧响应
+		// 清空旧响应
 		select {
 		case <-c.responseChan:
 		default:
@@ -564,7 +562,7 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 			continue
 		}
 
-		// 发送成功，等待响应
+		// 等待响应
 		select {
 		case resp := <-c.responseChan:
 			return resp, nil
