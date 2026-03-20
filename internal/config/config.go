@@ -121,7 +121,7 @@ func (m *Manager) Save() error {
 	}
 
 	m.config.ConfigPath = defaultConfigPath
-	m.logInfo("配置保存成功: %s", defaultConfigPath)
+	m.logDebug("配置保存成功: %s", defaultConfigPath)
 	return nil
 }
 

@@ -289,7 +289,7 @@ func (m *Manager) extractRGBACK(buf []byte, n int) {
 	}
 }
 
-// ----- 实现 rgb.Transport 接口方法 -----
+// 实现 rgb.Transport 接口方法
 
 // WritePacket 将组装好的 RGB 数据包加上 HID Report ID 并发送，不等待确认
 func (m *Manager) WritePacket(packet []byte) error {
@@ -333,18 +333,18 @@ func (m *Manager) WritePacketAndWaitACK(cmdID byte, packet []byte, timeout time.
 		select {
 		case resp := <-m.rgbAckChan:
 			elapsed := time.Since(startTime)
-			// 放宽检查条件：只要resp[4]==1就认为是成功ACK
+			// 放宽检查条件，resp[4]==1 视为成功
 			if len(resp) >= 5 && resp[4] == 1 {
-				m.logDebug("ACK received for cmdID 0x%02X (got 0x%02X), delay: %v",
+				m.logDebug("收到 ACK，命令 0x%02X（响应 0x%02X），耗时: %v",
 					cmdID, resp[2], elapsed)
 				return
 			} else if len(resp) >= 5 {
-				m.logWarn("ACK failed for cmdID 0x%02X (resp[4]=0x%02X), got cmdID 0x%02X, delay: %v",
+				m.logWarn("ACK 失败，命令 0x%02X（resp[4]=0x%02X，响应命令 0x%02X），耗时: %v",
 					cmdID, resp[4], resp[2], elapsed)
 			}
 		case <-timer.C:
-			// ACK超时，记录warning日志
-			m.logWarn("ACK timeout for cmdID 0x%02X, timeout: %v", cmdID, timeout)
+			// ACK 超时
+			m.logWarn("ACK 超时，命令 0x%02X，超时阈值: %v", cmdID, timeout)
 			return
 		}
 	}()
@@ -484,13 +484,9 @@ func (m *Manager) validateAndGetDevice(rpm int, label string) (*hid.Device, bool
 		m.mutex.Unlock()
 		return nil, false
 	}
-	if rpm < 500 || rpm > 4000 {
+	if rpm < 500 || rpm > 4500 {
 		m.mutex.Unlock()
-		return nil, false
-	}
-	if rpm%100 != 0 {
-		m.mutex.Unlock()
-		m.logError("%s %d 不是100的整数倍", label, rpm)
+		m.logError("%s %d 超出范围(500-4500)", label, rpm)
 		return nil, false
 	}
 	dev := m.device
@@ -586,9 +582,9 @@ func (m *Manager) SetGearLight(enabled bool) bool {
 
 func (m *Manager) SetPowerOnStart(enabled bool) bool {
 	if enabled {
-		return m.writeCmd([]byte{0x02, 0x5A, 0xA5, 0x0C, 0x03, 0x02, 0x11})
+		return m.writeCmd([]byte{0x02, 0x5A, 0xA5, 0x0C, 0x03, 0x01, 0x10})
 	}
-	return m.writeCmd([]byte{0x02, 0x5A, 0xA5, 0x0C, 0x03, 0x01, 0x10})
+	return m.writeCmd([]byte{0x02, 0x5A, 0xA5, 0x0C, 0x03, 0x02, 0x11})
 }
 
 func (m *Manager) SetSmartStartStop(mode string) bool {
@@ -617,7 +613,7 @@ func (m *Manager) SetBrightness(percentage int) bool {
 	case 100:
 		cmd = []byte{0x02, 0x5A, 0xA5, 0x43, 0x02, 0x45}
 	default:
-		m.logError("SetBrightness: 不支持的亮度值 %d，仅支持0或100", percentage)
+		m.logError("设置亮度: 不支持的亮度值 %d，仅支持0或100", percentage)
 		return false
 	}
 	return m.writeCmd(cmd)

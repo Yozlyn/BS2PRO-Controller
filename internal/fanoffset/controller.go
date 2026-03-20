@@ -462,6 +462,25 @@ NORMAL_LOGIC:
 					break NORMAL_LOGIC
 				}
 
+				// 高温区试探更保守，避免正偏移一次性探到负偏移后被安全防线反复打回
+				if isHighTemp {
+					// 高温下不允许一次试探跨过 0，最多回到 0
+					if point.Offset > 0 && point.Offset-probeDrop < 0 {
+						probeDrop = point.Offset
+					}
+
+					// 与安全下限保持至少 1 个 step 的缓冲，降低贴线抖动
+					minProbeOffset := minSafeOffset + c.config.Step
+					if point.Offset-probeDrop < minProbeOffset {
+						probeDrop = point.Offset - minProbeOffset
+					}
+
+					if probeDrop <= 0 {
+						c.startVerifying(zone, currentTemp, now)
+						break NORMAL_LOGIC
+					}
+				}
+
 				c.adjustZoneOffset(point, -probeDrop, minRPM, maxRPM)
 
 				if point.Offset == zone.probeOffset {
@@ -581,13 +600,11 @@ func (c *Controller) handleVerifying(zoneIdx int, fanCurve []types.FanCurvePoint
 		zone.verifyTempLow = currentTemp
 	}
 
-	breakThreshold := c.config.StableDelta
+	breakThreshold := c.config.StableDelta * 2
 	if currentTemp >= c.config.CriticalTemp {
 		breakThreshold = 1
 	} else if currentTemp >= c.config.HighTempBoostThreshold {
 		breakThreshold = 3
-	} else {
-		breakThreshold = c.config.StableDelta * 2
 	}
 
 	if trend >= breakThreshold {
@@ -737,6 +754,32 @@ func (c *Controller) GetZoneStatus() []ZoneInfo {
 type ZoneInfo struct {
 	Converged bool `json:"converged"`
 	Verifying bool `json:"verifying"`
+}
+
+// GetCurrentZoneState 返回当前温度所在区间的偏移引擎状态（补偿中/回收中/稳定）
+func (c *Controller) GetCurrentZoneState(temp int, fanCurve []types.FanCurvePoint) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(fanCurve) == 0 {
+		return "稳定"
+	}
+	c.ensureZones(fanCurve)
+	idx := c.findZoneIndex(temp, fanCurve)
+	if idx < 0 || idx >= len(fanCurve) || idx >= len(c.zones) {
+		return "稳定"
+	}
+	zone := c.zones[idx]
+	offset := fanCurve[idx].Offset
+	if zone.converged {
+		return "稳定"
+	}
+	if offset > 0 {
+		return "补偿中"
+	}
+	if offset < 0 {
+		return "回收中"
+	}
+	return "稳定"
 }
 
 // ensureZones 按温度点匹配继承已有zoneState
