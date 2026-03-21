@@ -1,0 +1,168 @@
+name: build-windows
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: Build type
+        required: true
+        default: ci
+        type: choice
+        options:
+          - ci
+          - prerelease
+          - release
+      version:
+        description: Optional version override
+        required: false
+        default: ""
+      create_release:
+        description: Create GitHub release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    env:
+      GO_VERSION: "1.26.1"
+      NODE_VERSION: "20"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Wails
+        shell: pwsh
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Setup go-winres
+        shell: pwsh
+        run: go install github.com/tc-hib/go-winres@latest
+
+      - name: Setup NSIS
+        shell: pwsh
+        run: choco install nsis -y
+
+      - name: Resolve version
+        id: meta
+        shell: pwsh
+        run: |
+          $wails = Get-Content -Raw -Encoding UTF8 "wails.json" | ConvertFrom-Json
+          $baseVersion = [string]$wails.info.productVersion
+          $inputBuildType = "${{ github.event.inputs.build_type }}"
+          $inputVersion = "${{ github.event.inputs.version }}"
+
+          if ([string]::IsNullOrWhiteSpace($inputBuildType)) {
+            $buildType = "ci"
+          } else {
+            $buildType = $inputBuildType.Trim().ToLowerInvariant()
+          }
+
+          if (-not [string]::IsNullOrWhiteSpace($inputVersion)) {
+            $finalVersion = $inputVersion.Trim()
+          } else {
+            switch ($buildType) {
+              "release" {
+                $finalVersion = $baseVersion
+              }
+              "prerelease" {
+                $finalVersion = "$baseVersion-pre.${{ github.run_number }}"
+              }
+              default {
+                $finalVersion = "$baseVersion-ci.${{ github.run_number }}"
+              }
+            }
+          }
+
+          $releaseTag = "v$finalVersion"
+          $artifactName = "BS2PRO-Controller-$finalVersion-windows-amd64"
+
+          "base_version=$baseVersion" >> $env:GITHUB_OUTPUT
+          "build_type=$buildType" >> $env:GITHUB_OUTPUT
+          "final_version=$finalVersion" >> $env:GITHUB_OUTPUT
+          "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
+          "artifact_name=$artifactName" >> $env:GITHUB_OUTPUT
+
+      - name: Apply version to wails.json
+        shell: pwsh
+        run: |
+          $path = "wails.json"
+          $json = Get-Content -Raw -Encoding UTF8 $path | ConvertFrom-Json
+          $json.info.productVersion = "${{ steps.meta.outputs.final_version }}"
+          $content = $json | ConvertTo-Json -Depth 100
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText((Resolve-Path $path), $content + [Environment]::NewLine, $utf8)
+
+      - name: Install frontend dependencies
+        shell: cmd
+        run: |
+          cd frontend
+          npm install
+
+      - name: Build
+        shell: cmd
+        run: build.bat
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          $artifactDir = Join-Path "artifacts" "${{ steps.meta.outputs.artifact_name }}"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+
+          if (Test-Path "build/bin") {
+            Copy-Item "build/bin/*" $artifactDir -Recurse -Force
+          }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.artifact_name }}
+          path: artifacts/${{ steps.meta.outputs.artifact_name }}
+          if-no-files-found: error
+
+      - name: Create or update tag
+        if: github.event_name == 'workflow_dispatch' && steps.meta.outputs.build_type != 'ci' && github.event.inputs.create_release == 'true'
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.meta.outputs.release_tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f $tag
+          git push origin refs/tags/$tag --force
+
+      - name: Create GitHub release
+        if: github.event_name == 'workflow_dispatch' && steps.meta.outputs.build_type != 'ci' && github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          name: BS2PRO-Controller ${{ steps.meta.outputs.final_version }}
+          prerelease: ${{ steps.meta.outputs.build_type == 'prerelease' }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            artifacts/${{ steps.meta.outputs.artifact_name }}/BS2PRO-Controller.exe
+            artifacts/${{ steps.meta.outputs.artifact_name }}/BS2PRO-CoreService.exe
+            artifacts/${{ steps.meta.outputs.artifact_name }}/BS2PRO-Monitor.exe
+            artifacts/${{ steps.meta.outputs.artifact_name }}/BS2PRO-Controller-amd64-installer.exe
