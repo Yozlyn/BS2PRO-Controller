@@ -39,17 +39,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -73,6 +73,7 @@ jobs:
           $baseVersion = [string]$wails.info.productVersion
           $inputBuildType = "${{ github.event.inputs.build_type }}"
           $inputVersion = "${{ github.event.inputs.version }}"
+          $dateSuffix = Get-Date -Format "yyyyMMdd"
 
           if ([string]::IsNullOrWhiteSpace($inputBuildType)) {
             $buildType = "ci"
@@ -88,10 +89,10 @@ jobs:
                 $finalVersion = $baseVersion
               }
               "prerelease" {
-                $finalVersion = "$baseVersion-pre.${{ github.run_number }}"
+                $finalVersion = "$baseVersion-$dateSuffix-pre"
               }
               default {
-                $finalVersion = "$baseVersion-ci.${{ github.run_number }}"
+                $finalVersion = "$baseVersion-$dateSuffix-ci"
               }
             }
           }
@@ -136,7 +137,7 @@ jobs:
           }
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ steps.meta.outputs.artifact_name }}
           path: artifacts/${{ steps.meta.outputs.artifact_name }}

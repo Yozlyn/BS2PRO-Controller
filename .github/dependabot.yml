@@ -1,0 +1,50 @@
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    allow:
+      - dependency-name: typescript
+      - dependency-name: vite
+      - dependency-name: vue-tsc
+      - dependency-name: "@vitejs/plugin-vue"
+      - dependency-name: "@vue/tsconfig"
+      - dependency-name: tailwindcss
+      - dependency-name: "@tailwindcss/vite"
+      - dependency-name: lucide-vue-next
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    allow:
+      - dependency-name: go.uber.org/zap
+      - dependency-name: gopkg.in/natefinch/lumberjack.v2
+      - dependency-name: github.com/Microsoft/go-winio
+      - dependency-name: golang.org/x/sys
+      - dependency-name: golang.org/x/net
+      - dependency-name: golang.org/x/text
+      - dependency-name: golang.org/x/crypto
