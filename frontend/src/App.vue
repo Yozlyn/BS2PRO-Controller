@@ -139,7 +139,15 @@ import { types } from '../wailsjs/go/models'
 import { HideWindow } from '../wailsjs/go/main/App'
 import { WindowToggleMaximise, WindowIsMaximised } from '../wailsjs/runtime/runtime'
 
-const isDark = ref(localStorage.theme === 'dark')
+const resolveInitialDarkMode = () => {
+  const storedTheme = localStorage.getItem('theme')
+  if (storedTheme === 'dark') return true
+  if (storedTheme === 'light') return false
+  return window.matchMedia('(prefers-color-scheme: dark)').matches
+}
+
+const isDark = ref(resolveInitialDarkMode())
+document.documentElement.classList.toggle('dark', isDark.value)
 const isCollapsed = ref(true)
 const currentView = ref('dashboard')
 const isConnected = ref(false)
@@ -287,7 +295,7 @@ async function syncWindowMaxState() {
 }
 
 onMounted(async () => {
-  if (isDark.value) document.documentElement.classList.add('dark')
+  document.documentElement.classList.toggle('dark', isDark.value)
 
   document.addEventListener('visibilitychange', onVisibilityChange)
   window.addEventListener('focus', onFocus)
