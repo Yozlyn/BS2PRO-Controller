@@ -41,7 +41,7 @@
 
     <div class="flex flex-1 overflow-hidden">
       <aside @click="toggleSidebar"
-             class="cursor-pointer hover:bg-slate-100/20 dark:hover:bg-white/[0.03] transition-all duration-300 bg-transparent flex flex-col p-4 relative"
+             class="cursor-pointer transition-all duration-300 bg-transparent flex flex-col p-4 relative"
              :class="isCollapsed ? 'w-20' : 'w-56'">
         <div class="flex-1 space-y-2">
           <SidebarItem :icon="LayoutDashboard" label="设备概览" :active="currentView === 'dashboard'"

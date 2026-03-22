@@ -36,6 +36,7 @@ jobs:
     env:
       GO_VERSION: "1.26.1"
       NODE_VERSION: "20"
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
     steps:
       - name: Checkout
@@ -137,11 +138,56 @@ jobs:
           }
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.meta.outputs.artifact_name }}
           path: artifacts/${{ steps.meta.outputs.artifact_name }}
           if-no-files-found: error
+
+      - name: Build release commit notes
+        id: release_notes
+        if: github.event_name == 'workflow_dispatch' && steps.meta.outputs.build_type != 'ci' && github.event.inputs.create_release == 'true'
+        shell: pwsh
+        run: |
+          $buildType = "${{ steps.meta.outputs.build_type }}"
+          $currentTag = "${{ steps.meta.outputs.release_tag }}"
+
+          git fetch --tags --force
+
+          $allTags = git tag --list "v*" --sort=-creatordate
+          $previousTag = $null
+
+          if ($buildType -eq "release") {
+            foreach ($tag in $allTags) {
+              if ($tag -eq $currentTag) { continue }
+              if ($tag -match '-pre$') { continue }
+              $previousTag = $tag
+              break
+            }
+          } else {
+            foreach ($tag in $allTags) {
+              if ($tag -eq $currentTag) { continue }
+              $previousTag = $tag
+              break
+            }
+          }
+
+          if ([string]::IsNullOrWhiteSpace($previousTag)) {
+            $commits = git log --pretty=format:"- %s"
+          } else {
+            $commits = git log --pretty=format:"- %s" "$previousTag..HEAD"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($commits)) {
+            $commits = "- No changes."
+          }
+
+          $notesPath = Join-Path $env:RUNNER_TEMP "release-notes.txt"
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText($notesPath, $commits + [Environment]::NewLine, $utf8)
+
+          "previous_tag=$previousTag" >> $env:GITHUB_OUTPUT
+          "notes_path=$notesPath" >> $env:GITHUB_OUTPUT
 
       - name: Create or update tag
         if: github.event_name == 'workflow_dispatch' && steps.meta.outputs.build_type != 'ci' && github.event.inputs.create_release == 'true'
@@ -160,7 +206,7 @@ jobs:
           tag_name: ${{ steps.meta.outputs.release_tag }}
           name: BS2PRO-Controller ${{ steps.meta.outputs.final_version }}
           prerelease: ${{ steps.meta.outputs.build_type == 'prerelease' }}
-          generate_release_notes: true
+          body_path: ${{ steps.release_notes.outputs.notes_path }}
           fail_on_unmatched_files: false
           files: |
             artifacts/${{ steps.meta.outputs.artifact_name }}/BS2PRO-Controller.exe
