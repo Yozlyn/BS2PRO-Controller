@@ -90,7 +90,7 @@ func (m *Manager) SetProcessSwitchMonitorAutoStart(enable bool) error {
 		if _, err := os.Stat(monitorPath); os.IsNotExist(err) {
 			return fmt.Errorf("Monitor程序不存在: %s", monitorPath)
 		}
-		val := fmt.Sprintf(`"%s"`, monitorPath)
+		val := fmt.Sprintf(`powershell -WindowStyle Hidden -NoProfile -NonInteractive -Command "Start-Process -WindowStyle Hidden -FilePath '%s'"`, monitorPath)
 		if err := key.SetStringValue(valueName, val); err != nil {
 			return fmt.Errorf("设置 Monitor 自启动失败: %v", err)
 		}

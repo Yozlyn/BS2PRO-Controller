@@ -43,6 +43,7 @@ type App struct {
 	// 缓存的状态 (托盘和前端随时读取)
 	isConnected      bool
 	coreRunning      bool
+	monitorManaged   bool
 	currentTemp      types.TemperatureData
 	currentFan       *types.FanData
 	autoControlState bool
@@ -163,7 +164,7 @@ func (a *App) startup(ctx context.Context) {
 	// 初始化自启动管理器
 	adapter := &trayLoggerAdapter{sugar: guiLogger, installDir: config.GetInstallDir()}
 	a.autostartManager = autostart.NewManager(adapter, config.GetInstallDir())
-	a.ensureMonitorAgentReady()
+	a.syncMonitorAgentState()
 
 	// 提前注册事件处理器，确保 Watchdog 重连时也能触发前端通知
 	a.ipcClient.SetEventHandler(a.handleCoreEvent)
@@ -224,6 +225,48 @@ func (a *App) ensureMonitorAgentReady() {
 			logInfo("已确保 Monitor 自启动开启")
 		}
 	}
+}
+
+func (a *App) shouldEnsureMonitorAgent() bool {
+	cfg := a.GetConfig()
+	return cfg.NotificationsEnabled || cfg.ProcessSwitchEnabled
+}
+
+func (a *App) syncMonitorAgentState() {
+	if a.shouldEnsureMonitorAgent() {
+		a.mutex.RLock()
+		alreadyManaged := a.monitorManaged
+		a.mutex.RUnlock()
+		if alreadyManaged {
+			return
+		}
+		a.ensureMonitorAgentReady()
+		a.mutex.Lock()
+		a.monitorManaged = true
+		a.mutex.Unlock()
+		return
+	}
+	a.mutex.RLock()
+	wasManaged := a.monitorManaged
+	a.mutex.RUnlock()
+	if !wasManaged {
+		return
+	}
+	if a.autostartManager != nil {
+		if err := a.autostartManager.SetProcessSwitchMonitorAutoStart(false); err != nil {
+			logError("移除 Monitor 自启动失败: %v", err)
+		} else {
+			logInfo("已移除 Monitor 自启动")
+		}
+	}
+	if err := a.stopProcessSwitchMonitor(); err != nil {
+		logError("停止 Monitor 失败: %v", err)
+	} else {
+		logInfo("已停止 Monitor 代理进程")
+	}
+	a.mutex.Lock()
+	a.monitorManaged = false
+	a.mutex.Unlock()
 }
 
 // InitSystemTray 初始化系统托盘
@@ -450,14 +493,14 @@ func (a *App) UpdateConfig(cfg AppConfig) error {
 	if oldCfg.ProcessSwitchEnabled != cfg.ProcessSwitchEnabled {
 		a.syncProcessSwitchMonitor(cfg.ProcessSwitchEnabled)
 	}
+	if oldCfg.NotificationsEnabled != cfg.NotificationsEnabled {
+		a.syncMonitorAgentState()
+	}
 	return nil
 }
 
 func (a *App) syncProcessSwitchMonitor(enabled bool) {
-	if enabled {
-		a.ensureMonitorAgentReady()
-		return
-	}
+	a.syncMonitorAgentState()
 }
 
 func (a *App) startProcessSwitchMonitor() error {
@@ -1380,6 +1423,8 @@ func (a *App) startConnectionHealthCheck() {
 	retryStopped := false
 
 	for {
+		a.syncMonitorAgentState()
+
 		if !a.ipcClient.IsConnected() {
 			// 检查重试时长
 			if !retryStopped && time.Since(retryStartTime) > maxRetryDuration {

@@ -11,6 +11,13 @@ import (
 )
 
 func main() {
+	if err := notification.EnsureCurrentProcessAppID(""); err != nil {
+		log.Printf("ensure process app id failed: %v", err)
+	}
+	if err := notification.EnsureMonitorStartMenuShortcut(); err != nil {
+		log.Printf("ensure monitor shortcut failed: %v", err)
+	}
+
 	client := ipc.NewClient(nil)
 	client.SetRole(ipc.RoleMonitorAgent)
 	client.SetEventHandler(handleEvent)

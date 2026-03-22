@@ -264,7 +264,18 @@ SectionEnd
 
 Section /o "开始菜单快捷方式" SEC_STARTMENU
     DetailPrint "正在创建开始菜单快捷方式..."
-    CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+    SetShellVarContext current
+    Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"
+    Delete "$SMPROGRAMS\BS2PRO-Monitor.lnk"
+    RMDir /r "$SMPROGRAMS\BS2PRO-Controller"
+    SetShellVarContext all
+    Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"
+    Delete "$SMPROGRAMS\BS2PRO-Monitor.lnk"
+    RMDir /r "$SMPROGRAMS\BS2PRO-Controller"
+    SetShellVarContext current
+    CreateDirectory "$SMPROGRAMS\BS2PRO-Controller"
+    CreateShortcut "$SMPROGRAMS\BS2PRO-Controller\BS2PRO Controller.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}" "" "$INSTDIR\${PRODUCT_EXECUTABLE}" 0
+    CreateShortcut "$SMPROGRAMS\BS2PRO-Controller\BS2PRO Monitor.lnk" "$INSTDIR\BS2PRO-Monitor.exe" "" "$INSTDIR\BS2PRO-Monitor.exe" 0
 SectionEnd
 
 Section /o "桌面快捷方式" SEC_DESKTOP
@@ -360,7 +371,19 @@ Section "uninstall"
     DetailPrint "正在删除安装目录..."
     RMDir /r /REBOOTOK $INSTDIR
 
+    SetShellVarContext current
+    Delete "$SMPROGRAMS\BS2PRO-Controller\BS2PRO Controller.lnk"
+    Delete "$SMPROGRAMS\BS2PRO-Controller\BS2PRO Monitor.lnk"
+    RMDir "$SMPROGRAMS\BS2PRO-Controller"
     Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"
+    Delete "$SMPROGRAMS\BS2PRO-Monitor.lnk"
+    SetShellVarContext all
+    Delete "$SMPROGRAMS\BS2PRO-Controller\BS2PRO Controller.lnk"
+    Delete "$SMPROGRAMS\BS2PRO-Controller\BS2PRO Monitor.lnk"
+    RMDir "$SMPROGRAMS\BS2PRO-Controller"
+    Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"
+    Delete "$SMPROGRAMS\BS2PRO-Monitor.lnk"
+    SetShellVarContext current
     Delete "$DESKTOP\${INFO_PRODUCTNAME}.lnk"
 
     !insertmacro wails.unassociateFiles
