@@ -83,6 +83,8 @@
         </div>
       </aside>
 
+      <div class="w-px my-6 self-stretch bg-gradient-to-b from-transparent via-slate-200/80 to-transparent dark:via-white/10 flex-shrink-0" />
+
       <main class="flex-1 overflow-hidden bg-transparent flex flex-col">
         <DashboardView v-if="currentView === 'dashboard'"
           :is-dark="isDark" :is-connected="isConnected"
