@@ -8,6 +8,7 @@ import (
 )
 
 const defaultAppID = "BS2PRO-Controller"
+const defaultAppName = "BS2PRO Controller"
 
 // Send 发送 Windows Toast 系统通知。
 //
@@ -23,7 +24,6 @@ func Send(appID, title, message string) error {
 	safeAppID := strings.ReplaceAll(appID, "'", "''")
 	safeTitle := strings.ReplaceAll(title, "'", "''")
 	safeMessage := strings.ReplaceAll(message, "'", "''")
-
 	script := fmt.Sprintf(`
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null
 [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType=WindowsRuntime] | Out-Null

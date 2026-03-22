@@ -98,6 +98,10 @@ export function RestartCoreService() {
   return window['go']['main']['App']['RestartCoreService']();
 }
 
+export function ResumeCoreService() {
+  return window['go']['main']['App']['ResumeCoreService']();
+}
+
 export function SaveFanCurveProfileConfigs(arg1) {
   return window['go']['main']['App']['SaveFanCurveProfileConfigs'](arg1);
 }
@@ -164,6 +168,10 @@ export function TestBridgeProgram() {
 
 export function TestTemperatureReading() {
   return window['go']['main']['App']['TestTemperatureReading']();
+}
+
+export function ToggleCoreService() {
+  return window['go']['main']['App']['ToggleCoreService']();
 }
 
 export function UpdateConfig(arg1) {

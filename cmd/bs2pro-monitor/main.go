@@ -1,63 +1,72 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"log"
-	"net/http"
+	"strings"
 	"time"
+
+	"github.com/TIANLI0/BS2PRO-Controller/internal/ipc"
+	"github.com/TIANLI0/BS2PRO-Controller/internal/notification"
 )
 
-const reportURL = "http://127.0.0.1:20026/api/process-switch/foreground"
-
-type foregroundReport struct {
-	ProcessName string `json:"processName"`
-	ReportedAt  string `json:"reportedAt"`
-}
-
 func main() {
-	client := &http.Client{Timeout: 2 * time.Second}
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+	client := ipc.NewClient(nil)
+	client.SetRole(ipc.RoleMonitorAgent)
+	client.SetEventHandler(handleEvent)
+	serviceDownNotified := false
 
 	for {
-		processName := getForegroundProcessName()
-		report := foregroundReport{
-			ProcessName: processName,
-			ReportedAt:  time.Now().Format(time.RFC3339),
+		if err := client.Connect(); err != nil {
+			if !serviceDownNotified {
+				_ = notification.Send("", "BS2PRO 后台服务已断开", "控制功能暂时不可用，系统正在等待恢复")
+				serviceDownNotified = true
+			}
+			log.Printf("connect core failed: %v", err)
+			time.Sleep(3 * time.Second)
+			continue
 		}
-		if err := postForegroundProcess(client, report); err != nil {
-			log.Printf("report foreground process failed: %v", err)
+
+		serviceDownNotified = false
+		if _, err := client.SendRequest(ipc.ReqRegisterClient, ipc.RegisterClientParams{Role: ipc.RoleMonitorAgent}); err != nil {
+			log.Printf("register monitor failed: %v", err)
+		} else {
+			log.Printf("register monitor success")
 		}
-		<-ticker.C
+
+		for client.IsConnected() {
+			processName := strings.TrimSpace(getForegroundProcessName())
+			if processName != "" {
+				if _, err := client.SendRequest(ipc.ReqReportForegroundProcess, ipc.ReportForegroundProcessParams{
+					ProcessName: processName,
+					ReportedAt:  time.Now().Format(time.RFC3339),
+				}); err != nil {
+					log.Printf("report foreground process failed: %v", err)
+					break
+				}
+			}
+			time.Sleep(2 * time.Second)
+		}
+
+		client.Close()
+		time.Sleep(1 * time.Second)
 	}
 }
 
-func postForegroundProcess(client *http.Client, report foregroundReport) error {
-	body, err := json.Marshal(report)
-	if err != nil {
-		return err
+func handleEvent(event ipc.Event) {
+	if event.Type != ipc.EventNotificationRequest {
+		return
 	}
-	req, err := http.NewRequest(http.MethodPost, reportURL, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return &httpStatusError{StatusCode: resp.StatusCode}
-	}
-	return nil
-}
 
-type httpStatusError struct {
-	StatusCode int
-}
-
-func (e *httpStatusError) Error() string {
-	return http.StatusText(e.StatusCode)
+	var req notification.Request
+	if err := json.Unmarshal(event.Data, &req); err != nil {
+		log.Printf("parse notification failed: %v", err)
+		return
+	}
+	log.Printf("received notification event: type=%s title=%s", req.Type, req.Title)
+	if err := notification.Send("", req.Title, req.Message); err != nil {
+		log.Printf("show notification failed: %v", err)
+		return
+	}
+	log.Printf("notification shown: type=%s", req.Type)
 }

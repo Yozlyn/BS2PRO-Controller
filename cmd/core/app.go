@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +19,7 @@ import (
 	"github.com/TIANLI0/BS2PRO-Controller/internal/fanoffset"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/ipc"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/logger"
+	"github.com/TIANLI0/BS2PRO-Controller/internal/notification"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/procswitch"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/rgb"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/temperature"
@@ -65,11 +65,11 @@ type CoreApp struct {
 	processSwitcher               *procswitch.Switcher
 	processSwitchStop             chan struct{}
 	processSwitchWG               sync.WaitGroup
-	processSwitchHTTPServer       *http.Server
 	activeProcessProfilePath      string
 	baseFanCurveBeforeSwitch      []types.FanCurvePoint
 	baseOffsetEnabledBeforeSwitch *bool
 	lastReportedForegroundProcess string
+	notificationManager           *notification.Manager
 }
 
 func NewCoreApp(debugMode bool) *CoreApp {
@@ -126,6 +126,9 @@ func NewCoreApp(debugMode bool) *CoreApp {
 		cleanupChan:        make(chan bool, 1),
 		lastSmartModeLevel: 0,
 	}
+	app.notificationManager = notification.NewManager(func() bool {
+		return app.configManager.Get().NotificationsEnabled
+	}, app.emitNotification)
 	return app
 }
 
@@ -161,7 +164,6 @@ func (a *CoreApp) Start() error {
 	}
 
 	a.startProcessSwitchMonitoring()
-	a.startProcessSwitchHTTPServer()
 
 	a.safeGo("delayedConnectDevice", func() {
 		time.Sleep(1 * time.Second)
@@ -180,11 +182,6 @@ func (a *CoreApp) Stop() {
 	a.logInfo("Stop路径: cleanup -> DisconnectDevice -> CloseIPC")
 	close(a.processSwitchStop)
 	a.processSwitchWG.Wait()
-	if a.processSwitchHTTPServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = a.processSwitchHTTPServer.Shutdown(ctx)
-		cancel()
-	}
 	a.cleanup()
 	a.DisconnectDevice()
 	if a.asusClient != nil {
@@ -244,6 +241,8 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 	case ipc.ReqGetConfig:
 		cfg := a.configManager.Get()
 		return a.dataResponse(cfg)
+	case ipc.ReqRegisterClient:
+		return a.successResponse(true)
 	case ipc.ReqUpdateConfig:
 		var cfg types.AppConfig
 		if err := json.Unmarshal(req.Data, &cfg); err != nil {
@@ -268,6 +267,33 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 	case ipc.ReqCheckProcessSwitchNow:
 		switched := a.CheckProcessSwitchNow()
 		return a.successResponse(switched)
+	case ipc.ReqReportForegroundProcess:
+		var params ipc.ReportForegroundProcessParams
+		if err := json.Unmarshal(req.Data, &params); err != nil {
+			return a.errorResponse("解析前台进程失败: " + err.Error())
+		}
+		a.handleForegroundProcessReport(params.ProcessName)
+		return a.successResponse(true)
+	case ipc.ReqNotifyImportCompleted:
+		var params ipc.NotifyProfilesParams
+		if err := json.Unmarshal(req.Data, &params); err != nil {
+			return a.errorResponse("解析导入通知失败: " + err.Error())
+		}
+		a.logInfo("收到导入完成通知请求: profileCount=%d", params.ProfileCount)
+		if a.notificationManager != nil {
+			a.notificationManager.OnConfigImportCompleted(params.ProfileCount)
+		}
+		return a.successResponse(true)
+	case ipc.ReqNotifyExportCompleted:
+		var params ipc.NotifyProfilesParams
+		if err := json.Unmarshal(req.Data, &params); err != nil {
+			return a.errorResponse("解析导出通知失败: " + err.Error())
+		}
+		a.logInfo("收到导出完成通知请求: profileCount=%d", params.ProfileCount)
+		if a.notificationManager != nil {
+			a.notificationManager.OnConfigExportCompleted(params.ProfileCount)
+		}
+		return a.successResponse(true)
 	case ipc.ReqApplyOffsetToCurve:
 		if err := a.ApplyOffsetToCurve(); err != nil {
 			return a.errorResponse(err.Error())
@@ -476,6 +502,9 @@ func (a *CoreApp) onDeviceDisconnect() {
 	if a.ipcServer != nil {
 		a.ipcServer.BroadcastEvent(ipc.EventDeviceDisconnected, nil)
 	}
+	if wasConnected && !userDid && a.notificationManager != nil {
+		a.notificationManager.OnDeviceDisconnected()
+	}
 
 	if !userDid {
 		gen := atomic.AddInt32(&a.reconnectGen, 1)
@@ -593,6 +622,10 @@ func (a *CoreApp) applyConfigOnConnect() {
 }
 
 func (a *CoreApp) ConnectDevice() bool {
+	a.mutex.RLock()
+	wasDisconnected := !a.isConnected
+	a.mutex.RUnlock()
+
 	a.mutex.Lock()
 	a.userDisconnected = false
 	a.mutex.Unlock()
@@ -618,6 +651,9 @@ func (a *CoreApp) ConnectDevice() bool {
 
 		if deviceInfo != nil && a.ipcServer != nil {
 			a.ipcServer.BroadcastEvent(ipc.EventDeviceConnected, deviceInfo)
+		}
+		if wasDisconnected && a.notificationManager != nil {
+			a.notificationManager.OnDeviceReconnected()
 		}
 
 		go a.startTemperatureMonitoring()
@@ -658,6 +694,9 @@ func (a *CoreApp) DisconnectDevice() {
 	a.deviceManager.Disconnect()
 	if a.ipcServer != nil {
 		a.ipcServer.BroadcastEvent(ipc.EventDeviceDisconnected, nil)
+	}
+	if a.notificationManager != nil {
+		a.notificationManager.ResetDeviceDisconnectState()
 	}
 }
 
@@ -748,42 +787,20 @@ func (a *CoreApp) startProcessSwitchMonitoring() {
 	})
 }
 
-type processSwitchForegroundReport struct {
-	ProcessName string `json:"processName"`
-	ReportedAt  string `json:"reportedAt"`
-}
-
-func (a *CoreApp) startProcessSwitchHTTPServer() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/process-switch/foreground", a.handleProcessSwitchForegroundReport)
-	server := &http.Server{
-		Addr:    "127.0.0.1:20026",
-		Handler: mux,
-	}
-	a.processSwitchHTTPServer = server
-	a.safeGo("processSwitchHTTPServer", func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			a.logError("进程联动 HTTP 服务启动失败: %v", err)
-		}
-	})
-}
-
-func (a *CoreApp) handleProcessSwitchForegroundReport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	defer r.Body.Close()
-	var report processSwitchForegroundReport
-	if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
+func (a *CoreApp) handleForegroundProcessReport(processName string) {
 	a.mutex.Lock()
-	a.lastReportedForegroundProcess = strings.ToLower(strings.TrimSpace(report.ProcessName))
+	a.lastReportedForegroundProcess = strings.ToLower(strings.TrimSpace(processName))
 	a.mutex.Unlock()
-	a.logDebug("进程联动收到探针上报前台进程: %s", report.ProcessName)
-	w.WriteHeader(http.StatusNoContent)
+	a.logDebug("进程联动收到探针上报前台进程: %s", processName)
+}
+
+func (a *CoreApp) emitNotification(req notification.Request) {
+	if a.ipcServer == nil || !a.ipcServer.HasRoleClient(ipc.RoleMonitorAgent) {
+		a.logDebug("通知未投递，monitor 未连接: %s", req.Type)
+		return
+	}
+	a.logInfo("投递通知到 monitor: type=%s title=%s", req.Type, req.Title)
+	a.ipcServer.BroadcastEventToRole(ipc.RoleMonitorAgent, ipc.EventNotificationRequest, req)
 }
 
 func (a *CoreApp) runProcessSwitchCheck(cfg types.AppConfig) {

@@ -184,6 +184,7 @@ export namespace types {
 	    autoControl: boolean;
 	    fanCurve: FanCurvePoint[];
 	    gearLight: boolean;
+	    notificationsEnabled: boolean;
 	    powerOnStart: boolean;
 	    windowsAutoStart: boolean;
 	    smartStartStop: string;
@@ -213,6 +214,7 @@ export namespace types {
 	        this.autoControl = source["autoControl"];
 	        this.fanCurve = this.convertValues(source["fanCurve"], FanCurvePoint);
 	        this.gearLight = source["gearLight"];
+	        this.notificationsEnabled = source["notificationsEnabled"];
 	        this.powerOnStart = source["powerOnStart"];
 	        this.windowsAutoStart = source["windowsAutoStart"];
 	        this.smartStartStop = source["smartStartStop"];

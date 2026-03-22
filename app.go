@@ -42,6 +42,7 @@ type App struct {
 
 	// 缓存的状态 (托盘和前端随时读取)
 	isConnected      bool
+	coreRunning      bool
 	currentTemp      types.TemperatureData
 	currentFan       *types.FanData
 	autoControlState bool
@@ -148,6 +149,7 @@ func logDebug(format string, v ...any) { guiLogger.Debugf(format, v...) }
 func NewApp(icon []byte) *App {
 	return &App{
 		ipcClient:   ipc.NewClient(nil),
+		coreRunning: true,
 		currentTemp: types.TemperatureData{BridgeOk: true},
 		iconData:    icon,
 	}
@@ -161,6 +163,7 @@ func (a *App) startup(ctx context.Context) {
 	// 初始化自启动管理器
 	adapter := &trayLoggerAdapter{sugar: guiLogger, installDir: config.GetInstallDir()}
 	a.autostartManager = autostart.NewManager(adapter, config.GetInstallDir())
+	a.ensureMonitorAgentReady()
 
 	// 提前注册事件处理器，确保 Watchdog 重连时也能触发前端通知
 	a.ipcClient.SetEventHandler(a.handleCoreEvent)
@@ -185,9 +188,11 @@ func (a *App) startup(ctx context.Context) {
 
 		a.mutex.Lock()
 		a.autoControlState = cfg.AutoControl
+		a.coreRunning = true
 		if connected, ok := status["connected"].(bool); ok {
 			a.isConnected = connected
 		}
+		a.coreRunning = true
 		a.mutex.Unlock()
 		go func() {
 			runtime.EventsEmit(ctx, "config-update", cfg)
@@ -204,6 +209,21 @@ func (a *App) startup(ctx context.Context) {
 	go a.startConnectionHealthCheck()
 
 	logInfo("GUI 启动完成")
+}
+
+func (a *App) ensureMonitorAgentReady() {
+	if err := a.startProcessSwitchMonitor(); err != nil {
+		logError("启动 Monitor 失败: %v", err)
+	} else {
+		logInfo("已确保 Monitor 运行")
+	}
+	if a.autostartManager != nil {
+		if err := a.autostartManager.SetProcessSwitchMonitorAutoStart(true); err != nil {
+			logError("设置 Monitor 自启动失败: %v", err)
+		} else {
+			logInfo("已确保 Monitor 自启动开启")
+		}
+	}
 }
 
 // InitSystemTray 初始化系统托盘
@@ -224,9 +244,9 @@ func (a *App) InitSystemTray() {
 			// 点击重启服务：重启核心服务
 			a.RestartCoreService()
 		},
-		func() {
-			// 点击关闭核心：停止核心服务
-			a.StopCoreService()
+		func() bool {
+			// 点击暂停/恢复核心
+			return a.ToggleCoreService()
 		},
 		func() bool {
 			// 切换智能变频
@@ -248,6 +268,7 @@ func (a *App) InitSystemTray() {
 			}
 			return tray.Status{
 				Connected:        a.isConnected,
+				CoreRunning:      a.coreRunning,
 				CPUTemp:          a.currentTemp.CPUTemp,
 				GPUTemp:          a.currentTemp.GPUTemp,
 				CurrentRPM:       rpm,
@@ -330,6 +351,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 			if connected, ok := status["connected"].(bool); ok {
 				a.isConnected = connected
 			}
+			a.coreRunning = true
 			a.autoControlState = cfg.AutoControl
 			a.mutex.Unlock()
 
@@ -349,6 +371,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 		logWarn("核心服务断开事件")
 		a.mutex.Lock()
 		a.isConnected = false
+		a.coreRunning = false
 		a.mutex.Unlock()
 
 		if a.ctx != nil {
@@ -432,23 +455,8 @@ func (a *App) UpdateConfig(cfg AppConfig) error {
 
 func (a *App) syncProcessSwitchMonitor(enabled bool) {
 	if enabled {
-		if err := a.startProcessSwitchMonitor(); err != nil {
-			logError("启动进程联动 Monitor 失败: %v", err)
-		}
-		if a.autostartManager != nil {
-			if err := a.autostartManager.SetProcessSwitchMonitorAutoStart(true); err != nil {
-				logError("设置进程联动 Monitor 自启动失败: %v", err)
-			}
-		}
+		a.ensureMonitorAgentReady()
 		return
-	}
-	if a.autostartManager != nil {
-		if err := a.autostartManager.SetProcessSwitchMonitorAutoStart(false); err != nil {
-			logError("移除进程联动 Monitor 自启动失败: %v", err)
-		}
-	}
-	if err := a.stopProcessSwitchMonitor(); err != nil {
-		logError("停止进程联动 Monitor 失败: %v", err)
 	}
 }
 
@@ -456,6 +464,13 @@ func (a *App) startProcessSwitchMonitor() error {
 	monitorPath := filepath.Join(config.GetInstallDir(), "BS2PRO-Monitor.exe")
 	if _, err := os.Stat(monitorPath); err != nil {
 		return fmt.Errorf("Monitor程序不存在: %s", monitorPath)
+	}
+	checkCmd := exec.Command("tasklist", "/FI", "IMAGENAME eq BS2PRO-Monitor.exe")
+	platformutil.HideCommandWindow(checkCmd)
+	out, err := checkCmd.Output()
+	if err == nil && strings.Contains(strings.ToLower(string(out)), "bs2pro-monitor.exe") {
+		logInfo("Monitor 已在运行，跳过重复拉起")
+		return nil
 	}
 	cmd := exec.Command(monitorPath)
 	cmd.Dir = filepath.Dir(monitorPath)
@@ -684,6 +699,7 @@ func (a *App) ExportFanCurveProfilesZip() error {
 			ManualLevel: a.GetConfig().ManualLevel,
 		},
 	}
+	profileCount := len(bundle.Profiles)
 
 	data, err := json.MarshalIndent(bundle, "", "  ")
 	if err != nil {
@@ -709,6 +725,7 @@ func (a *App) ExportFanCurveProfilesZip() error {
 	if err := zw.Close(); err != nil {
 		return err
 	}
+	_, _ = a.sendRequest(ipc.ReqNotifyExportCompleted, ipc.NotifyProfilesParams{ProfileCount: profileCount})
 	return nil
 }
 
@@ -757,6 +774,7 @@ func (a *App) ImportFanCurveProfilesZip() error {
 	if err := a.UpdateConfig(cfg); err != nil {
 		return err
 	}
+	_, _ = a.sendRequest(ipc.ReqNotifyImportCompleted, ipc.NotifyProfilesParams{ProfileCount: len(bundle.Profiles)})
 	return nil
 }
 
@@ -1182,11 +1200,14 @@ func (a *App) QuitApp() {
 // RestartCoreService 重启核心服务
 func (a *App) RestartCoreService() bool {
 	logInfo("控制台请求重启核心服务")
-	resp, err := a.sendRequest(ipc.ReqRestartService, nil)
+	ok, err := a.runCoreServiceCommand("Restart-Service")
 	if err != nil {
 		logError("发送重启核心服务请求失败: %v", err)
 		return false
-	} else if resp != nil && resp.Success {
+	} else if ok {
+		a.mutex.Lock()
+		a.coreRunning = true
+		a.mutex.Unlock()
 		logInfo("核心服务重启请求已发送，服务将在后台异步重启")
 		return true
 	} else {
@@ -1198,17 +1219,60 @@ func (a *App) RestartCoreService() bool {
 // StopCoreService 停止核心服务
 func (a *App) StopCoreService() bool {
 	logInfo("控制台请求停止核心服务")
-	resp, err := a.sendRequest(ipc.ReqStopService, nil)
+	ok, err := a.runCoreServiceCommand("Stop-Service")
 	if err != nil {
 		logError("发送停止核心服务请求失败: %v", err)
 		return false
-	} else if resp != nil && resp.Success {
+	} else if ok {
+		a.mutex.Lock()
+		a.coreRunning = false
+		a.isConnected = false
+		a.mutex.Unlock()
 		logInfo("核心服务停止请求已发送，服务将在后台异步停止")
 		return true
 	} else {
 		logWarn("停止核心服务请求未成功")
 		return false
 	}
+}
+
+func (a *App) ResumeCoreService() bool {
+	logInfo("控制台请求恢复核心服务")
+	ok, err := a.runCoreServiceCommand("Start-Service")
+	if err != nil {
+		logError("发送恢复核心服务请求失败: %v", err)
+		return false
+	}
+	if !ok {
+		logWarn("恢复核心服务请求未成功")
+		return false
+	}
+	a.mutex.Lock()
+	a.coreRunning = true
+	a.mutex.Unlock()
+	logInfo("核心服务恢复请求已发送")
+	return true
+}
+
+func (a *App) ToggleCoreService() bool {
+	a.mutex.RLock()
+	running := a.coreRunning
+	a.mutex.RUnlock()
+	if running {
+		a.StopCoreService()
+		return false
+	}
+	a.ResumeCoreService()
+	return true
+}
+
+func (a *App) runCoreServiceCommand(command string) (bool, error) {
+	cmd := exec.Command("powershell", "-NonInteractive", "-Command", fmt.Sprintf(`%s -Name "BS2PRO_CoreService" -Force`, command))
+	platformutil.HideCommandWindow(cmd)
+	if err := cmd.Start(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (a *App) TestTemperatureReading() TemperatureData {

@@ -644,9 +644,7 @@ function resetCurve() {
 }
 function exportConfig() {
   apiService.exportFanCurveProfilesZip()
-    .then(() => {
-      showTransferMessage('导出成功', 'success')
-    })
+    .then(() => {})
     .catch((e) => {
       frontendLogger.error('风扇曲线', '导出配置包失败', e)
       showTransferMessage('导出失败', 'error')
@@ -667,7 +665,6 @@ function importConfig() {
       ]
       selectedProfileId.value = DEVICE_PROFILE_ID
       refreshUnsavedFlag()
-      showTransferMessage('导入成功', 'success')
     })
     .catch((e) => {
       frontendLogger.error('风扇曲线', '导入配置包失败', e)

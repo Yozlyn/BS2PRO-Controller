@@ -39,6 +39,10 @@ const (
 	ReqSetFanCurve           RequestType = "SetFanCurve"
 	ReqGetFanCurve           RequestType = "GetFanCurve"
 	ReqCheckProcessSwitchNow RequestType = "CheckProcessSwitchNow"
+	ReqReportForegroundProcess RequestType = "ReportForegroundProcess"
+	ReqRegisterClient          RequestType = "RegisterClient"
+	ReqNotifyImportCompleted   RequestType = "NotifyImportCompleted"
+	ReqNotifyExportCompleted   RequestType = "NotifyExportCompleted"
 
 	// 控制相关
 	ReqSetAutoControl    RequestType = "SetAutoControl"
@@ -110,12 +114,35 @@ const (
 	EventConfigUpdate        = "config-update"
 	EventServiceConnected    = "service-connected"
 	EventServiceDisconnected = "service-disconnected"
+	EventNotificationRequest = "notification-request"
 )
+
+const (
+	RoleGUI          = "gui"
+	RoleMonitorAgent = "monitor"
+)
+
+type RegisterClientParams struct {
+	Role string `json:"role"`
+}
+
+type ReportForegroundProcessParams struct {
+	ProcessName string `json:"processName"`
+	ReportedAt  string `json:"reportedAt"`
+}
+
+type NotifyProfilesParams struct {
+	ProfileCount int `json:"profileCount"`
+}
+
+type ClientMeta struct {
+	Role string
+}
 
 // Server IPC 服务器
 type Server struct {
 	listener net.Listener
-	clients  map[net.Conn]bool
+	clients  map[net.Conn]*ClientMeta
 	mutex    sync.RWMutex
 	handler  RequestHandler
 	logger   types.Logger
@@ -128,7 +155,7 @@ type RequestHandler func(req Request) Response
 // NewServer 创建 IPC 服务器
 func NewServer(handler RequestHandler, logger types.Logger) *Server {
 	return &Server{
-		clients: make(map[net.Conn]bool),
+		clients: make(map[net.Conn]*ClientMeta),
 		handler: handler,
 		logger:  logger,
 	}
@@ -174,7 +201,7 @@ func (s *Server) acceptConnections() {
 		}
 
 		s.mutex.Lock()
-		s.clients[conn] = true
+		s.clients[conn] = &ClientMeta{}
 		s.mutex.Unlock()
 
 		s.logDebug("新的 IPC 客户端已连接")
@@ -224,6 +251,17 @@ func (s *Server) handleClient(conn net.Conn) {
 		if err := json.Unmarshal(line, &req); err != nil {
 			s.logError("解析请求失败: %v", err)
 			continue
+		}
+		if req.Type == ReqRegisterClient {
+			var params RegisterClientParams
+			if err := json.Unmarshal(req.Data, &params); err == nil {
+				s.mutex.Lock()
+				if meta, ok := s.clients[conn]; ok && meta != nil {
+					meta.Role = params.Role
+				}
+				s.mutex.Unlock()
+				s.logInfo("IPC 客户端角色已注册: %s", params.Role)
+			}
 		}
 		resp := s.handler(req)
 		resp.IsResponse = true
@@ -280,6 +318,50 @@ func (s *Server) BroadcastEvent(eventType string, data any) {
 	}
 }
 
+func (s *Server) BroadcastEventToRole(role, eventType string, data any) {
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		s.logError("序列化事件数据失败: %v", err)
+		return
+	}
+
+	event := Event{IsEvent: true, Type: eventType, Data: dataBytes}
+	eventBytes, err := json.Marshal(event)
+	if err != nil {
+		s.logError("序列化事件失败: %v", err)
+		return
+	}
+
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	for conn, meta := range s.clients {
+		if meta == nil || meta.Role != role {
+			continue
+		}
+		go func(c net.Conn) {
+			defer func() { recover() }()
+			c.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			_, err := c.Write(append(eventBytes, '\n'))
+			c.SetWriteDeadline(time.Time{})
+			if err != nil {
+				s.logDebug("发送角色事件失败: %v", err)
+			}
+		}(conn)
+	}
+}
+
+func (s *Server) HasRoleClient(role string) bool {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	for _, meta := range s.clients {
+		if meta != nil && meta.Role == role {
+			return true
+		}
+	}
+	return false
+}
+
 // Stop 停止服务器
 func (s *Server) Stop() {
 	s.running.Store(false)
@@ -291,7 +373,7 @@ func (s *Server) Stop() {
 	for conn := range s.clients {
 		conn.Close()
 	}
-	s.clients = make(map[net.Conn]bool)
+	s.clients = make(map[net.Conn]*ClientMeta)
 	s.mutex.Unlock()
 
 	s.logInfo("IPC 服务器已停止")
@@ -340,6 +422,7 @@ type Client struct {
 	connected      bool
 	connMutex      sync.RWMutex
 	connGeneration int64
+	role           string
 }
 
 // NewClient 创建 IPC 客户端
@@ -470,6 +553,10 @@ func (c *Client) readLoop(gen int64) {
 // SetEventHandler 设置事件处理函数
 func (c *Client) SetEventHandler(handler func(Event)) {
 	c.eventHandler = handler
+}
+
+func (c *Client) SetRole(role string) {
+	c.role = role
 }
 
 // SendRequest 发送请求并等待响应

@@ -52,6 +52,8 @@ export function QuitApp():Promise<void>;
 
 export function RestartCoreService():Promise<boolean>;
 
+export function ResumeCoreService():Promise<boolean>;
+
 export function SaveFanCurveProfileConfigs(arg1:Array<main.FanCurveProfileConfig>):Promise<void>;
 
 export function SendWindowsNotification(arg1:string,arg2:string):Promise<void>;
@@ -85,5 +87,7 @@ export function StopCoreService():Promise<boolean>;
 export function TestBridgeProgram():Promise<types.BridgeTemperatureData>;
 
 export function TestTemperatureReading():Promise<types.TemperatureData>;
+
+export function ToggleCoreService():Promise<boolean>;
 
 export function UpdateConfig(arg1:types.AppConfig):Promise<void>;

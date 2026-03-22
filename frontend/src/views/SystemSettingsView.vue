@@ -11,6 +11,9 @@
                      :active="config.windowsAutoStart" @toggle="handleWindowsAutoStart"
                      :loading="loading.windowsAutoStart" />
         <div class="h-px bg-slate-50 dark:bg-white/6 mx-6" />
+        <SettingItem title="允许系统通知" desc="在后台运行或窗口未置前时展示设备与服务状态提醒"
+                     :active="config.notificationsEnabled ?? true" @toggle="handleNotificationsEnabled" />
+        <div class="h-px bg-slate-50 dark:bg-white/6 mx-6" />
         <SettingItem title="挡位指示灯" desc="控制硬件设备上的挡位物理指示灯开关"
                      :active="config.gearLight" @toggle="handleGearLight"
                      :disabled="!isConnected" :loading="loading.gearLight" />
@@ -148,6 +151,14 @@ async function handleIgnoreReconnect() {
     await apiService.updateConfig(nc)
     emit('config-change', nc)
   } catch (e) { frontendLogger.error('系统设置', '设置断连保持配置失败', e) }
+}
+
+async function handleNotificationsEnabled() {
+  try {
+    const nc = types.AppConfig.createFrom({ ...props.config, notificationsEnabled: !(props.config.notificationsEnabled ?? true) })
+    await apiService.updateConfig(nc)
+    emit('config-change', nc)
+  } catch (e) { frontendLogger.error('系统设置', '设置系统通知失败', e) }
 }
 
 async function handleSmartStartStop(mode: string) {

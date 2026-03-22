@@ -74,10 +74,20 @@ func (m *Manager) tryLoadFromPath(configPath string) bool {
 		return false
 	}
 
+	var raw map[string]json.RawMessage
+	hasNotificationsEnabled := false
+	if err := json.Unmarshal(data, &raw); err == nil {
+		_, hasNotificationsEnabled = raw["notificationsEnabled"]
+	}
+
 	var config types.AppConfig
 	if err := json.Unmarshal(data, &config); err != nil {
 		m.logError("解析配置文件失败 %s: %v", configPath, err)
 		return false
+	}
+	if !hasNotificationsEnabled {
+		config.NotificationsEnabled = true
+		m.logInfo("配置缺少 notificationsEnabled，已按默认值 true 迁移: %s", configPath)
 	}
 
 	// 补全缺失的配置项，兼容不同版本的配置文件

@@ -80,6 +80,7 @@ type AppConfig struct {
 	AutoControl             bool             `json:"autoControl"`             // 智能变频开关
 	FanCurve                []FanCurvePoint  `json:"fanCurve"`                // 风扇曲线
 	GearLight               bool             `json:"gearLight"`               // 挡位灯
+	NotificationsEnabled    bool             `json:"notificationsEnabled"`    // 系统通知开关
 	PowerOnStart            bool             `json:"powerOnStart"`            // 通电自启动
 	WindowsAutoStart        bool             `json:"windowsAutoStart"`        // Windows开机自启动
 	SmartStartStop          string           `json:"smartStartStop"`          // 智能启停
@@ -164,6 +165,7 @@ func GetDefaultConfig(isAutoStart bool) AppConfig {
 		AutoControl:             false,
 		FanCurve:                GetDefaultFanCurve(),
 		GearLight:               true,
+		NotificationsEnabled:    true,
 		PowerOnStart:            false,
 		WindowsAutoStart:        false,
 		SmartStartStop:          "off",
