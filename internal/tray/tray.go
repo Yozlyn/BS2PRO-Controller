@@ -25,7 +25,7 @@ type Manager struct {
 	onShowWindow func()
 	onQuit       func()
 	onQuitAll    func()
-	onStopCore   func()
+	onToggleCore func() bool
 	onToggleAuto func() bool
 	getStatus    func() Status
 	menuQuitGUI  *systray.MenuItem
@@ -50,6 +50,7 @@ type MenuItems struct {
 // Status 状态信息
 type Status struct {
 	Connected        bool
+	CoreRunning      bool
 	CPUTemp          int
 	GPUTemp          int
 	CurrentRPM       uint16
@@ -70,14 +71,14 @@ func (m *Manager) SetCallbacks(
 	onShow func(),
 	onQuit func(),
 	onQuitAll func(),
-	onStopCore func(),
+	onToggleCore func() bool,
 	onToggleAuto func() bool,
 	getStatus func() Status,
 ) {
 	m.onShowWindow = onShow
 	m.onQuit = onQuit
 	m.onQuitAll = onQuitAll
-	m.onStopCore = onStopCore
+	m.onToggleCore = onToggleCore
 	m.onToggleAuto = onToggleAuto
 	m.getStatus = getStatus
 }
@@ -215,7 +216,13 @@ func (m *Manager) createMenu() (items *MenuItems, err error) {
 
 	systray.AddSeparator()
 
-	m.menuStopCore = systray.AddMenuItem("关闭核心", "停止底层守护服务")
+    coreTitle := "暂停核心"
+    coreTooltip := "停止底层守护服务"
+    if m.getStatus != nil && !m.getStatus().CoreRunning {
+        coreTitle = "恢复核心"
+        coreTooltip = "重新启动底层守护服务"
+    }
+    m.menuStopCore = systray.AddMenuItem(coreTitle, coreTooltip)
 	m.menuQuitAll = systray.AddMenuItem("重启核心", "重启底层守护服务")
 	m.menuQuitGUI = systray.AddMenuItem("退出控制台", "只关闭前端界面")
 
@@ -287,8 +294,19 @@ func (m *Manager) handleMenuEvents() {
 				m.onQuit()
 			}
 		case <-m.menuStopCore.ClickedCh:
-			m.logDebug("托盘菜单: 关闭核心")
-			m.triggerMenuAction(m.menuStopCore, "关闭核心（关闭中）", "关闭核心", m.onStopCore)
+			m.logDebug("托盘菜单: 切换核心运行状态")
+			if m.onToggleCore != nil {
+				coreRunning := m.onToggleCore()
+				m.uiMutex.Lock()
+				if coreRunning {
+					m.menuStopCore.SetTitle("暂停核心")
+					m.menuStopCore.SetTooltip("停止底层守护服务")
+				} else {
+					m.menuStopCore.SetTitle("恢复核心")
+					m.menuStopCore.SetTooltip("重新启动底层守护服务")
+				}
+				m.uiMutex.Unlock()
+			}
 		case <-m.menuQuitAll.ClickedCh:
 			m.logDebug("托盘菜单: 重启核心")
 			m.triggerMenuAction(m.menuQuitAll, "重启核心（重启中）", "重启核心", m.onQuitAll)
@@ -334,6 +352,14 @@ func (m *Manager) updateMenuStatus() {
 					m.menuItems.DeviceStatus.SetTitle("设备状态: 已连接")
 				} else {
 					m.menuItems.DeviceStatus.SetTitle("设备状态: 未连接")
+				}
+
+				if status.CoreRunning {
+					m.menuStopCore.SetTitle("暂停核心")
+					m.menuStopCore.SetTooltip("停止底层守护服务")
+				} else {
+					m.menuStopCore.SetTitle("恢复核心")
+					m.menuStopCore.SetTooltip("重新启动底层守护服务")
 				}
 
 				m.menuItems.CPUTemperature.SetTitle(formatMenuValue("CPU温度", status.CPUTemp, "°C"))
