@@ -114,8 +114,10 @@
           @config-change="handleConfigChange" />
         <SystemSettingsView v-else-if="currentView === 'system-settings'"
           :is-dark="isDark" :is-connected="isConnected"
+          :follow-system-theme="followSystemTheme"
           :config="config"
-          @config-change="handleConfigChange" />
+          @config-change="handleConfigChange"
+          @follow-system-theme-change="handleFollowSystemThemeChange" />
         <AboutView v-else-if="currentView === 'about'" :is-dark="isDark" />
       </main>
     </div>
@@ -139,15 +141,35 @@ import { types } from '../wailsjs/go/models'
 import { HideWindow } from '../wailsjs/go/main/App'
 import { WindowToggleMaximise, WindowIsMaximised } from '../wailsjs/runtime/runtime'
 
+const THEME_STORAGE_KEY = 'theme'
+const THEME_FOLLOW_SYSTEM_KEY = 'theme-follow-system'
+
+const getFollowSystemTheme = (): boolean => localStorage.getItem(THEME_FOLLOW_SYSTEM_KEY) !== 'false'
+
+const getStoredTheme = (): 'dark' | 'light' | null => {
+  const storedTheme = localStorage.getItem(THEME_STORAGE_KEY)
+  if (storedTheme === 'dark' || storedTheme === 'light') return storedTheme
+  return null
+}
+
+const applyTheme = (dark: boolean) => {
+  isDark.value = dark
+  document.documentElement.classList.toggle('dark', dark)
+}
+
 const resolveInitialDarkMode = () => {
-  const storedTheme = localStorage.getItem('theme')
+  if (getFollowSystemTheme()) return window.matchMedia('(prefers-color-scheme: dark)').matches
+  const storedTheme = getStoredTheme()
   if (storedTheme === 'dark') return true
   if (storedTheme === 'light') return false
   return window.matchMedia('(prefers-color-scheme: dark)').matches
 }
 
+const systemThemeMedia = window.matchMedia('(prefers-color-scheme: dark)')
+
+const followSystemTheme = ref(getFollowSystemTheme())
 const isDark = ref(resolveInitialDarkMode())
-document.documentElement.classList.toggle('dark', isDark.value)
+applyTheme(isDark.value)
 const isCollapsed = ref(true)
 const currentView = ref('dashboard')
 const isConnected = ref(false)
@@ -183,6 +205,44 @@ let unsubHotkeyAction: (() => void) | null = null
 let clearHoverTimer: number | null = null
 let hoverUnlockHandler: ((e: Event) => void) | null = null
 let appHotkeyHandler: ((e: KeyboardEvent) => void) | null = null
+let systemThemeChangeHandler: ((event: MediaQueryListEvent) => void) | null = null
+let systemThemeLegacyChangeHandler: ((event: MediaQueryListEvent) => void) | null = null
+
+const handleSystemThemeChange = (matches: boolean) => {
+  if (!followSystemTheme.value) return
+  applyTheme(matches)
+}
+
+const attachSystemThemeListener = () => {
+  systemThemeChangeHandler = (event: MediaQueryListEvent) => handleSystemThemeChange(event.matches)
+  if (typeof systemThemeMedia.addEventListener === 'function') {
+    systemThemeMedia.addEventListener('change', systemThemeChangeHandler)
+  }
+
+  if (typeof systemThemeMedia.addListener === 'function') {
+    systemThemeLegacyChangeHandler = (event: MediaQueryListEvent) => handleSystemThemeChange(event.matches)
+    systemThemeMedia.addListener(systemThemeLegacyChangeHandler)
+  }
+}
+
+const detachSystemThemeListener = () => {
+  if (systemThemeChangeHandler && typeof systemThemeMedia.removeEventListener === 'function') {
+    systemThemeMedia.removeEventListener('change', systemThemeChangeHandler)
+  }
+  if (systemThemeLegacyChangeHandler && typeof systemThemeMedia.removeListener === 'function') {
+    systemThemeMedia.removeListener(systemThemeLegacyChangeHandler)
+  }
+  systemThemeChangeHandler = null
+  systemThemeLegacyChangeHandler = null
+}
+
+const syncThemePreferenceToNative = async () => {
+  try {
+    await (window as any).go?.main?.App?.SaveThemePreference?.(followSystemTheme.value, isDark.value ? 'dark' : 'light')
+  } catch (e) {
+    frontendLogger.debug('主题', '同步原生主题偏好失败', e)
+  }
+}
 
 const forceHoverReset = () => {
   const appRoot = document.getElementById('app') as HTMLElement | null
@@ -297,7 +357,8 @@ async function syncWindowMaxState() {
 }
 
 onMounted(async () => {
-  document.documentElement.classList.toggle('dark', isDark.value)
+  applyTheme(resolveInitialDarkMode())
+  void syncThemePreferenceToNative()
 
   document.addEventListener('visibilitychange', onVisibilityChange)
   appHotkeyHandler = (e: KeyboardEvent) => handleAppHotkeys(e)
@@ -306,6 +367,7 @@ onMounted(async () => {
   window.addEventListener('blur', onBlur)
   window.addEventListener('resize', onResize)
   window.addEventListener('pageshow', onPageShow)
+  attachSystemThemeListener()
 
   unsubWindowShown = apiService.onWindowShown(() => {
     clearStickyHover('window-shown')
@@ -377,6 +439,7 @@ onUnmounted(() => {
   window.removeEventListener('blur', onBlur)
   window.removeEventListener('resize', onResize)
   window.removeEventListener('pageshow', onPageShow)
+  detachSystemThemeListener()
 })
 
 async function loadConfig() {
@@ -387,9 +450,27 @@ async function loadConfig() {
 }
 
 const toggleDarkMode = () => {
-  isDark.value = !isDark.value
-  document.documentElement.classList.toggle('dark', isDark.value)
-  localStorage.theme = isDark.value ? 'dark' : 'light'
+  if (followSystemTheme.value) {
+    followSystemTheme.value = false
+    localStorage.setItem(THEME_FOLLOW_SYSTEM_KEY, 'false')
+  }
+  const nextDark = !isDark.value
+  applyTheme(nextDark)
+  localStorage.setItem(THEME_STORAGE_KEY, nextDark ? 'dark' : 'light')
+  void syncThemePreferenceToNative()
+}
+
+const handleFollowSystemThemeChange = (enabled: boolean) => {
+  followSystemTheme.value = enabled
+  localStorage.setItem(THEME_FOLLOW_SYSTEM_KEY, enabled ? 'true' : 'false')
+  if (enabled) {
+    localStorage.removeItem(THEME_STORAGE_KEY)
+    applyTheme(systemThemeMedia.matches)
+    void syncThemePreferenceToNative()
+    return
+  }
+  localStorage.setItem(THEME_STORAGE_KEY, isDark.value ? 'dark' : 'light')
+  void syncThemePreferenceToNative()
 }
 const toggleSidebar = () => { isCollapsed.value = !isCollapsed.value }
 const setCurrentView = (view: string) => { currentView.value = view }

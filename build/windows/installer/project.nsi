@@ -197,6 +197,77 @@ Function LaunchAsNormalUser
     Exec '"$WINDIR\explorer.exe" "$INSTDIR\${PRODUCT_EXECUTABLE}"'
 FunctionEnd
 
+Function LaunchMonitorAsNormalUser
+    ${If} ${FileExists} "$INSTDIR\BS2PRO-Monitor.exe"
+        Exec '"$WINDIR\explorer.exe" "$INSTDIR\BS2PRO-Monitor.exe"'
+    ${Else}
+        DetailPrint "未找到 BS2PRO-Monitor.exe，跳过拉起"
+    ${EndIf}
+FunctionEnd
+
+Function SyncMonitorAfterInstall
+    Push $R0
+    Push $R1
+    Push $R2
+    Push $R3
+
+    ReadEnvStr $R0 "PROGRAMDATA"
+    ${If} $R0 == ""
+        StrCpy $R0 "C:\ProgramData"
+    ${EndIf}
+    StrCpy $R0 "$R0\BS2PRO-Controller\config.json"
+    StrCpy $R1 0
+
+wait_config:
+    ${If} ${FileExists} "$R0"
+        Goto check_config
+    ${EndIf}
+    Sleep 300
+    IntOp $R1 $R1 + 1
+    ${If} $R1 < 10
+        Goto wait_config
+    ${EndIf}
+
+    DetailPrint "未找到配置文件，按默认配置启用 Monitor"
+    Goto enable_monitor
+
+check_config:
+    DetailPrint "正在检查 Monitor 相关配置..."
+    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"\"notificationsEnabled\": false" "$R0"'
+    Pop $R1
+    Pop $R2
+    ${If} $R1 != 0
+        Goto enable_monitor
+    ${EndIf}
+
+    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"\"processSwitchEnabled\": false" "$R0"'
+    Pop $R1
+    Pop $R2
+    ${If} $R1 != 0
+        Goto enable_monitor
+    ${EndIf}
+
+    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"    \"enabled\": false," "$R0"'
+    Pop $R1
+    Pop $R2
+    ${If} $R1 != 0
+        Goto enable_monitor
+    ${EndIf}
+
+    DetailPrint "配置显示无需启动 Monitor，跳过处理"
+    Goto sync_done
+
+enable_monitor:
+    DetailPrint "检测到需要 Monitor，立即拉起 Monitor"
+    Call LaunchMonitorAsNormalUser
+
+sync_done:
+    Pop $R3
+    Pop $R2
+    Pop $R1
+    Pop $R0
+FunctionEnd
+
 Section "主程序" SEC_MAIN
     SectionIn RO
     !insertmacro wails.setShellContext
@@ -249,6 +320,7 @@ Section "主程序" SEC_MAIN
     ${Else}
         DetailPrint "核心服务启动失败，错误代码: $0"
     ${EndIf}
+    Call SyncMonitorAfterInstall
 
     !insertmacro wails.associateFiles
     !insertmacro wails.associateCustomProtocols

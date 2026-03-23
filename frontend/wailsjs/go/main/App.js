@@ -106,6 +106,10 @@ export function SaveFanCurveProfileConfigs(arg1) {
   return window['go']['main']['App']['SaveFanCurveProfileConfigs'](arg1);
 }
 
+export function SaveThemePreference(arg1, arg2) {
+  return window['go']['main']['App']['SaveThemePreference'](arg1, arg2);
+}
+
 export function SendWindowsNotification(arg1, arg2) {
   return window['go']['main']['App']['SendWindowsNotification'](arg1, arg2);
 }

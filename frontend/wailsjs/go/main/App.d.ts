@@ -56,6 +56,8 @@ export function ResumeCoreService():Promise<boolean>;
 
 export function SaveFanCurveProfileConfigs(arg1:Array<main.FanCurveProfileConfig>):Promise<void>;
 
+export function SaveThemePreference(arg1:boolean,arg2:string):Promise<void>;
+
 export function SendWindowsNotification(arg1:string,arg2:string):Promise<void>;
 
 export function SetAutoControl(arg1:boolean):Promise<void>;

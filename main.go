@@ -15,6 +15,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 //go:embed all:frontend/out
@@ -119,7 +120,7 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 20, G: 24, B: 32, A: 255},
+		BackgroundColour: guiBackgroundColour(),
 		OnStartup:        app.startup,
 		OnBeforeClose:    app.OnWindowClosing,
 		Bind: []interface{}{
@@ -137,4 +138,32 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func guiBackgroundColour() *options.RGBA {
+	pref := loadThemePreference()
+	if !pref.FollowSystem {
+		if pref.Mode == "dark" {
+			return &options.RGBA{R: 31, G: 31, B: 31, A: 255}
+		}
+		return &options.RGBA{R: 248, G: 250, B: 252, A: 255}
+	}
+	if prefersLightTheme() {
+		return &options.RGBA{R: 248, G: 250, B: 252, A: 255}
+	}
+	return &options.RGBA{R: 31, G: 31, B: 31, A: 255}
+}
+
+func prefersLightTheme() bool {
+	key, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer key.Close()
+
+	value, _, err := key.GetIntegerValue("AppsUseLightTheme")
+	if err != nil {
+		return false
+	}
+	return value != 0
 }

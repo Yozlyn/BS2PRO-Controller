@@ -21,6 +21,9 @@
         <SettingItem title="允许系统通知" desc="在后台运行或窗口未置前时展示设备与服务状态提醒"
                      :active="config.notificationsEnabled ?? true" @toggle="handleNotificationsEnabled" />
         <div class="h-px bg-slate-50 dark:bg-white/6 mx-6" />
+        <SettingItem title="跟随系统主题" desc="启用后界面亮暗外观将自动跟随 Windows 系统主题切换"
+                     :active="followSystemTheme" @toggle="handleFollowSystemTheme" />
+        <div class="h-px bg-slate-50 dark:bg-white/6 mx-6" />
         <SettingItem title="挡位指示灯" desc="控制硬件设备上的挡位物理指示灯开关"
                      :active="config.gearLight" @toggle="handleGearLight"
                      :disabled="!isConnected" :loading="loading.gearLight" />
@@ -195,10 +198,11 @@ import { types } from '../../wailsjs/go/models'
 interface Props {
   isDark: boolean
   isConnected: boolean
+  followSystemTheme: boolean
   config: types.AppConfig
 }
 const props = defineProps<Props>()
-const emit = defineEmits<{ 'config-change': [config: types.AppConfig] }>()
+const emit = defineEmits<{ 'config-change': [config: types.AppConfig], 'follow-system-theme-change': [enabled: boolean] }>()
 
 const appVersion = ref('')
 const debugInfo = ref<any>(null)
@@ -306,6 +310,10 @@ function showAlertDialog(title: string, message: string) {
 
 function closeAlertDialog() {
   alertDialog.value.visible = false
+}
+
+function handleFollowSystemTheme() {
+  emit('follow-system-theme-change', !props.followSystemTheme)
 }
 
 async function handleGearLight() {

@@ -489,6 +489,10 @@ func (a *App) sendRequest(reqType ipc.RequestType, data any) (*ipc.Response, err
 
 func (a *App) GetAppVersion() string { return version.Get() }
 
+func (a *App) SaveThemePreference(followSystem bool, mode string) error {
+	return saveThemePreference(ThemePreference{FollowSystem: followSystem, Mode: mode})
+}
+
 func (a *App) ConnectDevice() bool {
 	resp, err := a.sendRequest(ipc.ReqConnect, nil)
 	if err != nil || resp == nil || !resp.Success {
@@ -543,7 +547,7 @@ func (a *App) UpdateConfig(cfg AppConfig) error {
 	return nil
 }
 
-func (a *App) syncProcessSwitchMonitor(enabled bool) {
+func (a *App) syncProcessSwitchMonitor(_ bool) {
 	a.syncMonitorAgentState()
 }
 

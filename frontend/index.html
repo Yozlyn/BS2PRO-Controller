@@ -1,16 +1,20 @@
 <!DOCTYPE html>
-<html lang="zh" class="dark">
+<html lang="zh">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BS2PRO Controller</title>
     <script>
-      // 检测系统主题
-      if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-        document.documentElement.classList.add('dark')
-      } else {
-        document.documentElement.classList.remove('dark')
-      }
+      const themeKey = 'theme'
+      const followSystemThemeKey = 'theme-follow-system'
+      const followSystemTheme = localStorage.getItem(followSystemThemeKey) !== 'false'
+      const storedTheme = localStorage.getItem(themeKey)
+      const useDark = followSystemTheme
+        ? window.matchMedia('(prefers-color-scheme: dark)').matches
+        : storedTheme === 'dark'
+
+      document.documentElement.classList.toggle('dark', useDark)
+      document.documentElement.style.backgroundColor = useDark ? '#1f1f1f' : '#f8fafc'
     </script>
   </head>
   <body class="antialiased">
