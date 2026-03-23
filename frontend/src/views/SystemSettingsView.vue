@@ -1,5 +1,12 @@
 <template>
   <div class="p-8 flex flex-col h-full space-y-6 overflow-y-auto">
+    <InlineAlertDialog
+      :visible="alertDialog.visible"
+      :title="alertDialog.title"
+      :message="alertDialog.message"
+      :is-dark="isDark"
+      @close="closeAlertDialog"
+    />
     <header>
       <h2 class="text-xl font-bold tracking-tight text-slate-800 dark:text-white">系统首选项</h2>
     </header>
@@ -47,6 +54,9 @@
                      :active="hotkeysConfig.enabled ?? true" @toggle="handleHotkeysEnabled" />
         <div class="h-px bg-slate-50 dark:bg-white/6 mx-6" />
         <div class="px-6 py-5 space-y-4">
+          <div v-if="hotkeyUiError" class="px-4 py-3 rounded-xl border border-red-200 bg-red-50 text-red-500 text-xs dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+            {{ hotkeyUiError }}
+          </div>
           <div v-if="conflictMessages.length" class="px-4 py-3 rounded-xl border border-red-200 bg-red-50 text-red-500 text-xs dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
             检测到快捷键冲突，请调整红色项后再保存。
             <div class="mt-2 space-y-1">
@@ -171,6 +181,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { Terminal } from 'lucide-vue-next'
+import InlineAlertDialog from '../components/ui/InlineAlertDialog.vue'
 import SettingItem from '../components/ui/SettingItem.vue'
 import UnifiedSelect from '../components/ui/UnifiedSelect.vue'
 import { apiService } from '../services/api'
@@ -191,6 +202,8 @@ const exportLogsLoading = ref(false)
 const clickedButton = ref<string | null>(null)
 const editingAction = ref<string | null>(null)
 const editingPreview = ref<Record<string, string>>({})
+const hotkeyUiError = ref('')
+const alertDialog = ref({ visible: false, title: '', message: '' })
 let buttonAnimTimer: ReturnType<typeof setTimeout> | null = null
 const loading = ref({ gearLight: false, powerOnStart: false, windowsAutoStart: false })
 const hotkeysConfig = computed(() => ((props.config as any).hotkeys ?? { enabled: true, global: [], inApp: [] }) as { enabled?: boolean; global?: Array<any>; inApp?: Array<any> })
@@ -283,6 +296,14 @@ function startButtonAnim(key: string) {
   buttonAnimTimer = setTimeout(() => { clickedButton.value = null }, 200)
 }
 
+function showAlertDialog(title: string, message: string) {
+  alertDialog.value = { visible: true, title, message }
+}
+
+function closeAlertDialog() {
+  alertDialog.value.visible = false
+}
+
 async function handleGearLight() {
   if (!props.isConnected) return
   loading.value.gearLight = true
@@ -306,7 +327,7 @@ async function handleWindowsAutoStart() {
   try {
     await apiService.setWindowsAutoStart(!props.config.windowsAutoStart)
     emit('config-change', types.AppConfig.createFrom({ ...props.config, windowsAutoStart: !props.config.windowsAutoStart }))
-  } catch (e) { frontendLogger.error('系统设置', '设置系统开机自启动失败', e); alert(`设置自启动失败：${e}`) }
+  } catch (e) { frontendLogger.error('系统设置', '设置系统开机自启动失败', e); showAlertDialog('设置失败', `设置自启动失败：${e}`) }
   finally { loading.value.windowsAutoStart = false }
 }
 
@@ -392,6 +413,7 @@ function ensureGlobalDefaults(next: any) {
 }
 
 async function commitHotkeys(next: any) {
+	hotkeyUiError.value = ''
 	const nc = types.AppConfig.createFrom({ ...props.config, hotkeys: next })
 	await apiService.updateConfig(nc)
 	emit('config-change', nc)
@@ -447,6 +469,8 @@ async function handleGlobalActionChange(index: number, nextAction: string) {
 		await commitHotkeys(next)
 	} catch (e) {
 		frontendLogger.error('系统设置', '更新全局快捷键功能失败', e)
+		hotkeyUiError.value = `更新全局快捷键功能失败：${e}`
+		showAlertDialog('快捷键设置失败', `更新全局快捷键功能失败：${e}`)
 	}
 }
 
@@ -471,6 +495,8 @@ async function resetBinding(item: any, scope: 'global' | 'app', index: number) {
 		await commitHotkeys(next)
 	} catch (e) {
 		frontendLogger.error('系统设置', '重置快捷键失败', e)
+		hotkeyUiError.value = `重置快捷键失败：${e}`
+		showAlertDialog('快捷键设置失败', `重置快捷键失败：${e}`)
 	}
 }
 
@@ -484,7 +510,8 @@ async function addCustomGlobalBinding() {
 		await commitHotkeys(next)
 	} catch (e) {
 		frontendLogger.error('系统设置', '新增自定义全局快捷键失败', e)
-		alert(`新增自定义失败：${e}`)
+		hotkeyUiError.value = `新增自定义失败：${e}`
+		showAlertDialog('快捷键设置失败', `新增自定义失败：${e}`)
 	}
 }
 
@@ -498,6 +525,8 @@ async function removeCustomGlobalBinding(customIndex: number) {
 		await commitHotkeys(next)
 	} catch (e) {
 		frontendLogger.error('系统设置', '删除自定义全局快捷键失败', e)
+		hotkeyUiError.value = `删除自定义失败：${e}`
+		showAlertDialog('快捷键设置失败', `删除自定义失败：${e}`)
 	}
 }
 
@@ -523,7 +552,7 @@ async function exportRecentLogs() {
     await apiService.exportRecentLogsZip()
   } catch (e) {
     frontendLogger.error('系统设置', '导出日志包失败', e)
-    alert(`导出日志包失败：${e}`)
+    showAlertDialog('导出失败', `导出日志包失败：${e}`)
   } finally {
     exportLogsLoading.value = false
   }
