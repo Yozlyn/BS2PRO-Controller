@@ -146,6 +146,8 @@ const resolveInitialDarkMode = () => {
   return window.matchMedia('(prefers-color-scheme: dark)').matches
 }
 
+const systemThemeMedia = window.matchMedia('(prefers-color-scheme: dark)')
+
 const isDark = ref(resolveInitialDarkMode())
 document.documentElement.classList.toggle('dark', isDark.value)
 const isCollapsed = ref(true)
@@ -183,6 +185,7 @@ let unsubHotkeyAction: (() => void) | null = null
 let clearHoverTimer: number | null = null
 let hoverUnlockHandler: ((e: Event) => void) | null = null
 let appHotkeyHandler: ((e: KeyboardEvent) => void) | null = null
+let systemThemeChangeHandler: ((event: MediaQueryListEvent) => void) | null = null
 
 const forceHoverReset = () => {
   const appRoot = document.getElementById('app') as HTMLElement | null
@@ -306,6 +309,12 @@ onMounted(async () => {
   window.addEventListener('blur', onBlur)
   window.addEventListener('resize', onResize)
   window.addEventListener('pageshow', onPageShow)
+  systemThemeChangeHandler = (event: MediaQueryListEvent) => {
+    if (localStorage.getItem('theme')) return
+    isDark.value = event.matches
+    document.documentElement.classList.toggle('dark', isDark.value)
+  }
+  systemThemeMedia.addEventListener('change', systemThemeChangeHandler)
 
   unsubWindowShown = apiService.onWindowShown(() => {
     clearStickyHover('window-shown')
@@ -377,6 +386,7 @@ onUnmounted(() => {
   window.removeEventListener('blur', onBlur)
   window.removeEventListener('resize', onResize)
   window.removeEventListener('pageshow', onPageShow)
+  if (systemThemeChangeHandler) systemThemeMedia.removeEventListener('change', systemThemeChangeHandler)
 })
 
 async function loadConfig() {
