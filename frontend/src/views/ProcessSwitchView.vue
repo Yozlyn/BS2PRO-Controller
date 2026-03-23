@@ -45,6 +45,13 @@
           >新增规则</button>
         </div>
 
+        <div v-if="ruleFeedback" class="px-4 py-3 rounded-xl border text-xs"
+             :class="ruleFeedback.type === 'error'
+               ? 'border-red-200 bg-red-50 text-red-500 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300'
+               : 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300'">
+          {{ ruleFeedback.message }}
+        </div>
+
         <div v-if="localRules.length === 0" class="text-xs text-slate-400 py-4">暂无规则，点击右上角新增规则</div>
 
         <div v-for="(rule, idx) in localRules" :key="idx" class="rounded-2xl border border-slate-100/60 dark:border-white/10 p-4 space-y-3">
@@ -62,7 +69,7 @@
             />
           </div>
           <div class="grid grid-cols-12 gap-3 items-center">
-            <label class="col-span-2 text-xs font-bold text-slate-500">配置文件</label>
+            <label class="col-span-2 text-xs font-bold text-slate-500">风扇配置</label>
             <UnifiedSelect
               :model-value="rule.profilePath || ''"
               :options="buildRuleProfileOptions(rule)"
@@ -73,13 +80,13 @@
               @update:model-value="(value) => { rule.profilePath = String(value || '').trim() }"
             />
           </div>
-          <div class="flex items-center justify-between">
+          <div class="flex items-center justify-end gap-2">
             <button
               @click="toggleRuleEnabled(idx)"
               class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
               :class="rule.enabled
                 ? (isDark ? 'bg-emerald-500/20 text-emerald-300' : 'bg-emerald-50 text-emerald-600')
-                : (isDark ? 'surface-tile text-slate-300' : 'surface-tile text-slate-600')"
+                : 'text-red-500 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-500/10'"
             >{{ rule.enabled ? '已启用' : '已禁用' }}</button>
 
             <button
@@ -107,7 +114,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import SettingItem from '../components/ui/SettingItem.vue'
 import UnifiedSelect from '../components/ui/UnifiedSelect.vue'
 import { apiService } from '../services/api'
@@ -129,6 +136,7 @@ const localInterval = ref(3)
 const localRules = ref<types.ProcessFanRule[]>([])
 const processOptions = ref<{ value: string; label: string }[]>([])
 const profileOptions = ref<{ value: string; label: string }[]>([])
+const ruleFeedback = ref<{ type: 'error' | 'success'; message: string } | null>(null)
 let buttonAnimTimer: ReturnType<typeof setTimeout> | null = null
 
 const intervalOptions = [
@@ -178,6 +186,10 @@ async function updateConfig(patch: Partial<types.AppConfig>) {
   }
 }
 
+function setRuleFeedback(type: 'error' | 'success', message: string) {
+  ruleFeedback.value = { type, message }
+}
+
 function sanitizeRules() {
   return localRules.value
     .map((rule) =>
@@ -190,9 +202,16 @@ function sanitizeRules() {
     .filter((rule) => !!rule.processName && !!rule.profilePath)
 }
 
+function getRuleValidationMessage() {
+  const invalidIndex = localRules.value.findIndex((rule) => !rule.processName?.trim() || !rule.profilePath?.trim())
+  if (invalidIndex >= 0) return `第 ${invalidIndex + 1} 条规则未填写完整，请先补全进程名和风扇配置`
+  return ''
+}
+
 async function handleToggleEnabled() {
   localEnabled.value = !localEnabled.value
   await updateConfig({ processSwitchEnabled: localEnabled.value })
+  if (localEnabled.value) void apiService.checkProcessSwitchNow()
 }
 
 async function handleIntervalChange(value: string | number) {
@@ -202,6 +221,7 @@ async function handleIntervalChange(value: string | number) {
 
 function addRule() {
   localRules.value.push(types.ProcessFanRule.createFrom({ processName: '', profilePath: '', enabled: true }))
+  setRuleFeedback('success', '已新增一条规则，请先补全进程名和风扇配置后再保存')
 }
 
 function buildRuleProcessOptions(rule: types.ProcessFanRule) {
@@ -279,7 +299,7 @@ function buildRuleProfileOptions(rule: types.ProcessFanRule) {
   const options = [...profileOptions.value]
   const current = (rule.profilePath || '').trim()
   if (current && !options.some((opt) => opt.value === current)) {
-    options.unshift({ value: current, label: `当前: ${current}` })
+    options.unshift({ value: current, label: `当前配置` })
   }
   return options
 }
@@ -295,7 +315,7 @@ async function loadRuleProfileOptions() {
       .filter((item) => !!item.path)
       .map((item) => ({
         value: item.path,
-        label: `${item.name} (${item.path})`,
+        label: item.name,
       }))
   } catch (e) {
     frontendLogger.error('进程联动', '加载风扇配置列表失败', e)
@@ -306,20 +326,47 @@ async function loadRuleProfileOptions() {
 onMounted(() => {
   void loadRuleProcessOptions()
   void loadRuleProfileOptions()
+  document.addEventListener('app-shortcut-save', onShortcutSave as EventListener)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('app-shortcut-save', onShortcutSave as EventListener)
 })
 
 function removeRule(index: number) {
   localRules.value.splice(index, 1)
+  setRuleFeedback('success', '规则已删除，记得保存以应用更改')
 }
 
-function toggleRuleEnabled(index: number) {
+async function toggleRuleEnabled(index: number) {
   const rule = localRules.value[index]
   if (!rule) return
+  const message = getRuleValidationMessage()
+  if (message) {
+    setRuleFeedback('error', message)
+    return
+  }
   localRules.value[index] = types.ProcessFanRule.createFrom({ ...rule, enabled: !rule.enabled })
+  await updateConfig({ processSwitchRules: sanitizeRules() as any })
+  setRuleFeedback('success', `第 ${index + 1} 条规则已${localRules.value[index].enabled ? '启用' : '禁用'}`)
+  if (localEnabled.value) void apiService.checkProcessSwitchNow()
 }
 
 async function saveRules() {
+  const message = getRuleValidationMessage()
+  if (message) {
+    setRuleFeedback('error', message)
+    return
+  }
   await updateConfig({ processSwitchRules: sanitizeRules() as any })
+  setRuleFeedback('success', '进程联动规则已保存')
+  if (localEnabled.value) void apiService.checkProcessSwitchNow()
+}
+
+function onShortcutSave(event: Event) {
+  const view = (event as CustomEvent).detail?.view
+  if (view !== 'process-switch') return
+  void saveRules()
 }
 
 </script>
