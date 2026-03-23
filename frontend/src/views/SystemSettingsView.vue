@@ -54,9 +54,6 @@
                      :active="hotkeysConfig.enabled ?? true" @toggle="handleHotkeysEnabled" />
         <div class="h-px bg-slate-50 dark:bg-white/6 mx-6" />
         <div class="px-6 py-5 space-y-4">
-          <div v-if="hotkeyUiError" class="px-4 py-3 rounded-xl border border-red-200 bg-red-50 text-red-500 text-xs dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
-            {{ hotkeyUiError }}
-          </div>
           <div v-if="conflictMessages.length" class="px-4 py-3 rounded-xl border border-red-200 bg-red-50 text-red-500 text-xs dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
             检测到快捷键冲突，请调整红色项后再保存。
             <div class="mt-2 space-y-1">
@@ -91,7 +88,14 @@
                 <div class="text-sm font-bold text-slate-700 dark:text-slate-300">自定义全局控制</div>
                 <div class="text-[11px] text-slate-400 mt-1">在默认全局配置外，新增自定义功能与快捷键。</div>
               </div>
-              <button @click="addCustomGlobalBinding" class="px-3 py-2 rounded-xl text-xs surface-tile">新增自定义</button>
+              <button @click="addCustomGlobalBinding" :disabled="customGlobalBindings.length >= customGlobalActionPresets.length"
+                      class="px-3 py-2 rounded-xl text-xs surface-tile disabled:opacity-40 disabled:cursor-not-allowed">新增自定义</button>
+            </div>
+            <div v-if="customGlobalUiError" class="mt-3 px-4 py-3 rounded-xl border border-red-200 bg-red-50 text-red-500 text-xs dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+              {{ customGlobalUiError }}
+            </div>
+            <div v-if="customGlobalBindings.length >= customGlobalActionPresets.length" class="mt-2 text-[11px] text-slate-400">
+              当前最多支持 {{ customGlobalActionPresets.length }} 个自定义快捷键位。
             </div>
             <div class="mt-3 space-y-2 text-xs text-slate-500 dark:text-slate-400">
               <div v-for="(item, customIndex) in customGlobalBindings" :key="`${item.action}-${defaultHotkeys.global.length + customIndex}`" class="flex items-center justify-between gap-4 rounded-xl px-3 py-3 surface-tile">
@@ -202,7 +206,7 @@ const exportLogsLoading = ref(false)
 const clickedButton = ref<string | null>(null)
 const editingAction = ref<string | null>(null)
 const editingPreview = ref<Record<string, string>>({})
-const hotkeyUiError = ref('')
+const customGlobalUiError = ref('')
 const alertDialog = ref({ visible: false, title: '', message: '' })
 let buttonAnimTimer: ReturnType<typeof setTimeout> | null = null
 const loading = ref({ gearLight: false, powerOnStart: false, windowsAutoStart: false })
@@ -413,7 +417,7 @@ function ensureGlobalDefaults(next: any) {
 }
 
 async function commitHotkeys(next: any) {
-	hotkeyUiError.value = ''
+	customGlobalUiError.value = ''
 	const nc = types.AppConfig.createFrom({ ...props.config, hotkeys: next })
 	await apiService.updateConfig(nc)
 	emit('config-change', nc)
@@ -469,8 +473,7 @@ async function handleGlobalActionChange(index: number, nextAction: string) {
 		await commitHotkeys(next)
 	} catch (e) {
 		frontendLogger.error('系统设置', '更新全局快捷键功能失败', e)
-		hotkeyUiError.value = `更新全局快捷键功能失败：${e}`
-		showAlertDialog('快捷键设置失败', `更新全局快捷键功能失败：${e}`)
+		customGlobalUiError.value = `更新全局快捷键功能失败：${e}`
 	}
 }
 
@@ -495,8 +498,7 @@ async function resetBinding(item: any, scope: 'global' | 'app', index: number) {
 		await commitHotkeys(next)
 	} catch (e) {
 		frontendLogger.error('系统设置', '重置快捷键失败', e)
-		hotkeyUiError.value = `重置快捷键失败：${e}`
-		showAlertDialog('快捷键设置失败', `重置快捷键失败：${e}`)
+		customGlobalUiError.value = `重置快捷键失败：${e}`
 	}
 }
 
@@ -504,14 +506,17 @@ async function addCustomGlobalBinding() {
 	try {
 		const next = buildNextHotkeys()
 		ensureGlobalDefaults(next)
+		if ((next.global || []).length-defaultHotkeys.global.length >= customGlobalActionPresets.length) {
+			customGlobalUiError.value = `当前最多只能添加 ${customGlobalActionPresets.length} 个自定义功能位`
+			return
+		}
 		const usedAccelerators = new Set((next.global || []).filter((item: any) => item.enabled && item.accelerator).map((item: any) => item.accelerator))
 		const preset = customGlobalActionPresets.find((item) => !usedAccelerators.has(item.accelerator)) || customGlobalActionPresets[0]
 		next.global.push({ ...preset, scope: 'global', enabled: true, editable: true })
 		await commitHotkeys(next)
 	} catch (e) {
 		frontendLogger.error('系统设置', '新增自定义全局快捷键失败', e)
-		hotkeyUiError.value = `新增自定义失败：${e}`
-		showAlertDialog('快捷键设置失败', `新增自定义失败：${e}`)
+		customGlobalUiError.value = `新增自定义失败：${e}`
 	}
 }
 
@@ -525,8 +530,7 @@ async function removeCustomGlobalBinding(customIndex: number) {
 		await commitHotkeys(next)
 	} catch (e) {
 		frontendLogger.error('系统设置', '删除自定义全局快捷键失败', e)
-		hotkeyUiError.value = `删除自定义失败：${e}`
-		showAlertDialog('快捷键设置失败', `删除自定义失败：${e}`)
+		customGlobalUiError.value = `删除自定义失败：${e}`
 	}
 }
 
