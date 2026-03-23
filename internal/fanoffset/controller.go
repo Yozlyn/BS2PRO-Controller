@@ -25,6 +25,11 @@ type Controller struct {
 
 	config Config
 	logger types.Logger
+
+	hasRPMFeedback     bool
+	latestTargetRPM    int
+	latestCurrentRPM   int
+	latestDeviceTarget int
 }
 
 type tempSample struct {
@@ -52,6 +57,8 @@ type zoneState struct {
 
 	trendUpCount   int
 	trendDownCount int
+
+	bias int
 }
 
 // Config 控制器配置
@@ -167,6 +174,23 @@ func New(cfg Config, logger types.Logger) *Controller {
 	}
 }
 
+// ObserveFanResponse 记录一次目标转速与实际转速反馈，供后续偏置微调使用。
+func (c *Controller) ObserveFanResponse(targetRPM, currentRPM, deviceTargetRPM int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if targetRPM <= 0 || currentRPM <= 0 {
+		c.latestTargetRPM = 0
+		c.latestCurrentRPM = 0
+		c.latestDeviceTarget = 0
+		c.hasRPMFeedback = false
+		return
+	}
+	c.latestTargetRPM = targetRPM
+	c.latestCurrentRPM = currentRPM
+	c.latestDeviceTarget = deviceTargetRPM
+	c.hasRPMFeedback = true
+}
+
 // Update 根据当前温度调整对应区间的偏移量
 func (c *Controller) Update(currentTemp int, fanCurve []types.FanCurvePoint, minRPM, maxRPM int) bool {
 	c.mu.Lock()
@@ -205,6 +229,7 @@ func (c *Controller) Update(currentTemp int, fanCurve []types.FanCurvePoint, min
 	zoneIdx := c.findZoneIndex(currentTemp, fanCurve)
 	zone := &c.zones[zoneIdx]
 	point := &fanCurve[zoneIdx]
+	c.applyFeedbackBias(zone, point, currentTemp, now, minRPM, maxRPM)
 
 	// 弹性安全基准线
 	minSafeRPM := c.getMinSafeRPM(currentTemp, minRPM, maxRPM)
@@ -623,6 +648,20 @@ func (c *Controller) handleVerifying(zoneIdx int, fanCurve []types.FanCurvePoint
 		}
 		return
 	}
+	if c.hasRPMFeedback {
+		rpmError := c.latestTargetRPM - c.latestCurrentRPM
+		if rpmError >= c.config.Step*3 && currentTemp >= point.Temperature-c.config.StableDelta {
+			zone.verifying = false
+			zone.stableCount = 0
+			oldOffset := point.Offset
+			c.adjustZoneOffset(point, c.config.Step, minRPM, maxRPM)
+			zone.lastAdjustAt = now
+			if c.logger != nil {
+				c.logger.Debug("[反馈打断] %d°C 验证期因转速欠跟随中断(rpmError=%d): offset %d->%d", point.Temperature, rpmError, oldOffset, point.Offset)
+			}
+			return
+		}
+	}
 
 	if zone.verifyTempHigh-zone.verifyTempLow > c.config.VerifyMaxDelta {
 		zone.verifying = false
@@ -662,6 +701,22 @@ func (c *Controller) checkDrift(zone *zoneState, currentTemp int, point *types.F
 	}
 
 	delta := currentTemp - zone.convergeTmp
+	if c.hasRPMFeedback {
+		rpmError := c.latestTargetRPM - c.latestCurrentRPM
+		if rpmError >= c.config.Step*4 {
+			zone.driftCount++
+			if zone.driftCount >= max(3, c.config.DriftCount/4) {
+				zone.converged = false
+				zone.stableCount = 0
+				zone.driftCount = 0
+				zone.verifying = false
+				if c.logger != nil {
+					c.logger.Debug("[误差重置] %d°C 检测到持续欠跟随(rpmError=%d), 解除收敛状态", point.Temperature, rpmError)
+				}
+				return
+			}
+		}
+	}
 	if delta >= upwardThreshold || delta <= downwardThreshold {
 		zone.driftCount++
 		if zone.driftCount >= requiredCount {
@@ -675,6 +730,43 @@ func (c *Controller) checkDrift(zone *zoneState, currentTemp int, point *types.F
 		}
 	} else {
 		zone.driftCount = 0
+	}
+}
+
+func (c *Controller) applyFeedbackBias(zone *zoneState, point *types.FanCurvePoint, currentTemp int, now time.Time, minRPM, maxRPM int) {
+	if !c.hasRPMFeedback || !zone.converged {
+		return
+	}
+	if !zone.lastAdjustAt.IsZero() && now.Sub(zone.lastAdjustAt) < c.config.AdjustCooldown {
+		return
+	}
+	rpmError := c.latestTargetRPM - c.latestCurrentRPM
+	if iabs(rpmError) < c.config.Step*2 {
+		return
+	}
+	delta := 0
+	if rpmError > 0 {
+		delta = c.config.Step
+	} else if currentTemp < c.config.HighTempThreshold {
+		delta = -c.config.Step
+	}
+	if delta == 0 {
+		return
+	}
+	oldOffset := point.Offset
+	oldBias := zone.bias
+	c.adjustZoneOffset(point, delta, minRPM, maxRPM)
+	actualDelta := point.Offset - oldOffset
+	if actualDelta == 0 {
+		return
+	}
+	zone.bias += actualDelta
+	zone.lastAdjustAt = now
+	zone.converged = false
+	zone.stableCount = 0
+	if c.logger != nil {
+		c.logger.Debug("[反馈偏置] %d°C rpmError=%d current=%d target=%d deviceTarget=%d bias %d->%d offset %d->%d",
+			point.Temperature, rpmError, c.latestCurrentRPM, c.latestTargetRPM, c.latestDeviceTarget, oldBias, zone.bias, oldOffset, point.Offset)
 	}
 }
 
