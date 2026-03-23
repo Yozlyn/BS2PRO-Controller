@@ -70,6 +70,7 @@ type CoreApp struct {
 	baseOffsetEnabledBeforeSwitch *bool
 	lastReportedForegroundProcess string
 	notificationManager           *notification.Manager
+	systemHotkeyConflicts         []types.HotkeyConflict
 }
 
 func NewCoreApp(debugMode bool) *CoreApp {
@@ -194,9 +195,9 @@ func (a *CoreApp) Stop() {
 }
 
 func (a *CoreApp) onShowWindowRequest() {
-	a.logInfo("收到显示窗口请求")
+	a.logInfo("收到切换窗口显示请求")
 	if a.ipcServer != nil && a.ipcServer.HasClients() {
-		a.ipcServer.BroadcastEvent("show-window", nil)
+		a.ipcServer.BroadcastEvent("toggle-window", nil)
 	} else {
 		a.logInfo("没有 GUI 连接，服务模式下无法主动唤起窗口。")
 	}
@@ -248,9 +249,19 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 		if err := json.Unmarshal(req.Data, &cfg); err != nil {
 			return a.errorResponse("解析配置失败: " + err.Error())
 		}
+		if conflicts := types.DetectHotkeyConflicts(cfg.Hotkeys); len(conflicts) > 0 {
+			return a.errorResponse("快捷键存在冲突")
+		}
 		if err := a.UpdateConfig(cfg); err != nil {
 			return a.errorResponse(err.Error())
 		}
+		return a.successResponse(true)
+	case ipc.ReqReportHotkeyConflicts:
+		var conflicts []types.HotkeyConflict
+		if err := json.Unmarshal(req.Data, &conflicts); err != nil {
+			return a.errorResponse("解析快捷键冲突失败: " + err.Error())
+		}
+		a.setSystemHotkeyConflicts(conflicts)
 		return a.successResponse(true)
 	case ipc.ReqSetFanCurve:
 		var curve []types.FanCurvePoint
@@ -305,6 +316,13 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 			return a.errorResponse("解析参数失败: " + err.Error())
 		}
 		if err := a.SetAutoControl(params.Enabled); err != nil {
+			return a.errorResponse(err.Error())
+		}
+		return a.successResponse(true)
+	case ipc.ReqToggleAutoControl:
+		cfg := a.configManager.Get()
+		a.logInfo("收到快捷键切换智能变频请求: current=%v next=%v", cfg.AutoControl, !cfg.AutoControl)
+		if err := a.SetAutoControl(!cfg.AutoControl); err != nil {
 			return a.errorResponse(err.Error())
 		}
 		return a.successResponse(true)
@@ -418,6 +436,34 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 		}
 		success := a.SetRGBMode(params)
 		return a.successResponse(success)
+	case ipc.ReqToggleProcessSwitch:
+		cfg := a.configManager.Get()
+		next := !cfg.ProcessSwitchEnabled
+		a.logInfo("收到快捷键切换进程联动请求: current=%v next=%v", cfg.ProcessSwitchEnabled, next)
+		if err := a.SetProcessSwitchEnabled(next); err != nil {
+			return a.errorResponse(err.Error())
+		}
+		return a.successResponse(true)
+	case ipc.ReqCycleRGBMode:
+		a.logInfo("收到快捷键切换RGB模式请求")
+		success := a.CycleRGBMode()
+		return a.successResponse(success)
+	case ipc.ReqTriggerHotkeyAction:
+		var params ipc.TriggerHotkeyActionParams
+		if err := json.Unmarshal(req.Data, &params); err != nil {
+			return a.errorResponse("解析快捷键动作失败: " + err.Error())
+		}
+		a.triggerHotkeyAction(params.Action)
+		return a.successResponse(true)
+	case ipc.ReqSetHotkeyEditMode:
+		var params ipc.SetBoolParams
+		if err := json.Unmarshal(req.Data, &params); err != nil {
+			return a.errorResponse("解析快捷键编辑状态失败: " + err.Error())
+		}
+		if a.ipcServer != nil {
+			a.ipcServer.BroadcastEventToRole(ipc.RoleMonitorAgent, ipc.EventHotkeyEditMode, params)
+		}
+		return a.successResponse(true)
 	case ipc.ReqRestartService:
 		success := a.RestartService()
 		return a.successResponse(success)
@@ -718,12 +764,40 @@ func (a *CoreApp) UpdateConfig(cfg types.AppConfig) error {
 	oldCfg := a.configManager.Get()
 	shouldStartMonitor := !a.monitoringTemp && a.isConnected && cfg.AutoControl
 	cfg.ConfigPath = oldCfg.ConfigPath
+	cfg.HotkeyConflicts = append([]types.HotkeyConflict{}, a.systemHotkeyConflicts...)
 	err := a.configManager.Update(cfg)
 	a.mutex.Unlock()
+	a.setSystemHotkeyConflicts(nil)
+	if a.ipcServer != nil {
+		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
+	}
 	if shouldStartMonitor {
 		go a.startTemperatureMonitoring()
 	}
 	return err
+}
+
+func (a *CoreApp) SetProcessSwitchEnabled(enabled bool) error {
+	a.mutex.Lock()
+	cfg := a.configManager.Get()
+	cfg.ProcessSwitchEnabled = enabled
+	err := a.configManager.Update(cfg)
+	a.mutex.Unlock()
+	if err != nil {
+		return err
+	}
+	if enabled {
+		a.safeGo("processSwitchImmediateCheck", func() {
+			a.runProcessSwitchCheck(a.configManager.Get())
+		})
+	}
+	if a.notificationManager != nil {
+		a.notificationManager.OnProcessSwitchChanged(enabled)
+	}
+	if a.ipcServer != nil {
+		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
+	}
+	return nil
 }
 
 func (a *CoreApp) SetFanCurve(curve []types.FanCurvePoint) error {
@@ -973,6 +1047,9 @@ func (a *CoreApp) SetAutoControl(enabled bool) error {
 	if a.ipcServer != nil {
 		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
 	}
+	if a.notificationManager != nil {
+		a.notificationManager.OnAutoControlChanged(enabled)
+	}
 	return err
 }
 
@@ -1180,6 +1257,7 @@ func (a *CoreApp) SetRGBMode(params ipc.SetRGBModeParams) bool {
 
 	if success {
 		cfg := a.configManager.Get()
+		cfg.HotkeyConflicts = append([]types.HotkeyConflict{}, a.systemHotkeyConflicts...)
 		rgbColors := make([]types.RGBColorConfig, len(params.Colors))
 		for i, c := range params.Colors {
 			rgbColors[i] = types.RGBColorConfig{R: c.R, G: c.G, B: c.B}
@@ -1196,8 +1274,67 @@ func (a *CoreApp) SetRGBMode(params ipc.SetRGBModeParams) bool {
 		if a.ipcServer != nil {
 			a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
 		}
+		if a.notificationManager != nil {
+			a.notificationManager.OnRGBModeChanged(describeRGBMode(params.Mode))
+		}
 	}
 	return success
+}
+
+func (a *CoreApp) setSystemHotkeyConflicts(conflicts []types.HotkeyConflict) {
+	a.mutex.Lock()
+	if len(conflicts) == 0 {
+		a.systemHotkeyConflicts = nil
+	} else {
+		a.systemHotkeyConflicts = append([]types.HotkeyConflict{}, conflicts...)
+	}
+	cfg := a.configManager.Get()
+	cfg.HotkeyConflicts = append([]types.HotkeyConflict{}, a.systemHotkeyConflicts...)
+	a.mutex.Unlock()
+	if a.ipcServer != nil {
+		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
+	}
+}
+
+func (a *CoreApp) CycleRGBMode() bool {
+	cfg := a.configManager.Get()
+	modes := []string{"smart", "rotation", "breathing", "static_single", "static_multi", "flowing", "off"}
+	current := "smart"
+	if cfg.RGBConfig != nil && cfg.RGBConfig.Mode != "" {
+		current = cfg.RGBConfig.Mode
+	}
+	index := 0
+	for i, mode := range modes {
+		if mode == current {
+			index = i
+			break
+		}
+	}
+	nextMode := modes[(index+1)%len(modes)]
+	params := rgbParamsFromConfig(cfg)
+	params.Mode = nextMode
+	return a.SetRGBMode(params)
+}
+
+func describeRGBMode(mode string) string {
+	switch mode {
+	case "smart":
+		return "智能"
+	case "rotation":
+		return "旋转"
+	case "breathing":
+		return "呼吸"
+	case "static_single":
+		return "单色常亮"
+	case "static_multi":
+		return "多色常亮"
+	case "flowing":
+		return "流光"
+	case "off":
+		return "关闭"
+	default:
+		return mode
+	}
 }
 
 func (a *CoreApp) GetDebugInfo() map[string]any {
@@ -1232,6 +1369,107 @@ func (a *CoreApp) SetDebugMode(enabled bool) error {
 		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
 	}
 	return nil
+}
+
+func (a *CoreApp) triggerHotkeyAction(action string) {
+	switch action {
+	case "show-main-window":
+		a.onShowWindowRequest()
+	case "toggle-auto-control":
+		a.toggleAutoControlHotkey()
+	case "toggle-process-switch":
+		a.toggleProcessSwitchHotkey()
+	case "cycle-rgb-mode":
+		a.CycleRGBMode()
+	case "device-toggle-offset":
+		a.toggleOffsetHotkey()
+	case "device-gear-quiet":
+		a.triggerManualGearHotkey("静音")
+	case "device-gear-standard":
+		a.triggerManualGearHotkey("标准")
+	case "device-gear-strong":
+		a.triggerManualGearHotkey("强劲")
+	case "device-gear-overclock":
+		a.triggerManualGearHotkey("超频")
+	case "device-custom-speed-toggle":
+		a.toggleCustomSpeedHotkey()
+	case "device-custom-speed-apply":
+		a.applyCustomSpeedHotkey()
+	default:
+		if a.ipcServer != nil {
+			a.ipcServer.BroadcastEventToRole(ipc.RoleGUI, ipc.EventHotkeyAction, ipc.TriggerHotkeyActionParams{Action: action})
+		}
+	}
+}
+
+func (a *CoreApp) toggleAutoControlHotkey() {
+	cfg := a.configManager.Get()
+	next := !cfg.AutoControl
+	if err := a.SetAutoControl(next); err == nil {
+		a.emitNotification(notification.Request{Type: notification.TypeAutoControlChanged, Title: "智能变频已切换", Message: boolMessage(next, "智能变频已开启", "智能变频已关闭")})
+	}
+}
+
+func (a *CoreApp) toggleProcessSwitchHotkey() {
+	cfg := a.configManager.Get()
+	next := !cfg.ProcessSwitchEnabled
+	if err := a.SetProcessSwitchEnabled(next); err == nil {
+		a.emitNotification(notification.Request{Type: notification.TypeProcessSwitchChanged, Title: "进程联动已切换", Message: boolMessage(next, "进程联动已开启", "进程联动已关闭")})
+	}
+}
+
+func (a *CoreApp) toggleOffsetHotkey() {
+	cfg := a.configManager.Get()
+	if !cfg.AutoControl {
+		a.emitNotification(notification.Request{Title: "自动曲线偏移不可用", Message: "请先开启智能变频后再切换自动曲线偏移"})
+		return
+	}
+	cfg.FanCurveOffsetEnabled = !cfg.FanCurveOffsetEnabled
+	if cfg.FanCurveOffsetEnabled && cfg.TempSampleCount < 3 {
+		cfg.TempSampleCount = 3
+	}
+	if err := a.UpdateConfig(cfg); err == nil {
+		a.emitNotification(notification.Request{Title: "自动曲线偏移已切换", Message: boolMessage(cfg.FanCurveOffsetEnabled, "自动曲线偏移已开启", "自动曲线偏移已关闭")})
+	}
+}
+
+func (a *CoreApp) toggleCustomSpeedHotkey() {
+	cfg := a.configManager.Get()
+	next := !cfg.CustomSpeedEnabled
+	if err := a.SetCustomSpeed(next, cfg.CustomSpeedRPM); err == nil {
+		a.emitNotification(notification.Request{Title: "自定义转速已切换", Message: boolMessage(next, fmt.Sprintf("自定义转速已开启：%d RPM", cfg.CustomSpeedRPM), "自定义转速已关闭")})
+	}
+}
+
+func (a *CoreApp) applyCustomSpeedHotkey() {
+	cfg := a.configManager.Get()
+	if !cfg.CustomSpeedEnabled {
+		a.emitNotification(notification.Request{Title: "自定义转速不可应用", Message: "请先开启自定义转速后再应用"})
+		return
+	}
+	if err := a.SetCustomSpeed(true, cfg.CustomSpeedRPM); err == nil {
+		a.emitNotification(notification.Request{Title: "自定义转速已应用", Message: fmt.Sprintf("当前已应用 %d RPM", cfg.CustomSpeedRPM)})
+	}
+}
+
+func boolMessage(enabled bool, onText string, offText string) string {
+	if enabled {
+		return onText
+	}
+	return offText
+}
+
+func (a *CoreApp) triggerManualGearHotkey(gear string) {
+	cfg := a.configManager.Get()
+	if cfg.AutoControl || cfg.CustomSpeedEnabled {
+		a.emitNotification(notification.Request{Title: "挡位切换不可用", Message: "当前模式下手动挡位被禁用，请先关闭智能变频或自定义转速"})
+		return
+	}
+	if !a.SetManualGear(gear, cfg.ManualLevel) {
+		a.emitNotification(notification.Request{Title: "挡位切换失败", Message: fmt.Sprintf("切换到%s挡失败", gear)})
+		return
+	}
+	a.emitNotification(notification.Request{Title: "挡位已切换", Message: fmt.Sprintf("当前已切换到%s挡 - %s", gear, cfg.ManualLevel)})
 }
 
 func (a *CoreApp) startTemperatureMonitoring() {
@@ -1399,10 +1637,12 @@ func (a *CoreApp) startTemperatureMonitoring() {
 					avgTemp = avgTemp / len(tempSamples)
 
 					targetRPM := temperature.CalculateTargetRPM(avgTemp, cfg.FanCurve)
+					var latestFanData *types.FanData
 					if cfg.FanCurveOffsetEnabled && !processSwitchActive {
 						// 计算设备最大RPM (根据挡位)
 						deviceMaxRPM := 4000
 						if fd := a.deviceManager.GetCurrentFanData(); fd != nil {
+							latestFanData = fd
 							switch fd.MaxGear {
 							case "静音":
 								deviceMaxRPM = 1900
@@ -1431,9 +1671,21 @@ func (a *CoreApp) startTemperatureMonitoring() {
 						autoOffset := temperature.CalculateOffset(avgTemp, fanCurveCopy)
 						targetRPM = temperature.ApplyOffset(targetRPM, autoOffset)
 					}
-					a.logDebug("智能变频监控：计算出的 targetRPM=%d, avgTemp=%d, len(fanCurve)=%d", targetRPM, avgTemp, len(cfg.FanCurve))
+					if latestFanData == nil {
+						latestFanData = a.deviceManager.GetCurrentFanData()
+					}
+					if latestFanData != nil {
+						rpmError := targetRPM - int(latestFanData.CurrentRPM)
+						targetGap := int(latestFanData.TargetRPM) - int(latestFanData.CurrentRPM)
+						a.fanOffsetCtrl.ObserveFanResponse(targetRPM, int(latestFanData.CurrentRPM), int(latestFanData.TargetRPM))
+						a.logDebug("智能变频监控：计算出的 targetRPM=%d, avgTemp=%d, len(fanCurve)=%d, currentRPM=%d, deviceTargetRPM=%d, rpmError=%d, targetGap=%d, mode=%s, gear=%s",
+							targetRPM, avgTemp, len(cfg.FanCurve), latestFanData.CurrentRPM, latestFanData.TargetRPM, rpmError, targetGap, latestFanData.WorkMode, latestFanData.SetGear)
+					} else {
+						a.fanOffsetCtrl.ObserveFanResponse(0, 0, 0)
+						a.logDebug("智能变频监控：计算出的 targetRPM=%d, avgTemp=%d, len(fanCurve)=%d, currentRPM=unknown", targetRPM, avgTemp, len(cfg.FanCurve))
+					}
 					if targetRPM > 0 {
-						if fd := a.deviceManager.GetCurrentFanData(); fd != nil && fd.WorkMode == "挡位工作模式" {
+						if latestFanData != nil && latestFanData.WorkMode == "挡位工作模式" {
 							a.logDebug("智能变频监控：设备进入手动模式，重新进入自动模式")
 							if err := a.deviceManager.EnterAutoMode(); err == nil {
 								time.Sleep(100 * time.Millisecond)

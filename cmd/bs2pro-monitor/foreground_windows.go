@@ -13,11 +13,6 @@ var (
 	kernel32                  = syscall.NewLazyDLL("kernel32.dll")
 	procGetForegroundWindow   = user32.NewProc("GetForegroundWindow")
 	procGetWindowThreadProcID = user32.NewProc("GetWindowThreadProcessId")
-	procEnumWindows           = user32.NewProc("EnumWindows")
-	procIsWindowVisible       = user32.NewProc("IsWindowVisible")
-	procGetWindowRect         = user32.NewProc("GetWindowRect")
-	procGetWindowTextLengthW  = user32.NewProc("GetWindowTextLengthW")
-	procGetSystemMetrics      = user32.NewProc("GetSystemMetrics")
 	procCreateSnapshot        = kernel32.NewProc("CreateToolhelp32Snapshot")
 	procProcess32FirstW       = kernel32.NewProc("Process32FirstW")
 	procProcess32NextW        = kernel32.NewProc("Process32NextW")
@@ -25,10 +20,6 @@ var (
 )
 
 const th32csSnapProcess = 0x00000002
-const (
-	smCxScreen = 0
-	smCyScreen = 1
-)
 
 type processEntry32W struct {
 	DwSize              uint32
@@ -43,32 +34,15 @@ type processEntry32W struct {
 	SzExeFile           [260]uint16
 }
 
-type rect struct {
-	Left   int32
-	Top    int32
-	Right  int32
-	Bottom int32
-}
-
 func getForegroundProcessName() string {
 	hwnd, _, _ := procGetForegroundWindow.Call()
 	if hwnd == 0 {
-		hwnd = findFullscreenWindow()
-		if hwnd == 0 {
-			return ""
-		}
+		return ""
 	}
 	var pid uint32
 	procGetWindowThreadProcID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
 	if pid == 0 {
-		hwnd = findFullscreenWindow()
-		if hwnd == 0 {
-			return ""
-		}
-		procGetWindowThreadProcID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-		if pid == 0 {
-			return ""
-		}
+		return ""
 	}
 	handle, _, _ := procCreateSnapshot.Call(th32csSnapProcess, 0)
 	if handle == 0 || handle == ^uintptr(0) {
@@ -85,36 +59,4 @@ func getForegroundProcessName() string {
 		ret, _, _ = procProcess32NextW.Call(handle, uintptr(unsafe.Pointer(&entry)))
 	}
 	return ""
-}
-
-func findFullscreenWindow() uintptr {
-	screenW, _, _ := procGetSystemMetrics.Call(smCxScreen)
-	screenH, _, _ := procGetSystemMetrics.Call(smCyScreen)
-	minWidth := int32(float64(screenW) * 0.85)
-	minHeight := int32(float64(screenH) * 0.85)
-	var candidate uintptr
-	cb := syscall.NewCallback(func(hwnd uintptr, lparam uintptr) uintptr {
-		visible, _, _ := procIsWindowVisible.Call(hwnd)
-		if visible == 0 {
-			return 1
-		}
-		textLen, _, _ := procGetWindowTextLengthW.Call(hwnd)
-		if textLen == 0 {
-			return 1
-		}
-		var r rect
-		ok, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
-		if ok == 0 {
-			return 1
-		}
-		width := r.Right - r.Left
-		height := r.Bottom - r.Top
-		if width >= minWidth && height >= minHeight {
-			candidate = hwnd
-			return 0
-		}
-		return 1
-	})
-	procEnumWindows.Call(cb, 0)
-	return candidate
 }

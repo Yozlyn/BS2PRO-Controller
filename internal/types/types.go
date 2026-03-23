@@ -1,6 +1,11 @@
 // Package types 定义了 BS2PRO 控制器应用中使用的所有共享类型
 package types
 
+import (
+	"sort"
+	"strings"
+)
+
 // FanCurvePoint 风扇曲线点
 type FanCurvePoint struct {
 	Temperature int `json:"temperature"` // 温度 °C
@@ -81,6 +86,7 @@ type AppConfig struct {
 	FanCurve                []FanCurvePoint  `json:"fanCurve"`                // 风扇曲线
 	GearLight               bool             `json:"gearLight"`               // 挡位灯
 	NotificationsEnabled    bool             `json:"notificationsEnabled"`    // 系统通知开关
+	Hotkeys                 *HotkeyConfig    `json:"hotkeys"`                 // 快捷键配置
 	PowerOnStart            bool             `json:"powerOnStart"`            // 通电自启动
 	WindowsAutoStart        bool             `json:"windowsAutoStart"`        // Windows开机自启动
 	SmartStartStop          string           `json:"smartStartStop"`          // 智能启停
@@ -100,6 +106,31 @@ type AppConfig struct {
 	ProcessSwitchInterval   int              `json:"processSwitchInterval"`   // 进程扫描周期(秒)
 	ProcessSwitchRules      []ProcessFanRule `json:"processSwitchRules"`      // 进程联动规则
 	RGBConfig               *RGBConfig       `json:"rgbConfig"`               // RGB灯效配置
+	HotkeyConflicts         []HotkeyConflict `json:"hotkeyConflicts,omitempty"`
+}
+
+type HotkeyConfig struct {
+	Enabled bool            `json:"enabled"`
+	Global  []HotkeyBinding `json:"global"`
+	InApp   []HotkeyBinding `json:"inApp"`
+}
+
+type HotkeyBinding struct {
+	Action      string `json:"action"`
+	Accelerator string `json:"accelerator"`
+	Scope       string `json:"scope"`
+	Enabled     bool   `json:"enabled"`
+	Editable    bool   `json:"editable"`
+	Description string `json:"description"`
+	Category    string `json:"category"`
+}
+
+type HotkeyConflict struct {
+	Accelerator string   `json:"accelerator"`
+	Scopes      []string `json:"scopes"`
+	Actions     []string `json:"actions"`
+	Source      string   `json:"source,omitempty"`
+	Message     string   `json:"message,omitempty"`
 }
 
 // Logger 日志记录器接口
@@ -166,6 +197,7 @@ func GetDefaultConfig(isAutoStart bool) AppConfig {
 		FanCurve:                GetDefaultFanCurve(),
 		GearLight:               true,
 		NotificationsEnabled:    true,
+		Hotkeys:                 GetDefaultHotkeyConfig(),
 		PowerOnStart:            false,
 		WindowsAutoStart:        false,
 		SmartStartStop:          "off",
@@ -191,6 +223,106 @@ func GetDefaultConfig(isAutoStart bool) AppConfig {
 			Brightness: 100,
 		},
 	}
+}
+
+func GetDefaultHotkeyConfig() *HotkeyConfig {
+	return &HotkeyConfig{
+		Enabled: true,
+		Global: []HotkeyBinding{
+			{Action: "show-main-window", Accelerator: "Ctrl+Alt+B", Scope: "global", Enabled: true, Editable: true, Description: "显示或隐藏主窗口", Category: "窗口"},
+			{Action: "toggle-auto-control", Accelerator: "Ctrl+Alt+A", Scope: "global", Enabled: true, Editable: true, Description: "切换智能变频", Category: "设备"},
+			{Action: "toggle-process-switch", Accelerator: "Ctrl+Alt+P", Scope: "global", Enabled: true, Editable: true, Description: "切换进程联动", Category: "设备"},
+			{Action: "cycle-rgb-mode", Accelerator: "Ctrl+Alt+R", Scope: "global", Enabled: true, Editable: true, Description: "切换 RGB 灯光模式", Category: "RGB"},
+		},
+		InApp: []HotkeyBinding{
+			{Action: "save-context", Accelerator: "Ctrl+S", Scope: "app", Enabled: true, Editable: true, Description: "保存当前页面", Category: "通用"},
+			{Action: "escape-local-interaction", Accelerator: "Escape", Scope: "app", Enabled: true, Editable: true, Description: "取消页面交互", Category: "通用"},
+			{Action: "toggle-sidebar", Accelerator: "Ctrl+B", Scope: "app", Enabled: true, Editable: true, Description: "切换侧边栏", Category: "通用"},
+			{Action: "navigate-dashboard", Accelerator: "Alt+1", Scope: "app", Enabled: true, Editable: true, Description: "切换到设备概览", Category: "导航"},
+			{Action: "navigate-fan-curve", Accelerator: "Alt+2", Scope: "app", Enabled: true, Editable: true, Description: "切换到风扇曲线", Category: "导航"},
+			{Action: "navigate-device-params", Accelerator: "Alt+3", Scope: "app", Enabled: true, Editable: true, Description: "切换到设备参数", Category: "导航"},
+			{Action: "navigate-rgb-light", Accelerator: "Alt+4", Scope: "app", Enabled: true, Editable: true, Description: "切换到 RGB 灯效", Category: "导航"},
+			{Action: "navigate-process-switch", Accelerator: "Alt+5", Scope: "app", Enabled: true, Editable: true, Description: "切换到进程联动", Category: "导航"},
+			{Action: "navigate-system-settings", Accelerator: "Alt+6", Scope: "app", Enabled: true, Editable: true, Description: "切换到系统设置", Category: "导航"},
+			{Action: "navigate-about", Accelerator: "Alt+7", Scope: "app", Enabled: true, Editable: true, Description: "切换到关于软件", Category: "导航"},
+		},
+	}
+}
+
+func NormalizeAccelerator(accelerator string) string {
+	parts := strings.Split(strings.TrimSpace(accelerator), "+")
+	mods := map[string]bool{}
+	key := ""
+	for _, part := range parts {
+		token := strings.TrimSpace(strings.ToLower(part))
+		switch token {
+		case "control", "ctrl":
+			mods["Ctrl"] = true
+		case "alternate", "alt":
+			mods["Alt"] = true
+		case "shift":
+			mods["Shift"] = true
+		case "meta", "cmd", "win", "super":
+			mods["Meta"] = true
+		default:
+			if token == "escape" {
+				key = "Escape"
+			} else {
+				key = strings.ToUpper(token)
+			}
+		}
+	}
+	ordered := make([]string, 0, 5)
+	for _, mod := range []string{"Ctrl", "Alt", "Shift", "Meta"} {
+		if mods[mod] {
+			ordered = append(ordered, mod)
+		}
+	}
+	if key != "" {
+		ordered = append(ordered, key)
+	}
+	return strings.Join(ordered, "+")
+}
+
+func DetectHotkeyConflicts(cfg *HotkeyConfig) []HotkeyConflict {
+	if cfg == nil {
+		return nil
+	}
+	type item struct{ scope, action string }
+	index := map[string][]item{}
+	for _, binding := range append(append([]HotkeyBinding{}, cfg.Global...), cfg.InApp...) {
+		if !binding.Enabled {
+			continue
+		}
+		accelerator := NormalizeAccelerator(binding.Accelerator)
+		if accelerator == "" {
+			continue
+		}
+		index[accelerator] = append(index[accelerator], item{scope: binding.Scope, action: binding.Action})
+	}
+	conflicts := make([]HotkeyConflict, 0)
+	for accelerator, items := range index {
+		groups := map[string]map[string]bool{}
+		for _, item := range items {
+			if groups[item.scope] == nil {
+				groups[item.scope] = map[string]bool{}
+			}
+			groups[item.scope][item.action] = true
+		}
+		for scope, actions := range groups {
+			if len(actions) < 2 {
+				continue
+			}
+			list := make([]string, 0, len(actions))
+			for action := range actions {
+				list = append(list, action)
+			}
+			sort.Strings(list)
+			conflicts = append(conflicts, HotkeyConflict{Accelerator: accelerator, Scopes: []string{scope}, Actions: list})
+		}
+	}
+	sort.Slice(conflicts, func(i, j int) bool { return conflicts[i].Accelerator < conflicts[j].Accelerator })
+	return conflicts
 }
 
 // Repair 检查并修复配置中缺失的值
@@ -249,4 +381,52 @@ func (c *AppConfig) Repair() {
 		}
 		// 不对 Brightness 为 0 强行覆盖，因为可能用户就想设0亮度
 	}
+	if c.Hotkeys == nil {
+		c.Hotkeys = defaultCfg.Hotkeys
+	} else {
+		c.Hotkeys.Global = repairHotkeyBindings(c.Hotkeys.Global, defaultCfg.Hotkeys.Global)
+		c.Hotkeys.InApp = repairHotkeyBindings(c.Hotkeys.InApp, defaultCfg.Hotkeys.InApp)
+	}
+}
+
+func repairHotkeyBindings(current []HotkeyBinding, defaults []HotkeyBinding) []HotkeyBinding {
+	index := map[string]HotkeyBinding{}
+	orderedExtras := make([]HotkeyBinding, 0)
+	defaultActions := map[string]bool{}
+	for _, item := range defaults {
+		defaultActions[item.Action] = true
+	}
+	for _, item := range current {
+		index[item.Action] = item
+		if !defaultActions[item.Action] {
+			orderedExtras = append(orderedExtras, item)
+		}
+	}
+	result := make([]HotkeyBinding, 0, len(defaults))
+	for _, item := range defaults {
+		existing, ok := index[item.Action]
+		if !ok {
+			result = append(result, item)
+			continue
+		}
+		if existing.Accelerator == "" {
+			existing.Accelerator = item.Accelerator
+		}
+		existing.Accelerator = NormalizeAccelerator(existing.Accelerator)
+		if existing.Scope == "" {
+			existing.Scope = item.Scope
+		}
+		existing.Editable = item.Editable
+		existing.Category = item.Category
+		existing.Description = item.Description
+		result = append(result, existing)
+	}
+	for _, extra := range orderedExtras {
+		extra.Accelerator = NormalizeAccelerator(extra.Accelerator)
+		if extra.Scope == "" {
+			extra.Scope = "global"
+		}
+		result = append(result, extra)
+	}
+	return result
 }

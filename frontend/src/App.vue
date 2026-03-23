@@ -179,8 +179,10 @@ let unsubDisconnected: (() => void) | null = null
 let unsubConfigUpdate: (() => void) | null = null
 let unsubWindowShown: (() => void) | null = null
 let unsubWindowHidden: (() => void) | null = null
+let unsubHotkeyAction: (() => void) | null = null
 let clearHoverTimer: number | null = null
 let hoverUnlockHandler: ((e: Event) => void) | null = null
+let appHotkeyHandler: ((e: KeyboardEvent) => void) | null = null
 
 const forceHoverReset = () => {
   const appRoot = document.getElementById('app') as HTMLElement | null
@@ -298,6 +300,8 @@ onMounted(async () => {
   document.documentElement.classList.toggle('dark', isDark.value)
 
   document.addEventListener('visibilitychange', onVisibilityChange)
+  appHotkeyHandler = (e: KeyboardEvent) => handleAppHotkeys(e)
+  document.addEventListener('keydown', appHotkeyHandler)
   window.addEventListener('focus', onFocus)
   window.addEventListener('blur', onBlur)
   window.addEventListener('resize', onResize)
@@ -309,6 +313,7 @@ onMounted(async () => {
     setTimeout(() => uiStateLogger('window-shown+300ms', 'debug'), 300)
   })
   unsubWindowHidden = apiService.onWindowHidden(() => uiStateLogger('window-hidden', 'debug'))
+  unsubHotkeyAction = apiService.onHotkeyAction((action) => { void runHotkeyAction(action) })
 
   unsubFanData = apiService.onFanDataUpdate((data) => { fanData.value = data })
   unsubTemperature = apiService.onTemperatureUpdate((data) => { temperature.value = data })
@@ -359,7 +364,7 @@ onMounted(async () => {
 onUnmounted(() => {
   unsubFanData?.(); unsubTemperature?.(); unsubConnected?.()
   unsubDisconnected?.(); unsubConfigUpdate?.()
-  unsubWindowShown?.(); unsubWindowHidden?.()
+  unsubWindowShown?.(); unsubWindowHidden?.(); unsubHotkeyAction?.()
   if (clearHoverTimer) {
     window.clearTimeout(clearHoverTimer)
     clearHoverTimer = null
@@ -367,6 +372,7 @@ onUnmounted(() => {
   detachHoverUnlockListeners()
   document.documentElement.classList.remove('disable-hover')
   document.removeEventListener('visibilitychange', onVisibilityChange)
+  if (appHotkeyHandler) document.removeEventListener('keydown', appHotkeyHandler)
   window.removeEventListener('focus', onFocus)
   window.removeEventListener('blur', onBlur)
   window.removeEventListener('resize', onResize)
@@ -388,6 +394,88 @@ const toggleDarkMode = () => {
 const toggleSidebar = () => { isCollapsed.value = !isCollapsed.value }
 const setCurrentView = (view: string) => { currentView.value = view }
 const handleConfigChange = (newConfig: types.AppConfig) => { config.value = newConfig }
+
+const appViewActionMap: Record<string, string> = {
+  'navigate-dashboard': 'dashboard',
+  'navigate-fan-curve': 'fan-curve',
+  'navigate-device-params': 'device-params',
+  'navigate-rgb-light': 'rgb-light',
+  'navigate-process-switch': 'process-switch',
+  'navigate-system-settings': 'system-settings',
+  'navigate-about': 'about',
+}
+
+const buildAccelerator = (e: KeyboardEvent) => {
+  const parts: string[] = []
+  if (e.ctrlKey || e.metaKey) parts.push('Ctrl')
+  if (e.altKey) parts.push('Alt')
+  if (e.shiftKey) parts.push('Shift')
+  const key = e.key === 'Escape' ? 'Escape' : e.key.length === 1 ? e.key.toUpperCase() : e.key
+  parts.push(key)
+  return parts.join('+')
+}
+
+const isEditableTarget = (target: EventTarget | null) => {
+  const el = target as HTMLElement | null
+  if (!el) return false
+  const tag = el.tagName?.toLowerCase()
+  return el.isContentEditable || tag === 'input' || tag === 'textarea' || tag === 'select'
+}
+
+const runContextSave = async () => {
+  document.dispatchEvent(new CustomEvent('app-shortcut-save', { detail: { view: currentView.value } }))
+}
+
+const runHotkeyAction = async (action: string) => {
+  if (!action) return
+  if (action === 'save-context') {
+    void runContextSave()
+    return
+  }
+  if (action === 'toggle-sidebar') {
+    toggleSidebar()
+    return
+  }
+  if (action === 'escape-local-interaction') {
+    document.dispatchEvent(new CustomEvent('app-shortcut-escape', { detail: { view: currentView.value } }))
+    return
+  }
+  const targetView = appViewActionMap[action]
+  if (targetView) setCurrentView(targetView)
+}
+
+const handleAppHotkeys = (e: KeyboardEvent) => {
+  const hotkeys = (config.value as any).hotkeys as { enabled?: boolean; inApp?: Array<{ enabled?: boolean; accelerator?: string; action?: string }> } | undefined
+  if (!hotkeys?.enabled) return
+  const accelerator = buildAccelerator(e)
+  const binding = (hotkeys.inApp || []).find((item: { enabled?: boolean; accelerator?: string; action?: string }) => item.enabled && item.accelerator === accelerator)
+  if (!binding) return
+  if (isEditableTarget(e.target) && binding.action !== 'escape-local-interaction') return
+
+  if (binding.action === 'save-context') {
+    e.preventDefault()
+    void runHotkeyAction(binding.action)
+    return
+  }
+  if (binding.action === 'toggle-sidebar') {
+    e.preventDefault()
+    void runHotkeyAction(binding.action)
+    return
+  }
+  if (binding.action === 'escape-local-interaction') {
+    e.preventDefault()
+    void runHotkeyAction(binding.action)
+    return
+  }
+
+  const action = binding.action
+  if (!action) return
+  const targetView = appViewActionMap[action]
+  if (targetView) {
+    e.preventDefault()
+    void runHotkeyAction(action)
+  }
+}
 
 const handleAutoControlChange = async (enabled: boolean) => {
   try {

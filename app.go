@@ -39,6 +39,8 @@ type App struct {
 	mutex       sync.RWMutex
 	trayManager *tray.Manager
 	iconData    []byte
+	windowVisible bool
+	monitorDesired bool
 
 	// 缓存的状态 (托盘和前端随时读取)
 	isConnected      bool
@@ -153,6 +155,7 @@ func NewApp(icon []byte) *App {
 		coreRunning: true,
 		currentTemp: types.TemperatureData{BridgeOk: true},
 		iconData:    icon,
+		windowVisible: true,
 	}
 }
 
@@ -227,29 +230,37 @@ func (a *App) ensureMonitorAgentReady() {
 	}
 }
 
+func (a *App) shouldMonitorBeRunning() bool {
+	return a.shouldEnsureMonitorAgent()
+}
+
 func (a *App) shouldEnsureMonitorAgent() bool {
 	cfg := a.GetConfig()
-	return cfg.NotificationsEnabled || cfg.ProcessSwitchEnabled
+	return cfg.NotificationsEnabled || cfg.ProcessSwitchEnabled || hotkeysRequireMonitor(cfg)
+}
+
+func hotkeysRequireMonitor(cfg AppConfig) bool {
+	return cfg.Hotkeys != nil && cfg.Hotkeys.Enabled
 }
 
 func (a *App) syncMonitorAgentState() {
-	if a.shouldEnsureMonitorAgent() {
-		a.mutex.RLock()
-		alreadyManaged := a.monitorManaged
-		a.mutex.RUnlock()
-		if alreadyManaged {
+	shouldRun := a.shouldMonitorBeRunning()
+	a.mutex.RLock()
+	wasDesired := a.monitorDesired
+	wasManaged := a.monitorManaged
+	a.mutex.RUnlock()
+	if shouldRun {
+		if wasDesired && wasManaged {
 			return
 		}
 		a.ensureMonitorAgentReady()
 		a.mutex.Lock()
+		a.monitorDesired = true
 		a.monitorManaged = true
 		a.mutex.Unlock()
 		return
 	}
-	a.mutex.RLock()
-	wasManaged := a.monitorManaged
-	a.mutex.RUnlock()
-	if !wasManaged {
+	if !wasDesired && !wasManaged {
 		return
 	}
 	if a.autostartManager != nil {
@@ -265,7 +276,22 @@ func (a *App) syncMonitorAgentState() {
 		logInfo("已停止 Monitor 代理进程")
 	}
 	a.mutex.Lock()
+	a.monitorDesired = false
 	a.monitorManaged = false
+	a.mutex.Unlock()
+}
+
+func (a *App) ensureMonitorAgentRunningIfNeeded() {
+	a.mutex.RLock()
+	desired := a.monitorDesired
+	a.mutex.RUnlock()
+	if !desired || a.isMonitorProcessRunning() {
+		return
+	}
+	logWarn("检测到 Monitor 未运行，按期望状态重新拉起")
+	a.ensureMonitorAgentReady()
+	a.mutex.Lock()
+	a.monitorManaged = true
 	a.mutex.Unlock()
 }
 
@@ -435,7 +461,25 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 
 	case "show-window":
 		a.ShowWindow()
+	case "toggle-window":
+		a.ToggleWindowVisibility()
+	case ipc.EventHotkeyAction:
+		var params ipc.TriggerHotkeyActionParams
+		if err := json.Unmarshal(event.Data, &params); err == nil && params.Action != "" {
+			runtime.EventsEmit(a.ctx, ipc.EventHotkeyAction, params.Action)
+		}
 	}
+}
+
+func (a *App) ToggleWindowVisibility() {
+	a.mutex.RLock()
+	visible := a.windowVisible
+	a.mutex.RUnlock()
+	if visible {
+		a.HideWindow()
+		return
+	}
+	a.ShowWindow()
 }
 
 // sendRequest 发送请求到核心服务
@@ -493,7 +537,7 @@ func (a *App) UpdateConfig(cfg AppConfig) error {
 	if oldCfg.ProcessSwitchEnabled != cfg.ProcessSwitchEnabled {
 		a.syncProcessSwitchMonitor(cfg.ProcessSwitchEnabled)
 	}
-	if oldCfg.NotificationsEnabled != cfg.NotificationsEnabled {
+	if oldCfg.NotificationsEnabled != cfg.NotificationsEnabled || hotkeysRequireMonitor(oldCfg) != hotkeysRequireMonitor(cfg) {
 		a.syncMonitorAgentState()
 	}
 	return nil
@@ -521,7 +565,20 @@ func (a *App) startProcessSwitchMonitor() error {
 	return cmd.Start()
 }
 
+func (a *App) isMonitorProcessRunning() bool {
+	checkCmd := exec.Command("tasklist", "/FI", "IMAGENAME eq BS2PRO-Monitor.exe")
+	platformutil.HideCommandWindow(checkCmd)
+	out, err := checkCmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(string(out)), "bs2pro-monitor.exe")
+}
+
 func (a *App) stopProcessSwitchMonitor() error {
+	if !a.isMonitorProcessRunning() {
+		return nil
+	}
 	cmd := exec.Command("taskkill", "/F", "/IM", "BS2PRO-Monitor.exe", "/T")
 	platformutil.HideCommandWindow(cmd)
 	return cmd.Run()
@@ -1206,7 +1263,13 @@ func (a *App) CheckWindowsAutoStart() bool {
 func (a *App) ShowWindow() {
 	if a.ctx != nil {
 		logDebug("ShowWindow 调用")
+		a.mutex.Lock()
+		a.windowVisible = true
+		a.mutex.Unlock()
+		runtime.WindowUnminimise(a.ctx)
 		runtime.WindowShow(a.ctx)
+		runtime.WindowSetAlwaysOnTop(a.ctx, true)
+		runtime.WindowSetAlwaysOnTop(a.ctx, false)
 		runtime.EventsEmit(a.ctx, "window-shown", nil)
 	}
 }
@@ -1214,6 +1277,9 @@ func (a *App) ShowWindow() {
 func (a *App) HideWindow() {
 	if a.ctx != nil {
 		logDebug("HideWindow 调用")
+		a.mutex.Lock()
+		a.windowVisible = false
+		a.mutex.Unlock()
 		runtime.EventsEmit(a.ctx, "window-hidden", nil)
 		runtime.WindowHide(a.ctx)
 	}
@@ -1390,6 +1456,20 @@ func (a *App) SetDebugMode(enabled bool) error {
 	return nil
 }
 
+func (a *App) SetHotkeyEditMode(enabled bool) error {
+	resp, err := a.sendRequest(ipc.ReqSetHotkeyEditMode, ipc.SetBoolParams{Enabled: enabled})
+	if err != nil {
+		return err
+	}
+	if resp == nil || !resp.Success {
+		if resp != nil {
+			return fmt.Errorf("%s", resp.Error)
+		}
+		return fmt.Errorf("服务响应为空")
+	}
+	return nil
+}
+
 // LogFrontendError 接收前端上报的JS错误，写入gui日志文件
 func (a *App) LogFrontendError(level, source, message, stack string) {
 	if guiLogger == nil {
@@ -1423,7 +1503,7 @@ func (a *App) startConnectionHealthCheck() {
 	retryStopped := false
 
 	for {
-		a.syncMonitorAgentState()
+		a.ensureMonitorAgentRunningIfNeeded()
 
 		if !a.ipcClient.IsConnected() {
 			// 检查重试时长

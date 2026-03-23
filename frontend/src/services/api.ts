@@ -231,6 +231,11 @@ class ApiService {
     return () => EventsOff('window-hidden');
   }
 
+  onHotkeyAction(callback: (action: string) => void): () => void {
+    EventsOn('hotkey-action', callback);
+    return () => EventsOff('hotkey-action');
+  }
+
   // 调试相关方法
   async getDebugInfo(): Promise<any> {
     return await GetDebugInfo();

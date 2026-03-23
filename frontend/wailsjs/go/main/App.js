@@ -134,6 +134,10 @@ export function SetGearLight(arg1) {
   return window['go']['main']['App']['SetGearLight'](arg1);
 }
 
+export function SetHotkeyEditMode(arg1) {
+  return window['go']['main']['App']['SetHotkeyEditMode'](arg1);
+}
+
 export function SetManualGear(arg1, arg2) {
   return window['go']['main']['App']['SetManualGear'](arg1, arg2);
 }
@@ -172,6 +176,10 @@ export function TestTemperatureReading() {
 
 export function ToggleCoreService() {
   return window['go']['main']['App']['ToggleCoreService']();
+}
+
+export function ToggleWindowVisibility() {
+  return window['go']['main']['App']['ToggleWindowVisibility']();
 }
 
 export function UpdateConfig(arg1) {

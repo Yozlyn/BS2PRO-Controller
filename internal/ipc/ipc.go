@@ -46,6 +46,7 @@ const (
 
 	// 控制相关
 	ReqSetAutoControl    RequestType = "SetAutoControl"
+	ReqToggleAutoControl RequestType = "ToggleAutoControl"
 	ReqSetManualGear     RequestType = "SetManualGear"
 	ReqGetAvailableGears RequestType = "GetAvailableGears"
 	ReqSetCustomSpeed    RequestType = "SetCustomSpeed"
@@ -62,6 +63,7 @@ const (
 
 	// 窗口相关
 	ReqShowWindow RequestType = "ShowWindow"
+	ReqToggleWindow RequestType = "ToggleWindow"
 	ReqQuitApp    RequestType = "QuitApp"
 
 	// 调试相关
@@ -76,7 +78,12 @@ const (
 
 	// RGB 灯效控制
 	ReqSetRGBMode        RequestType = "SetRGBMode"
+	ReqCycleRGBMode      RequestType = "CycleRGBMode"
+	ReqReportHotkeyConflicts RequestType = "ReportHotkeyConflicts"
 	ReqUnsubscribeEvents RequestType = "UnsubscribeEvents"
+	ReqToggleProcessSwitch RequestType = "ToggleProcessSwitch"
+	ReqTriggerHotkeyAction RequestType = "TriggerHotkeyAction"
+	ReqSetHotkeyEditMode   RequestType = "SetHotkeyEditMode"
 
 	// 服务管理
 	ReqRestartService RequestType = "RestartService"
@@ -115,6 +122,8 @@ const (
 	EventServiceConnected    = "service-connected"
 	EventServiceDisconnected = "service-disconnected"
 	EventNotificationRequest = "notification-request"
+	EventHotkeyAction        = "hotkey-action"
+	EventHotkeyEditMode      = "hotkey-edit-mode"
 )
 
 const (
@@ -133,6 +142,10 @@ type ReportForegroundProcessParams struct {
 
 type NotifyProfilesParams struct {
 	ProfileCount int `json:"profileCount"`
+}
+
+type TriggerHotkeyActionParams struct {
+	Action string `json:"action"`
 }
 
 type ClientMeta struct {

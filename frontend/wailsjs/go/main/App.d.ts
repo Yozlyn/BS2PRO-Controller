@@ -70,6 +70,8 @@ export function SetFanCurve(arg1:Array<types.FanCurvePoint>):Promise<void>;
 
 export function SetGearLight(arg1:boolean):Promise<boolean>;
 
+export function SetHotkeyEditMode(arg1:boolean):Promise<void>;
+
 export function SetManualGear(arg1:string,arg2:string):Promise<boolean>;
 
 export function SetPowerOnStart(arg1:boolean):Promise<boolean>;
@@ -89,5 +91,7 @@ export function TestBridgeProgram():Promise<types.BridgeTemperatureData>;
 export function TestTemperatureReading():Promise<types.TemperatureData>;
 
 export function ToggleCoreService():Promise<boolean>;
+
+export function ToggleWindowVisibility():Promise<void>;
 
 export function UpdateConfig(arg1:types.AppConfig):Promise<void>;
