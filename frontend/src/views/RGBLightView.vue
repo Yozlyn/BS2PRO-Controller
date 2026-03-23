@@ -334,6 +334,7 @@ const showSuccess = ref(false)
 const feedbackPulse = ref(false)
 const pickerIndex = ref<number | null>(null)
 const initialized = ref(false)
+const externalSyncing = ref(false)
 
 // 滑块拖动状态
 const draggingSlider = ref<{
@@ -348,13 +349,22 @@ let applyTimer: ReturnType<typeof setTimeout> | null = null
 let successTimer: ReturnType<typeof setTimeout> | null = null
 
 watch(() => props.savedConfig, (cfg) => {
-  if (!cfg || initialized.value) return
-  if (cfg.mode)              activeMode.value = cfg.mode as LightMode
-  if (cfg.speed)             speed.value = cfg.speed
+  if (!cfg) return
+  externalSyncing.value = true
+  if (cfg.mode) activeMode.value = cfg.mode as LightMode
+  if (cfg.speed) speed.value = cfg.speed
   if (cfg.brightness != null) brightness.value = cfg.brightness
-  if (cfg.colors?.length)    modeColors.value[cfg.mode as LightMode] = cfg.colors.map(c => ({ r: c.r, g: c.g, b: c.b }))
+  if (cfg.mode) {
+    modeColors.value = {
+      ...modeColors.value,
+      [cfg.mode as LightMode]: cfg.colors?.length
+        ? cfg.colors.map(c => ({ r: c.r, g: c.g, b: c.b }))
+        : [...(DEFAULT_COLORS[cfg.mode as LightMode] || [])],
+    }
+  }
   initialized.value = true
-}, { immediate: true })
+  queueMicrotask(() => { externalSyncing.value = false })
+}, { immediate: true, deep: true })
 
 // 计算属性
 const currentModeConfig = computed(() => MODES.find(m => m.id === activeMode.value))

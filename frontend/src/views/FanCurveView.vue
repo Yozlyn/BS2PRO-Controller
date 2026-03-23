@@ -282,6 +282,18 @@ function refreshUnsavedFlag() {
   hasUnsavedChanges.value = !curvesEqual(ensureCurve(localCurve.value), ensureCurve(getCurrentProfileBaseline()))
 }
 
+function onShortcutSave(event: Event) {
+  const view = (event as CustomEvent).detail?.view
+  if (view !== 'fan-curve') return
+  void saveCurve()
+}
+
+function onShortcutEscape(event: Event) {
+  const view = (event as CustomEvent).detail?.view
+  if (view !== 'fan-curve') return
+  cancelChanges()
+}
+
 async function persistProfiles() {
   try {
     await saveCustomProfiles(curveProfiles.value.map(profile => ({
@@ -560,9 +572,15 @@ function handleMouseUp() {
   }
 }
 function globalMouseUp() { if (isDragging.value) handleMouseUp() }
-onMounted(() => document.addEventListener('mouseup', globalMouseUp))
+onMounted(() => {
+  document.addEventListener('mouseup', globalMouseUp)
+  document.addEventListener('app-shortcut-save', onShortcutSave as EventListener)
+  document.addEventListener('app-shortcut-escape', onShortcutEscape as EventListener)
+})
 onUnmounted(() => {
   document.removeEventListener('mouseup', globalMouseUp)
+  document.removeEventListener('app-shortcut-save', onShortcutSave as EventListener)
+  document.removeEventListener('app-shortcut-escape', onShortcutEscape as EventListener)
   if (buttonAnimTimer) clearTimeout(buttonAnimTimer)
   if (transferMsgTimer) clearTimeout(transferMsgTimer)
 })

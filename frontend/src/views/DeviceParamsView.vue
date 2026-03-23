@@ -268,4 +268,5 @@ async function handleLevelChange(level: string) {
     emit('config-change', types.AppConfig.createFrom({ ...props.config, manualLevel: level }))
   } catch (e) { frontendLogger.error('设备参数', '切换强度等级失败', e) }
 }
+
 </script>
