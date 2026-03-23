@@ -492,7 +492,9 @@ async function removeCustomGlobalBinding(customIndex: number) {
 	try {
 		const next = buildNextHotkeys()
 		ensureGlobalDefaults(next)
-		next.global.splice(defaultHotkeys.global.length + customIndex, 1)
+		const customItems = [...(next.global || []).slice(defaultHotkeys.global.length)]
+		customItems.splice(customIndex, 1)
+		next.global = [...(next.global || []).slice(0, defaultHotkeys.global.length), ...customItems]
 		await commitHotkeys(next)
 	} catch (e) {
 		frontendLogger.error('系统设置', '删除自定义全局快捷键失败', e)
