@@ -474,6 +474,7 @@ func (c *Client) Connect() error {
 	if c.connected && c.conn != nil {
 		c.conn.Close()
 		c.conn = nil
+		c.reader = nil
 		c.connected = false
 	}
 
@@ -537,6 +538,11 @@ func (c *Client) readLoop(gen int64) {
 			c.logInfo("读取消息失败，连接可能已断开，连接代数=%d: %v", gen, err)
 			c.connMutex.Lock()
 			c.connected = false
+			if c.conn != nil {
+				c.conn.Close()
+				c.conn = nil
+			}
+			c.reader = nil
 			c.connMutex.Unlock()
 			c.logInfo("已标记连接断开，连接代数=%d", gen)
 
@@ -673,6 +679,7 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 				c.conn.Close()
 				c.conn = nil
 			}
+			c.reader = nil
 			c.connMutex.Unlock()
 			if attempt == 1 {
 				break
@@ -710,7 +717,14 @@ func (c *Client) Close() {
 func (c *Client) IsConnected() bool {
 	c.connMutex.RLock()
 	defer c.connMutex.RUnlock()
-	return c.connected
+	return c.connected && c.conn != nil && c.reader != nil
+}
+
+func (c *Client) ConnectionGeneration() int64 {
+	if !c.IsConnected() {
+		return 0
+	}
+	return atomic.LoadInt64(&c.connGeneration)
 }
 
 // 日志辅助方法

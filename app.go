@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/TIANLI0/BS2PRO-Controller/internal/autostart"
@@ -47,6 +48,8 @@ type App struct {
 	currentTemp      types.TemperatureData
 	currentFan       *types.FanData
 	autoControlState bool
+	registerGUIRoleRunning atomic.Bool
+	registeredGUIRoleGeneration atomic.Int64
 
 	// 自启动管理器，启动时初始化一次
 	autostartManager *autostart.Manager
@@ -194,7 +197,7 @@ func (a *App) startup(ctx context.Context) {
 		}()
 	} else {
 		logInfo("已成功连接到核心服务 IPC 管道")
-		a.registerGUIClientRole()
+		a.scheduleRegisterGUIClientRole("startup-connect")
 
 		// 启动时主动拉取一次配置，同步状态
 		cfg := a.GetConfig()
@@ -222,8 +225,6 @@ func (a *App) startup(ctx context.Context) {
 		}()
 	}
 
-	a.ensureMonitorAgentRunningFromConfig()
-
 	// 启动连接健康检查
 	go a.startConnectionHealthCheck()
 
@@ -240,29 +241,40 @@ func (a *App) startup(ctx context.Context) {
 	logInfo("GUI 启动完成")
 }
 
-func (a *App) registerGUIClientRole() {
-	if a.ipcClient == nil || !a.ipcClient.IsConnected() {
-		logWarn("注册 GUI 客户端角色失败: IPC 未连接")
+func (a *App) scheduleRegisterGUIClientRole(reason string) {
+	if !a.registerGUIRoleRunning.CompareAndSwap(false, true) {
+		logDebug("GUI 客户端角色注册已在进行，跳过重复触发: %s", reason)
 		return
 	}
-	resp, err := a.ipcClient.SendRequest(ipc.ReqRegisterClient, ipc.RegisterClientParams{Role: ipc.RoleGUI})
-	if err != nil {
-		logError("注册 GUI 客户端角色失败: %v", err)
-		return
-	}
-	if resp == nil || !resp.Success {
-		logError("注册 GUI 客户端角色失败: 响应无效")
-		return
-	}
-	logInfo("已注册 GUI 客户端角色")
-}
-
-func (a *App) ensureMonitorAgentRunningFromConfig() {
-	cfg := a.GetConfig()
-	if !cfg.MonitorAutoStart {
-		return
-	}
-	a.ensureMonitorAgentReady()
+	go func() {
+		defer a.registerGUIRoleRunning.Store(false)
+		for attempt := 1; attempt <= 6; attempt++ {
+			if a.ipcClient == nil || !a.ipcClient.IsConnected() {
+				logWarn("注册 GUI 客户端角色等待连接: reason=%s attempt=%d", reason, attempt)
+				time.Sleep(300 * time.Millisecond)
+				continue
+			}
+			generation := a.ipcClient.ConnectionGeneration()
+			if generation == 0 {
+				logWarn("注册 GUI 客户端角色等待连接代稳定: reason=%s attempt=%d", reason, attempt)
+				time.Sleep(300 * time.Millisecond)
+				continue
+			}
+			if a.registeredGUIRoleGeneration.Load() == generation {
+				logDebug("GUI 客户端角色已完成当前连接代注册，跳过重复触发: reason=%s generation=%d", reason, generation)
+				return
+			}
+			resp, err := a.ipcClient.SendRequest(ipc.ReqRegisterClient, ipc.RegisterClientParams{Role: ipc.RoleGUI})
+			if err == nil && resp != nil && resp.Success {
+				a.registeredGUIRoleGeneration.Store(generation)
+				logInfo("已注册 GUI 客户端角色: reason=%s attempt=%d generation=%d", reason, attempt, generation)
+				return
+			}
+			logWarn("注册 GUI 客户端角色失败: reason=%s attempt=%d generation=%d respNil=%v respSuccess=%v err=%v", reason, attempt, generation, resp == nil, resp != nil && resp.Success, err)
+			time.Sleep(300 * time.Millisecond)
+		}
+		logError("注册 GUI 客户端角色最终失败: reason=%s", reason)
+	}()
 }
 
 func (a *App) ensureMonitorAgentReady() {
@@ -270,13 +282,6 @@ func (a *App) ensureMonitorAgentReady() {
 		logError("启动 Monitor 失败: %v", err)
 	} else {
 		logInfo("已确保 Monitor 运行")
-	}
-	if a.autostartManager != nil {
-		if err := a.autostartManager.SetMonitorAutoStart(true); err != nil {
-			logError("设置 Monitor 自启动失败: %v", err)
-		} else {
-			logInfo("已确保 Monitor 自启动开启")
-		}
 	}
 }
 
@@ -286,7 +291,7 @@ func (a *App) shouldMonitorBeRunning() bool {
 
 func (a *App) shouldEnsureMonitorAgent() bool {
 	cfg := a.GetConfig()
-	return cfg.NotificationsEnabled || cfg.ProcessSwitchEnabled || hotkeysRequireMonitor(cfg)
+	return cfg.TrayEnabled || cfg.NotificationsEnabled || cfg.ProcessSwitchEnabled || hotkeysRequireMonitor(cfg)
 }
 
 func hotkeysRequireMonitor(cfg AppConfig) bool {
@@ -312,13 +317,6 @@ func (a *App) syncMonitorAgentState() {
 	}
 	if !wasDesired && !wasManaged {
 		return
-	}
-	if a.autostartManager != nil {
-		if err := a.autostartManager.SetMonitorAutoStart(false); err != nil {
-			logError("移除 Monitor 自启动失败: %v", err)
-		} else {
-			logInfo("已移除 Monitor 自启动")
-		}
 	}
 	if err := a.stopProcessSwitchMonitor(); err != nil {
 		logError("停止 Monitor 失败: %v", err)
@@ -405,6 +403,8 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 
 	case ipc.EventServiceConnected:
 		logInfo("核心服务连接事件 - UI 刷新")
+		a.registeredGUIRoleGeneration.Store(0)
+		a.scheduleRegisterGUIClientRole("service-connected")
 		// 服务重连后延迟刷新
 		go func() {
 			time.Sleep(500 * time.Millisecond)
@@ -542,7 +542,7 @@ func (a *App) UpdateConfig(cfg AppConfig) error {
 	if oldCfg.ProcessSwitchEnabled != cfg.ProcessSwitchEnabled {
 		a.syncProcessSwitchMonitor(cfg.ProcessSwitchEnabled)
 	}
-	if oldCfg.NotificationsEnabled != cfg.NotificationsEnabled || hotkeysRequireMonitor(oldCfg) != hotkeysRequireMonitor(cfg) {
+	if oldCfg.TrayEnabled != cfg.TrayEnabled || oldCfg.NotificationsEnabled != cfg.NotificationsEnabled || hotkeysRequireMonitor(oldCfg) != hotkeysRequireMonitor(cfg) {
 		a.syncMonitorAgentState()
 	}
 	return nil
@@ -1532,7 +1532,6 @@ func (a *App) startConnectionHealthCheck() {
 
 			if err := a.ipcClient.Connect(); err == nil {
 				logInfo("健康检查: 核心服务重连成功")
-				a.registerGUIClientRole()
 				currentInterval = baseInterval // 重置探测频率
 				retryStartTime = time.Now()    // 重置重试起点
 				retryStopped = false           // 重置停止标记
