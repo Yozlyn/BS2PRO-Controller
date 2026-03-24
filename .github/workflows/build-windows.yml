@@ -95,7 +95,7 @@ jobs:
                 $finalVersion = "$baseVersion-$dateSuffix-pre"
               }
               default {
-                $finalVersion = "$versionPrefix-$commitSuffix-ci"
+                $finalVersion = "$versionPrefix-$commitSuffix"
               }
             }
           }
