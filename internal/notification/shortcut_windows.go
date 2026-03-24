@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/TIANLI0/BS2PRO-Controller/internal/config"
+	"github.com/TIANLI0/BS2PRO-Controller/internal/platformutil"
 )
 
 const (
@@ -150,6 +151,7 @@ Add-Type -TypeDefinition $code -Language CSharp
 `, safeShortcutPath, safeMonitorPath, safeInstallDir, safeIconPath, safeAppID)
 
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	platformutil.HideCommandWindow(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("创建monitor开始菜单快捷方式失败: %v, output=%s", err, strings.TrimSpace(string(output)))

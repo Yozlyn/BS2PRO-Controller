@@ -17,6 +17,15 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+var (
+	monitorKernel32      = windows.NewLazySystemDLL("kernel32.dll")
+	monitorUser32        = windows.NewLazySystemDLL("user32.dll")
+	procConsoleWindow    = monitorKernel32.NewProc("GetConsoleWindow")
+	procMonitorShowWindow = monitorUser32.NewProc("ShowWindow")
+)
+
+const hideWindowCmd = uintptr(0)
+
 var globalHotkeys = newGlobalHotkeyAgent()
 var monitorInstance = createSingleInstanceGuard()
 var monitorDebugMode bool
@@ -76,6 +85,8 @@ func escapeMonitorLog(message string) string {
 }
 
 func main() {
+	hideConsoleWindow()
+
 	if !monitorInstance.Acquire() {
 		monitorLog("monitor instance already running, exit")
 		return
@@ -128,6 +139,14 @@ func main() {
 		globalHotkeys.Clear()
 		time.Sleep(1 * time.Second)
 	}
+}
+
+func hideConsoleWindow() {
+	hwnd, _, _ := procConsoleWindow.Call()
+	if hwnd == 0 {
+		return
+	}
+	procMonitorShowWindow.Call(hwnd, hideWindowCmd)
 }
 
 type serviceStateNotifier struct {
@@ -202,12 +221,14 @@ func (g *singleInstanceGuard) Acquire() bool {
 	}
 	handle, err := windows.CreateMutex(nil, false, name)
 	if err != nil {
+		if err == windows.ERROR_ALREADY_EXISTS {
+			if handle != 0 {
+				windows.CloseHandle(handle)
+			}
+			return false
+		}
 		log.Printf("create mutex failed: %v", err)
 		return true
-	}
-	if windows.GetLastError() == windows.ERROR_ALREADY_EXISTS {
-		windows.CloseHandle(handle)
-		return false
 	}
 	g.handle = handle
 	return true
