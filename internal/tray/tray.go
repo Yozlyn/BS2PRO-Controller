@@ -134,7 +134,7 @@ func (m *Manager) onTrayReady() {
 	systray.SetOnTapped(func() {
 		m.logDebug("托盘图标左键点击: 显示主窗口")
 		if m.onShowWindow != nil {
-			m.onShowWindow()
+			go m.onShowWindow()
 		}
 	})
 
@@ -274,7 +274,7 @@ func (m *Manager) handleMenuEvents() {
 		case <-m.menuItems.Show.ClickedCh:
 			m.logDebug("托盘菜单: 显示主窗口")
 			if m.onShowWindow != nil {
-				m.onShowWindow()
+				go m.onShowWindow()
 			}
 		case <-m.menuItems.AutoControl.ClickedCh:
 			m.logDebug("托盘菜单: 切换智能变频状态")
