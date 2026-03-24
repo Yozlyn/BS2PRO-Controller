@@ -31,6 +31,8 @@ type Manager struct {
 	menuQuitGUI  *systray.MenuItem
 	menuStopCore *systray.MenuItem
 	menuQuitAll  *systray.MenuItem
+	lastStatus   Status
+	lastTooltip  string
 
 	// 监控托盘健康状态
 	lastIconRefresh  int64
@@ -176,7 +178,8 @@ func (m *Manager) setupIcon() (err error) {
 	defer m.uiMutex.Unlock()
 	systray.SetIcon(m.iconData)
 	systray.SetTitle("BS2PRO 控制器")
-	systray.SetTooltip("BS2PRO 风扇控制器 - 运行中")
+	m.lastTooltip = "BS2PRO 风扇控制器 - 运行中"
+	systray.SetTooltip(m.lastTooltip)
 	return nil
 }
 
@@ -345,6 +348,9 @@ func (m *Manager) updateMenuStatus() {
 				}
 
 				status := m.getStatus()
+				if status == m.lastStatus {
+					return
+				}
 				m.uiMutex.Lock()
 				defer m.uiMutex.Unlock()
 
@@ -372,23 +378,25 @@ func (m *Manager) updateMenuStatus() {
 					m.menuItems.AutoControl.Uncheck()
 				}
 
+				tooltipText := "BS2PRO 控制器 - 设备未连接"
 				if status.Connected {
 					if status.AutoControlState {
-						tooltipText := fmt.Sprintf("BS2PRO 控制器 - 智能变频中\nCPU: %d°C GPU: %d°C", status.CPUTemp, status.GPUTemp)
+						tooltipText = fmt.Sprintf("BS2PRO 控制器 - 智能变频中\nCPU: %d°C GPU: %d°C", status.CPUTemp, status.GPUTemp)
 						if status.CurrentRPM > 0 {
 							tooltipText += fmt.Sprintf("\n风扇: %d RPM", status.CurrentRPM)
 						}
-						systray.SetTooltip(tooltipText)
 					} else {
-						tooltipText := "BS2PRO 控制器 - 手动模式"
+						tooltipText = "BS2PRO 控制器 - 手动模式"
 						if status.CurrentRPM > 0 {
 							tooltipText += fmt.Sprintf("\n风扇: %d RPM", status.CurrentRPM)
 						}
-						systray.SetTooltip(tooltipText)
 					}
-				} else {
-					systray.SetTooltip("BS2PRO 控制器 - 设备未连接")
 				}
+				if tooltipText != m.lastTooltip {
+					systray.SetTooltip(tooltipText)
+					m.lastTooltip = tooltipText
+				}
+				m.lastStatus = status
 			}()
 		case <-m.done:
 			return

@@ -267,11 +267,21 @@ func launchGUI() {
 }
 
 func quitGUI() {
+	checkCmd := exec.Command("tasklist", "/FI", "IMAGENAME eq BS2PRO-Controller.exe")
+	platformutil.HideCommandWindow(checkCmd)
+	if out, err := checkCmd.Output(); err == nil {
+		monitorInfo("quit gui precheck: processFound=%v", strings.Contains(strings.ToLower(string(out)), "bs2pro-controller.exe"))
+	} else {
+		monitorInfo("quit gui precheck failed: %v", err)
+	}
 	cmd := exec.Command("taskkill", "/F", "/IM", "BS2PRO-Controller.exe")
 	platformutil.HideCommandWindow(cmd)
+	monitorInfo("quit gui taskkill start")
 	if err := cmd.Run(); err != nil {
 		monitorInfo("quit gui failed: %v", err)
+		return
 	}
+	monitorInfo("quit gui taskkill success")
 }
 
 func triggerCoreRestart() {
