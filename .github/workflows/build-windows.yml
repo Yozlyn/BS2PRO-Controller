@@ -72,9 +72,11 @@ jobs:
         run: |
           $wails = Get-Content -Raw -Encoding UTF8 "wails.json" | ConvertFrom-Json
           $baseVersion = [string]$wails.info.productVersion
+          $versionPrefix = $baseVersion -replace '-r\d+$', ''
           $inputBuildType = "${{ github.event.inputs.build_type }}"
           $inputVersion = "${{ github.event.inputs.version }}"
           $dateSuffix = Get-Date -Format "yyyyMMdd"
+          $commitSuffix = (git rev-parse --short HEAD).Trim()
 
           if ([string]::IsNullOrWhiteSpace($inputBuildType)) {
             $buildType = "ci"
@@ -93,12 +95,12 @@ jobs:
                 $finalVersion = "$baseVersion-$dateSuffix-pre"
               }
               default {
-                $finalVersion = "$baseVersion-$dateSuffix-ci"
+                $finalVersion = "$versionPrefix-$commitSuffix-ci"
               }
             }
           }
 
-          $releaseTag = "v$finalVersion"
+          $releaseTag = $finalVersion
           $artifactName = "BS2PRO-Controller-$finalVersion-windows-amd64"
 
           "base_version=$baseVersion" >> $env:GITHUB_OUTPUT
@@ -154,11 +156,12 @@ jobs:
 
           git fetch --tags --force
 
-          $allTags = git tag --list "v*" --sort=-creatordate
+          $releaseTags = git tag --list "2.*-r*" --sort=-version:refname
+          $allTags = git tag --list "v*" --sort=-version:refname
           $previousTag = $null
 
           if ($buildType -eq "release") {
-            foreach ($tag in $allTags) {
+            foreach ($tag in $releaseTags) {
               if ($tag -eq $currentTag) { continue }
               if ($tag -match '-pre$') { continue }
               $previousTag = $tag
@@ -173,13 +176,15 @@ jobs:
           }
 
           if ([string]::IsNullOrWhiteSpace($previousTag)) {
-            $commits = git log --pretty=format:"- %s"
+            $commits = git log --pretty=format:"- %s%n"
           } else {
-            $commits = git log --pretty=format:"- %s" "$previousTag..HEAD"
+            $commits = git log --pretty=format:"- %s%n" "$previousTag..HEAD"
           }
 
           if ([string]::IsNullOrWhiteSpace($commits)) {
             $commits = "- No changes."
+          } else {
+            $commits = $commits.TrimEnd()
           }
 
           $notesPath = Join-Path $env:RUNNER_TEMP "release-notes.txt"
