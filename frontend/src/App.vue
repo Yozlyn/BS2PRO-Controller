@@ -41,7 +41,7 @@
 
     <div class="flex flex-1 overflow-hidden">
       <aside @click="toggleSidebar"
-             class="cursor-pointer transition-all duration-300 bg-transparent flex flex-col p-4 relative"
+             class="cursor-pointer bg-transparent flex flex-col p-4 relative transition-[width,padding] duration-400 ease-[cubic-bezier(0.22,1,0.36,1)]"
              :class="isCollapsed ? 'w-20' : 'w-56'">
         <div class="flex-1 space-y-2">
           <SidebarItem :icon="LayoutDashboard" label="设备概览" :active="currentView === 'dashboard'"
@@ -58,7 +58,7 @@
                        @click="setCurrentView('system-settings')" :is-dark="isDark" :is-collapsed="isCollapsed" />
         </div>
         <div class="pt-4 border-t border-slate-100/50 dark:border-white/5">
-        <div class="flex items-center transition-all"
+        <div class="flex items-center transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
              :class="isCollapsed ? 'flex-col space-y-2' : 'justify-between'">
           <button
             @click.stop="toggleDarkMode"
@@ -83,7 +83,7 @@
         </div>
       </aside>
 
-      <div class="w-px my-6 self-stretch bg-gradient-to-b from-transparent via-slate-200/80 to-transparent dark:via-white/10 flex-shrink-0" />
+      <div class="w-px my-6 self-stretch bg-gradient-to-b from-transparent via-slate-200/80 to-transparent dark:via-white/10 flex-shrink-0 transition-opacity duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]" />
 
       <main class="flex-1 overflow-hidden bg-transparent flex flex-col">
         <DashboardView v-if="currentView === 'dashboard'"
