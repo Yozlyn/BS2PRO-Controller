@@ -1286,7 +1286,9 @@ func (a *App) ShowWindow() {
 		runtime.WindowShow(a.ctx)
 		runtime.WindowSetAlwaysOnTop(a.ctx, true)
 		runtime.WindowSetAlwaysOnTop(a.ctx, false)
+		logInfo("ShowWindow 已执行 WindowShow/AlwaysOnTop 刷新")
 		runtime.EventsEmit(a.ctx, "window-shown", nil)
+		logInfo("ShowWindow 已发送 window-shown 事件")
 	}
 }
 

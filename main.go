@@ -104,6 +104,9 @@ func main() {
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId: "BS2PRO-Controller-Unique-Lock-2025",
 			OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
+				if guiLogger != nil {
+					guiLogger.Infof("检测到第二实例启动: args=%v", secondInstanceData.Args)
+				}
 				hasAutostart := false
 				for _, arg := range secondInstanceData.Args {
 					if arg == "--autostart" || arg == "-autostart" {
@@ -112,7 +115,12 @@ func main() {
 					}
 				}
 				if !hasAutostart {
+					if guiLogger != nil {
+						guiLogger.Infof("第二实例触发主窗口唤起")
+					}
 					app.ShowWindow()
+				} else if guiLogger != nil {
+					guiLogger.Infof("第二实例为自启动参数，跳过唤起主窗口")
 				}
 			},
 		},

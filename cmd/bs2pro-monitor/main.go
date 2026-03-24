@@ -239,6 +239,7 @@ func syncTrayEnabled(enabled bool) {
 func showOrLaunchGUI() {
 	now := time.Now().UnixMilli()
 	last := atomic.LoadInt64(&lastGUIShowRequest)
+	monitorInfo("show or launch gui requested: now=%d last=%d delta=%dms", now, last, now-last)
 	if last != 0 && now-last < 1200 {
 		monitorInfo("show or launch gui ignored by debounce: delta=%dms", now-last)
 		return
@@ -251,6 +252,10 @@ func showOrLaunchGUI() {
 func launchGUI() {
 	guiPath := filepath.Join(config.GetInstallDir(), "BS2PRO-Controller.exe")
 	monitorInfo("launch gui start: path=%s", guiPath)
+	if _, err := os.Stat(guiPath); err != nil {
+		monitorInfo("launch gui stat failed: %v", err)
+		return
+	}
 	cmd := exec.Command(guiPath)
 	cmd.Dir = filepath.Dir(guiPath)
 	platformutil.HideCommandWindow(cmd)
