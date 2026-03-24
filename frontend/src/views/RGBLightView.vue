@@ -27,13 +27,14 @@
       <button v-for="mode in MODES" :key="mode.id"
               @click="selectMode(mode.id)"
               :disabled="!isConnected"
-              class="p-3 rounded-2xl border transition-all duration-200 ease-out will-change-transform flex flex-col items-center space-y-2 disabled:opacity-40 disabled:cursor-not-allowed"
+              class="p-3 rounded-2xl border flex flex-col items-center space-y-2 disabled:opacity-40 disabled:cursor-not-allowed"
               :class="[
                 activeMode === mode.id
-                  ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200 hover:bg-blue-600/95 hover:shadow-blue-300/45 hover:-translate-y-px'
-                  : 'surface-tile text-slate-600 dark:text-slate-300 border-slate-200/70 dark:border-white/10 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white/72 dark:hover:bg-white/[0.10] hover:border-blue-300/50 dark:hover:border-blue-400/20 hover:shadow-sm hover:shadow-slate-200/45 dark:hover:shadow-blue-900/10 hover:-translate-y-px',
-                justClicked === mode.id ? 'mode-clicked' : ''
+                  ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200 hover:bg-blue-600/95 hover:shadow-blue-300/45'
+                  : 'surface-tile text-slate-600 dark:text-slate-300 border-slate-200/70 dark:border-white/10 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white/72 dark:hover:bg-white/[0.10] hover:border-blue-300/50 dark:hover:border-blue-400/20 hover:shadow-sm hover:shadow-slate-200/45 dark:hover:shadow-blue-900/10',
+                justClicked === mode.id ? 'mode-clicked-soft' : ''
               ]"
+              :style="{ transition: 'background-color 240ms cubic-bezier(0.22, 1, 0.36, 1), color 220ms cubic-bezier(0.22, 1, 0.36, 1), border-color 240ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 260ms cubic-bezier(0.22, 1, 0.36, 1), transform 220ms cubic-bezier(0.22, 1, 0.36, 1)' }"
               @mousedown="startClickAnim(mode.id)">
         <component :is="mode.icon" :size="16" />
         <span class="text-[10px] font-bold whitespace-nowrap">{{ mode.label }}</span>
@@ -608,7 +609,13 @@ onUnmounted(() => {
   35%  { transform: translateY(0.5px) scale(0.985); }
   100% { transform: translateY(0) scale(1); }
 }
-.mode-clicked { animation: mode-press 0.18s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
+.mode-clicked-soft { animation: mode-press-soft 0.22s cubic-bezier(0.22, 1, 0.36, 1); }
+
+@keyframes mode-press-soft {
+  0%   { transform: scale(1); }
+  35%  { transform: scale(0.97); }
+  100% { transform: scale(1); }
+}
 
 /* 旧版脉冲动画已移除 */
 </style>
