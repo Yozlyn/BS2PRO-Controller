@@ -196,7 +196,11 @@ func (a *App) startup(ctx context.Context) {
 		if connected, ok := status["connected"].(bool); ok {
 			a.isConnected = connected
 		}
-		a.coreRunning = true
+		if paused, ok := status["paused"].(bool); ok {
+			a.coreRunning = !paused
+		} else {
+			a.coreRunning = true
+		}
 		a.mutex.Unlock()
 		go func() {
 			runtime.EventsEmit(ctx, "config-update", cfg)
@@ -420,7 +424,11 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 			if connected, ok := status["connected"].(bool); ok {
 				a.isConnected = connected
 			}
-			a.coreRunning = true
+			if paused, ok := status["paused"].(bool); ok {
+				a.coreRunning = !paused
+			} else {
+				a.coreRunning = true
+			}
 			a.autoControlState = cfg.AutoControl
 			a.mutex.Unlock()
 
@@ -1313,15 +1321,15 @@ func (a *App) QuitApp() {
 // RestartCoreService 重启核心服务
 func (a *App) RestartCoreService() bool {
 	logInfo("控制台请求重启核心服务")
-	ok, err := a.runCoreServiceCommand("Restart-Service")
+	resp, err := a.sendRequest(ipc.ReqRestartService, nil)
 	if err != nil {
 		logError("发送重启核心服务请求失败: %v", err)
 		return false
-	} else if ok {
+	} else if resp != nil && resp.Success {
 		a.mutex.Lock()
 		a.coreRunning = true
 		a.mutex.Unlock()
-		logInfo("核心服务重启请求已发送，服务将在后台异步重启")
+		logInfo("核心服务重启请求已发送")
 		return true
 	} else {
 		logWarn("重启核心服务请求未成功")
@@ -1332,16 +1340,16 @@ func (a *App) RestartCoreService() bool {
 // StopCoreService 停止核心服务
 func (a *App) StopCoreService() bool {
 	logInfo("控制台请求停止核心服务")
-	ok, err := a.runCoreServiceCommand("Stop-Service")
+	resp, err := a.sendRequest(ipc.ReqStopService, nil)
 	if err != nil {
 		logError("发送停止核心服务请求失败: %v", err)
 		return false
-	} else if ok {
+	} else if resp != nil && resp.Success {
 		a.mutex.Lock()
 		a.coreRunning = false
 		a.isConnected = false
 		a.mutex.Unlock()
-		logInfo("核心服务停止请求已发送，服务将在后台异步停止")
+		logInfo("核心服务已切换为暂停态")
 		return true
 	} else {
 		logWarn("停止核心服务请求未成功")
@@ -1351,19 +1359,19 @@ func (a *App) StopCoreService() bool {
 
 func (a *App) ResumeCoreService() bool {
 	logInfo("控制台请求恢复核心服务")
-	ok, err := a.runCoreServiceCommand("Start-Service")
+	resp, err := a.sendRequest(ipc.ReqRestartService, nil)
 	if err != nil {
 		logError("发送恢复核心服务请求失败: %v", err)
 		return false
 	}
-	if !ok {
+	if resp == nil || !resp.Success {
 		logWarn("恢复核心服务请求未成功")
 		return false
 	}
 	a.mutex.Lock()
 	a.coreRunning = true
 	a.mutex.Unlock()
-	logInfo("核心服务恢复请求已发送")
+	logInfo("核心服务已恢复运行")
 	return true
 }
 
@@ -1377,15 +1385,6 @@ func (a *App) ToggleCoreService() bool {
 	}
 	a.ResumeCoreService()
 	return true
-}
-
-func (a *App) runCoreServiceCommand(command string) (bool, error) {
-	cmd := exec.Command("powershell", "-NonInteractive", "-Command", fmt.Sprintf(`%s -Name "BS2PRO_CoreService" -Force`, command))
-	platformutil.HideCommandWindow(cmd)
-	if err := cmd.Start(); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func (a *App) TestTemperatureReading() TemperatureData {

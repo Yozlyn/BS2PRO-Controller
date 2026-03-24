@@ -5,12 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/TIANLI0/BS2PRO-Controller/internal/asus"
@@ -42,6 +40,7 @@ type CoreApp struct {
 	deviceProductID    string
 	monitoringTemp     bool
 	userDisconnected   bool
+	corePaused         bool
 	currentTemp        types.TemperatureData
 	lastDeviceMode     string
 	userSetAutoControl bool
@@ -669,9 +668,13 @@ func (a *CoreApp) applyConfigOnConnect() {
 
 func (a *CoreApp) ConnectDevice() bool {
 	a.mutex.RLock()
+	paused := a.corePaused
 	wasDisconnected := !a.isConnected
 	a.mutex.RUnlock()
-
+	if paused {
+		a.logInfo("核心处于暂停状态，跳过设备连接")
+		return false
+	}
 	a.mutex.Lock()
 	a.userDisconnected = false
 	a.mutex.Unlock()
@@ -751,6 +754,7 @@ func (a *CoreApp) GetDeviceStatus() map[string]any {
 	defer a.mutex.RUnlock()
 	return map[string]any{
 		"connected":   a.isConnected,
+		"paused":      a.corePaused,
 		"model":       a.deviceModel,
 		"productId":   a.deviceProductID,
 		"monitoring":  a.monitoringTemp,
@@ -842,13 +846,16 @@ func (a *CoreApp) startProcessSwitchMonitoring() {
 	a.safeGo("processSwitchMonitoring", func() {
 		defer a.processSwitchWG.Done()
 		for {
+			a.mutex.RLock()
+			paused := a.corePaused
+			a.mutex.RUnlock()
 			cfg := a.configManager.Get()
 			interval := cfg.ProcessSwitchInterval
 			if interval < 1 {
 				interval = 3
 			}
 
-			if cfg.ProcessSwitchEnabled {
+			if !paused && cfg.ProcessSwitchEnabled {
 				a.runProcessSwitchCheck(cfg)
 			}
 
@@ -1721,8 +1728,13 @@ func (a *CoreApp) startHealthMonitoring() {
 
 func (a *CoreApp) checkDeviceHealth(currentInterval *time.Duration, baseInterval time.Duration) {
 	a.mutex.RLock()
+	paused := a.corePaused
 	connected := a.isConnected
 	a.mutex.RUnlock()
+	if paused {
+		*currentInterval = baseInterval
+		return
+	}
 
 	if !connected {
 		// scheduleReconnect 协程负责非用户断开后的重连（等待设备出现再连接），
@@ -1799,25 +1811,46 @@ func (a *CoreApp) restoreCurrentRGB() {
 	a.SetRGBMode(rgbParamsFromConfig(a.configManager.Get()))
 }
 
-func (a *CoreApp) runWindowsServiceCommand(verb string) bool {
-	const serviceName = "BS2PRO_CoreService"
-	a.logInfo("收到%s服务请求，通过 powershell %s-Service 触发", verb, verb)
-	go func() {
-		cmd := exec.Command("powershell", "-NonInteractive",
-			"-Command", fmt.Sprintf(`%s-Service -Name "%s" -Force`, verb, serviceName))
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			HideWindow:    true,
-			CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
-		}
-		if err := cmd.Start(); err != nil {
-			a.logError("启动 powershell %s-Service 失败: %v", verb, err)
-		}
-	}()
+func (a *CoreApp) RestartService() bool {
+	a.mutex.Lock()
+	wasPaused := a.corePaused
+	a.corePaused = false
+	a.mutex.Unlock()
+	if !wasPaused {
+		a.logInfo("核心恢复请求已忽略：当前未暂停")
+		return true
+	}
+	if a.ConnectDevice() {
+		a.logInfo("核心已恢复并重新连接设备")
+		return true
+	}
+	gen := atomic.AddInt32(&a.reconnectGen, 1)
+	go a.scheduleReconnect(gen)
+	a.logInfo("核心已恢复，设备连接延后重试")
 	return true
 }
 
-func (a *CoreApp) RestartService() bool { return a.runWindowsServiceCommand("Restart") }
-func (a *CoreApp) StopService() bool    { return a.runWindowsServiceCommand("Stop") }
+func (a *CoreApp) StopService() bool {
+	a.mutex.Lock()
+	if a.corePaused {
+		a.mutex.Unlock()
+		a.logInfo("核心暂停请求已忽略：当前已处于暂停状态")
+		return true
+	}
+	a.corePaused = true
+	if a.monitoringTemp {
+		select {
+		case a.stopMonitoring <- true:
+		default:
+		}
+		a.monitoringTemp = false
+	}
+	a.mutex.Unlock()
+	atomic.AddInt32(&a.reconnectGen, 1)
+	a.DisconnectDevice()
+	a.logInfo("核心已进入暂停态，当前仅保留 IPC 与恢复入口")
+	return true
+}
 
 // safeGo 安全地启动一个goroutine，自动捕获并报告panic
 func (a *CoreApp) safeGo(name string, fn func()) {

@@ -275,13 +275,17 @@ Section "主程序" SEC_MAIN
     ${If} ${FileExists} "$INSTDIR\BS2PRO-CoreService.exe"
         DetailPrint "正在停止核心服务..."
         nsExec::ExecToStack '"$INSTDIR\BS2PRO-CoreService.exe" stop'
-        Sleep 1000
-        nsExec::ExecToStack '"$SYSDIR\sc.exe" stop "BS2PRO_CoreService"'
-        Sleep 1000
+        Pop $0
+        Pop $1
+        Sleep 1200
         
         DetailPrint "正在卸载核心服务..."
         nsExec::ExecToStack '"$INSTDIR\BS2PRO-CoreService.exe" uninstall'
+        Pop $0
+        Pop $1
         nsExec::ExecToStack '"$SYSDIR\sc.exe" delete "BS2PRO_CoreService"'
+        Pop $0
+        Pop $1
         Sleep 1000
         
         nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /F /IM "BS2PRO-CoreService.exe" /T'
