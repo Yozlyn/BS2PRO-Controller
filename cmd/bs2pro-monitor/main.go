@@ -1,10 +1,12 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -13,6 +15,8 @@ import (
 	"github.com/TIANLI0/BS2PRO-Controller/internal/config"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/ipc"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/notification"
+	"github.com/TIANLI0/BS2PRO-Controller/internal/platformutil"
+	"github.com/TIANLI0/BS2PRO-Controller/internal/tray"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
 	"golang.org/x/sys/windows"
 )
@@ -26,8 +30,12 @@ var (
 
 const hideWindowCmd = uintptr(0)
 
+//go:embed winres/icon.png
+var trayIconData []byte
+
 var globalHotkeys = newGlobalHotkeyAgent()
 var monitorInstance = createSingleInstanceGuard()
+var monitorTrayState = newMonitorTrayState()
 var monitorDebugMode bool
 var monitorWriter *os.File
 var hotkeyEditMode bool
@@ -99,6 +107,7 @@ func main() {
 	if err := notification.EnsureMonitorStartMenuShortcut(); err != nil {
 		monitorLog("ensure monitor shortcut failed: %v", err)
 	}
+	initMonitorTray()
 
 	client := ipc.NewClient(nil)
 	client.SetRole(ipc.RoleMonitorAgent)
@@ -119,9 +128,11 @@ func main() {
 		} else {
 			monitorInfo("register monitor success")
 		}
+		refreshMonitorTrayState(client)
 		refreshGlobalHotkeys(client)
 
 		for client.IsConnected() {
+			refreshMonitorTrayState(client)
 			processName := strings.TrimSpace(getForegroundProcessName())
 			if processName != "" {
 				if _, err := client.SendRequest(ipc.ReqReportForegroundProcess, ipc.ReportForegroundProcessParams{
@@ -136,6 +147,7 @@ func main() {
 		}
 
 		client.Close()
+		monitorTrayState.SetDisconnected()
 		globalHotkeys.Clear()
 		time.Sleep(1 * time.Second)
 	}
@@ -147,6 +159,188 @@ func hideConsoleWindow() {
 		return
 	}
 	procMonitorShowWindow.Call(hwnd, hideWindowCmd)
+}
+
+type monitorTrayStateStore struct {
+	mu     sync.RWMutex
+	status tray.Status
+}
+
+func newMonitorTrayState() *monitorTrayStateStore {
+	return &monitorTrayStateStore{}
+}
+
+func (s *monitorTrayStateStore) SetStatus(status tray.Status) {
+	s.mu.Lock()
+	s.status = status
+	s.mu.Unlock()
+}
+
+func (s *monitorTrayStateStore) GetStatus() tray.Status {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.status
+}
+
+func (s *monitorTrayStateStore) SetDisconnected() {
+	s.mu.Lock()
+	s.status.CoreRunning = false
+	s.status.Connected = false
+	s.status.CPUTemp = 0
+	s.status.GPUTemp = 0
+	s.status.CurrentRPM = 0
+	s.mu.Unlock()
+}
+
+type monitorTrayLoggerAdapter struct{}
+
+func (l *monitorTrayLoggerAdapter) Info(format string, v ...any)  { monitorInfo(format, v...) }
+func (l *monitorTrayLoggerAdapter) Error(format string, v ...any) { monitorInfo(format, v...) }
+func (l *monitorTrayLoggerAdapter) Debug(format string, v ...any) { monitorLog(format, v...) }
+func (l *monitorTrayLoggerAdapter) Warn(format string, v ...any)  { monitorInfo(format, v...) }
+func (l *monitorTrayLoggerAdapter) Close()                        {}
+func (l *monitorTrayLoggerAdapter) CleanOldLogs()                 {}
+func (l *monitorTrayLoggerAdapter) SetDebugMode(enabled bool)     { setMonitorDebugMode(enabled) }
+func (l *monitorTrayLoggerAdapter) GetLogDir() string             { return config.GetLogDir() }
+
+func initMonitorTray() {
+	manager := tray.NewManager(&monitorTrayLoggerAdapter{}, trayIconData)
+	manager.SetCallbacks(
+		func() { launchGUI() },
+		func() { quitGUI() },
+		func() { triggerCoreRestart() },
+		func() bool { return toggleCorePaused() },
+		func() bool { return toggleAutoControl() },
+		func() tray.Status { return monitorTrayState.GetStatus() },
+	)
+	manager.Init()
+}
+
+func launchGUI() {
+	guiPath := filepath.Join(config.GetInstallDir(), "BS2PRO-Controller.exe")
+	cmd := exec.Command(guiPath)
+	cmd.Dir = filepath.Dir(guiPath)
+	platformutil.HideCommandWindow(cmd)
+	if err := cmd.Start(); err != nil {
+		monitorInfo("launch gui failed: %v", err)
+	}
+}
+
+func quitGUI() {
+	cmd := exec.Command("taskkill", "/F", "/IM", "BS2PRO-Controller.exe", "/T")
+	platformutil.HideCommandWindow(cmd)
+	if err := cmd.Run(); err != nil {
+		monitorInfo("quit gui failed: %v", err)
+	}
+}
+
+func triggerCoreRestart() {
+	client := ipc.NewClient(nil)
+	if err := client.Connect(); err != nil {
+		monitorInfo("restart core connect failed: %v", err)
+		return
+	}
+	defer client.Close()
+	if _, err := client.SendRequest(ipc.ReqRestartService, nil); err != nil {
+		monitorInfo("restart core failed: %v", err)
+	}
+}
+
+func toggleCorePaused() bool {
+	client := ipc.NewClient(nil)
+	if err := client.Connect(); err != nil {
+		monitorInfo("toggle core connect failed: %v", err)
+		return monitorTrayState.GetStatus().CoreRunning
+	}
+	defer client.Close()
+	status := monitorTrayState.GetStatus()
+	requestType := ipc.ReqStopService
+	nextRunning := false
+	if !status.CoreRunning {
+		requestType = ipc.ReqRestartService
+		nextRunning = true
+	}
+	if _, err := client.SendRequest(requestType, nil); err != nil {
+		monitorInfo("toggle core failed: %v", err)
+		return status.CoreRunning
+	}
+	status.CoreRunning = nextRunning
+	if !nextRunning {
+		status.Connected = false
+		status.CPUTemp = 0
+		status.GPUTemp = 0
+		status.CurrentRPM = 0
+	}
+	monitorTrayState.SetStatus(status)
+	return nextRunning
+}
+
+func toggleAutoControl() bool {
+	client := ipc.NewClient(nil)
+	if err := client.Connect(); err != nil {
+		monitorInfo("toggle auto control connect failed: %v", err)
+		return monitorTrayState.GetStatus().AutoControlState
+	}
+	defer client.Close()
+	status := monitorTrayState.GetStatus()
+	next := !status.AutoControlState
+	if _, err := client.SendRequest(ipc.ReqSetAutoControl, ipc.SetAutoControlParams{Enabled: next}); err != nil {
+		monitorInfo("toggle auto control failed: %v", err)
+		return status.AutoControlState
+	}
+	status.AutoControlState = next
+	monitorTrayState.SetStatus(status)
+	return next
+}
+
+func refreshMonitorTrayState(client *ipc.Client) {
+	if client == nil || !client.IsConnected() {
+		monitorTrayState.SetDisconnected()
+		return
+	}
+	statusResp, err := client.SendRequest(ipc.ReqGetDeviceStatus, nil)
+	if err != nil || statusResp == nil || !statusResp.Success {
+		monitorTrayState.SetDisconnected()
+		return
+	}
+	cfgResp, err := client.SendRequest(ipc.ReqGetConfig, nil)
+	if err != nil || cfgResp == nil || !cfgResp.Success {
+		return
+	}
+	var deviceStatus map[string]any
+	var cfg types.AppConfig
+	if err := json.Unmarshal(statusResp.Data, &deviceStatus); err != nil {
+		return
+	}
+	if err := json.Unmarshal(cfgResp.Data, &cfg); err != nil {
+		return
+	}
+	status := monitorTrayState.GetStatus()
+	status.CoreRunning = true
+	status.AutoControlState = cfg.AutoControl
+	if connected, ok := deviceStatus["connected"].(bool); ok {
+		status.Connected = connected
+	}
+	if paused, ok := deviceStatus["paused"].(bool); ok {
+		status.CoreRunning = !paused
+	}
+	if temp, ok := deviceStatus["temperature"].(map[string]any); ok {
+		if cpu, ok := temp["cpuTemp"].(float64); ok {
+			status.CPUTemp = int(cpu)
+		}
+		if gpu, ok := temp["gpuTemp"].(float64); ok {
+			status.GPUTemp = int(gpu)
+		}
+	}
+	if currentData, ok := deviceStatus["currentData"].(map[string]any); ok {
+		if rpm, ok := currentData["currentRpm"].(float64); ok {
+			status.CurrentRPM = uint16(rpm)
+		}
+	}
+	if !status.CoreRunning {
+		status.Connected = false
+	}
+	monitorTrayState.SetStatus(status)
 }
 
 type serviceStateNotifier struct {

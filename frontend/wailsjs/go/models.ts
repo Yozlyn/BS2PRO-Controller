@@ -266,6 +266,7 @@ export namespace types {
 	    hotkeys?: HotkeyConfig;
 	    powerOnStart: boolean;
 	    windowsAutoStart: boolean;
+	    monitorAutoStart: boolean;
 	    smartStartStop: string;
 	    brightness: number;
 	    tempUpdateRate: number;
@@ -298,6 +299,7 @@ export namespace types {
 	        this.hotkeys = this.convertValues(source["hotkeys"], HotkeyConfig);
 	        this.powerOnStart = source["powerOnStart"];
 	        this.windowsAutoStart = source["windowsAutoStart"];
+	        this.monitorAutoStart = source["monitorAutoStart"];
 	        this.smartStartStop = source["smartStartStop"];
 	        this.brightness = source["brightness"];
 	        this.tempUpdateRate = source["tempUpdateRate"];
@@ -427,4 +429,3 @@ export namespace types {
 	}
 
 }
-

@@ -149,6 +149,14 @@ class ApiService {
     return await SetWindowsAutoStart(enabled);
   }
 
+  async checkMonitorAutoStart(): Promise<boolean> {
+    return await (window as any).go?.main?.App?.CheckMonitorAutoStart();
+  }
+
+  async setMonitorAutoStart(enabled: boolean): Promise<void> {
+    return await (window as any).go?.main?.App?.SetMonitorAutoStart(enabled);
+  }
+
   async checkProcessSwitchNow(): Promise<boolean> {
     return await CheckProcessSwitchNow();
   }

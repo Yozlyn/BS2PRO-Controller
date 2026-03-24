@@ -23,7 +23,6 @@ import (
 	"github.com/TIANLI0/BS2PRO-Controller/internal/logger"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/notification"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/platformutil"
-	"github.com/TIANLI0/BS2PRO-Controller/internal/tray"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/version"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -37,7 +36,6 @@ type App struct {
 	ctx         context.Context
 	ipcClient   *ipc.Client
 	mutex       sync.RWMutex
-	trayManager *tray.Manager
 	iconData    []byte
 	windowVisible bool
 	monitorDesired bool
@@ -180,6 +178,7 @@ func (a *App) startup(ctx context.Context) {
 		go func() {
 			defaultCfg := types.GetDefaultConfig(false)
 			defaultCfg.WindowsAutoStart = a.autostartManager.CheckWindowsAutoStart()
+			defaultCfg.MonitorAutoStart = a.autostartManager.CheckMonitorAutoStart()
 			runtime.EventsEmit(ctx, "config-update", defaultCfg)
 		}()
 	} else {
@@ -189,6 +188,7 @@ func (a *App) startup(ctx context.Context) {
 		cfg := a.GetConfig()
 		status := a.GetDeviceStatus()
 		cfg.WindowsAutoStart = a.autostartManager.CheckWindowsAutoStart()
+		cfg.MonitorAutoStart = a.autostartManager.CheckMonitorAutoStart()
 
 		a.mutex.Lock()
 		a.autoControlState = cfg.AutoControl
@@ -210,13 +210,20 @@ func (a *App) startup(ctx context.Context) {
 		}()
 	}
 
-	// 初始化系统托盘
-	a.InitSystemTray()
+	a.ensureMonitorAgentRunningFromConfig()
 
 	// 启动连接健康检查
 	go a.startConnectionHealthCheck()
 
 	logInfo("GUI 启动完成")
+}
+
+func (a *App) ensureMonitorAgentRunningFromConfig() {
+	cfg := a.GetConfig()
+	if !cfg.MonitorAutoStart {
+		return
+	}
+	a.ensureMonitorAgentReady()
 }
 
 func (a *App) ensureMonitorAgentReady() {
@@ -226,7 +233,7 @@ func (a *App) ensureMonitorAgentReady() {
 		logInfo("已确保 Monitor 运行")
 	}
 	if a.autostartManager != nil {
-		if err := a.autostartManager.SetProcessSwitchMonitorAutoStart(true); err != nil {
+		if err := a.autostartManager.SetMonitorAutoStart(true); err != nil {
 			logError("设置 Monitor 自启动失败: %v", err)
 		} else {
 			logInfo("已确保 Monitor 自启动开启")
@@ -268,7 +275,7 @@ func (a *App) syncMonitorAgentState() {
 		return
 	}
 	if a.autostartManager != nil {
-		if err := a.autostartManager.SetProcessSwitchMonitorAutoStart(false); err != nil {
+		if err := a.autostartManager.SetMonitorAutoStart(false); err != nil {
 			logError("移除 Monitor 自启动失败: %v", err)
 		} else {
 			logInfo("已移除 Monitor 自启动")
@@ -299,64 +306,9 @@ func (a *App) ensureMonitorAgentRunningIfNeeded() {
 	a.mutex.Unlock()
 }
 
-// InitSystemTray 初始化系统托盘
-func (a *App) InitSystemTray() {
-	trayAdapter := &trayLoggerAdapter{sugar: guiLogger, installDir: config.GetInstallDir()}
-	a.trayManager = tray.NewManager(trayAdapter, a.iconData)
-
-	a.trayManager.SetCallbacks(
-		func() {
-			// 左键双击托盘：显示窗口
-			a.ShowWindow()
-		},
-		func() {
-			// 点击退出：仅退出GUI进程
-			a.QuitApp()
-		},
-		func() {
-			// 点击重启服务：重启核心服务
-			a.RestartCoreService()
-		},
-		func() bool {
-			// 点击暂停/恢复核心
-			return a.ToggleCoreService()
-		},
-		func() bool {
-			// 切换智能变频
-			a.mutex.RLock()
-			currentState := a.autoControlState
-			a.mutex.RUnlock()
-
-			newState := !currentState
-			go a.SetAutoControl(newState)
-			return newState
-		},
-		func() tray.Status {
-			// 为托盘提供状态
-			a.mutex.RLock()
-			defer a.mutex.RUnlock()
-			rpm := uint16(0)
-			if a.currentFan != nil {
-				rpm = uint16(a.currentFan.CurrentRPM)
-			}
-			return tray.Status{
-				Connected:        a.isConnected,
-				CoreRunning:      a.coreRunning,
-				CPUTemp:          a.currentTemp.CPUTemp,
-				GPUTemp:          a.currentTemp.GPUTemp,
-				CurrentRPM:       rpm,
-				AutoControlState: a.autoControlState,
-			}
-		},
-	)
-
-	a.trayManager.Init()
-}
-
 func (a *App) OnWindowClosing(ctx context.Context) bool {
-	logInfo("拦截到窗口关闭动作，隐藏至托盘...")
-	a.HideWindow()
-	return true
+	logInfo("窗口关闭，直接退出 GUI 进程")
+	return false
 }
 
 // handleCoreEvent 处理核心服务推送的事件
@@ -461,6 +413,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 		if err := json.Unmarshal(event.Data, &cfg); err == nil {
 			// 用注册表状态覆盖配置值
 			cfg.WindowsAutoStart = a.CheckWindowsAutoStart()
+			cfg.MonitorAutoStart = a.CheckMonitorAutoStart()
 			a.mutex.Lock()
 			a.autoControlState = cfg.AutoControl
 			a.mutex.Unlock()
@@ -1272,6 +1225,14 @@ func (a *App) CheckWindowsAutoStart() bool {
 	return a.getAutostartManager().CheckWindowsAutoStart()
 }
 
+func (a *App) SetMonitorAutoStart(enable bool) error {
+	return a.getAutostartManager().SetMonitorAutoStart(enable)
+}
+
+func (a *App) CheckMonitorAutoStart() bool {
+	return a.getAutostartManager().CheckMonitorAutoStart()
+}
+
 func (a *App) ShowWindow() {
 	if a.ctx != nil {
 		logDebug("ShowWindow 调用")
@@ -1299,9 +1260,6 @@ func (a *App) HideWindow() {
 
 func (a *App) QuitApp() {
 	logInfo("控制台请求退出")
-	if a.trayManager != nil {
-		a.trayManager.Quit()
-	}
 	if a.ipcClient != nil {
 		a.ipcClient.Close()
 	}

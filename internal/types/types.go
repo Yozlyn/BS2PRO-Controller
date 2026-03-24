@@ -89,6 +89,7 @@ type AppConfig struct {
 	Hotkeys                 *HotkeyConfig    `json:"hotkeys"`                 // 快捷键配置
 	PowerOnStart            bool             `json:"powerOnStart"`            // 通电自启动
 	WindowsAutoStart        bool             `json:"windowsAutoStart"`        // Windows开机自启动
+	MonitorAutoStart        bool             `json:"monitorAutoStart"`        // Monitor开机自启动
 	SmartStartStop          string           `json:"smartStartStop"`          // 智能启停
 	Brightness              int              `json:"brightness"`              // 亮度
 	TempUpdateRate          int              `json:"tempUpdateRate"`          // 温度更新频率(秒)
@@ -200,6 +201,7 @@ func GetDefaultConfig(isAutoStart bool) AppConfig {
 		Hotkeys:                 GetDefaultHotkeyConfig(),
 		PowerOnStart:            false,
 		WindowsAutoStart:        false,
+		MonitorAutoStart:        true,
 		SmartStartStop:          "off",
 		Brightness:              100,
 		TempUpdateRate:          2,

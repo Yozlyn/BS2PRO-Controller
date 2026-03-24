@@ -14,6 +14,10 @@ export function CheckWindowsAutoStart() {
   return window['go']['main']['App']['CheckWindowsAutoStart']();
 }
 
+export function CheckMonitorAutoStart() {
+  return window['go']['main']['App']['CheckMonitorAutoStart']();
+}
+
 export function ConnectDevice() {
   return window['go']['main']['App']['ConnectDevice']();
 }
@@ -160,6 +164,10 @@ export function SetSmartStartStop(arg1) {
 
 export function SetWindowsAutoStart(arg1) {
   return window['go']['main']['App']['SetWindowsAutoStart'](arg1);
+}
+
+export function SetMonitorAutoStart(arg1) {
+  return window['go']['main']['App']['SetMonitorAutoStart'](arg1);
 }
 
 export function ShowWindow() {

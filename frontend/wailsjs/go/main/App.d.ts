@@ -10,6 +10,8 @@ export function CheckProcessSwitchNow():Promise<boolean>;
 
 export function CheckWindowsAutoStart():Promise<boolean>;
 
+export function CheckMonitorAutoStart():Promise<boolean>;
+
 export function ConnectDevice():Promise<boolean>;
 
 export function DisconnectDevice():Promise<void>;
@@ -83,6 +85,8 @@ export function SetRGBMode(arg1:ipc.SetRGBModeParams):Promise<boolean>;
 export function SetSmartStartStop(arg1:string):Promise<boolean>;
 
 export function SetWindowsAutoStart(arg1:boolean):Promise<void>;
+
+export function SetMonitorAutoStart(arg1:boolean):Promise<void>;
 
 export function ShowWindow():Promise<void>;
 

@@ -233,21 +233,7 @@ wait_config:
 
 check_config:
     DetailPrint "正在检查 Monitor 相关配置..."
-    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"\"notificationsEnabled\": false" "$R0"'
-    Pop $R1
-    Pop $R2
-    ${If} $R1 != 0
-        Goto enable_monitor
-    ${EndIf}
-
-    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"\"processSwitchEnabled\": false" "$R0"'
-    Pop $R1
-    Pop $R2
-    ${If} $R1 != 0
-        Goto enable_monitor
-    ${EndIf}
-
-    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"    \"enabled\": false," "$R0"'
+    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"\"monitorAutoStart\": false" "$R0"'
     Pop $R1
     Pop $R2
     ${If} $R1 != 0
@@ -359,9 +345,9 @@ Section /o "桌面快捷方式" SEC_DESKTOP
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 SectionEnd
 
-Section /o "控制台自启动" SEC_AUTOSTART
-    DetailPrint "正在配置控制台开机自启..."
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "BS2PRO-Controller" '"$INSTDIR\${PRODUCT_EXECUTABLE}" --autostart'
+Section /o "Monitor 自启动" SEC_AUTOSTART
+    DetailPrint "正在配置 Monitor 开机自启..."
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "BS2PRO-Monitor" 'powershell -WindowStyle Hidden -NoProfile -NonInteractive -Command "Start-Process -WindowStyle Hidden -FilePath ''$INSTDIR\BS2PRO-Monitor.exe''"'
 SectionEnd
 
 Function .onInit
@@ -378,7 +364,7 @@ FunctionEnd
    !insertmacro MUI_DESCRIPTION_TEXT ${SEC_MAIN} "BS2PRO 控制器主程序和后台核心守护服务。"
    !insertmacro MUI_DESCRIPTION_TEXT ${SEC_STARTMENU} "（可选）在开始菜单创建快捷方式。"
    !insertmacro MUI_DESCRIPTION_TEXT ${SEC_DESKTOP} "（可选）在桌面创建快捷方式。"
-   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_AUTOSTART} "（可选）登录桌面时静默启动控制台。核心服务已随系统自启，控制台无需自启。"
+   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_AUTOSTART} "（可选）登录桌面时静默启动 Monitor，作为托盘、通知与快捷键常驻的服务。"
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "uninstall"
