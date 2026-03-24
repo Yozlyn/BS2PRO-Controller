@@ -233,7 +233,7 @@ wait_config:
 
 check_config:
     DetailPrint "正在检查 Monitor 相关配置..."
-    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"\"monitorAutoStart\": true" "$R0"'
+    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"\"trayEnabled\": true" "$R0"'
     Pop $R1
     Pop $R2
     ${If} $R1 == 0

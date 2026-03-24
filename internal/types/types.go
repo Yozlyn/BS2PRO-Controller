@@ -86,6 +86,7 @@ type AppConfig struct {
 	FanCurve                []FanCurvePoint  `json:"fanCurve"`                // 风扇曲线
 	GearLight               bool             `json:"gearLight"`               // 挡位灯
 	NotificationsEnabled    bool             `json:"notificationsEnabled"`    // 系统通知开关
+	TrayEnabled             bool             `json:"trayEnabled"`             // 托盘菜单开关
 	Hotkeys                 *HotkeyConfig    `json:"hotkeys"`                 // 快捷键配置
 	PowerOnStart            bool             `json:"powerOnStart"`            // 通电自启动
 	WindowsAutoStart        bool             `json:"windowsAutoStart"`        // Windows开机自启动
@@ -198,6 +199,7 @@ func GetDefaultConfig(isAutoStart bool) AppConfig {
 		FanCurve:                GetDefaultFanCurve(),
 		GearLight:               true,
 		NotificationsEnabled:    true,
+		TrayEnabled:             true,
 		Hotkeys:                 GetDefaultHotkeyConfig(),
 		PowerOnStart:            false,
 		WindowsAutoStart:        false,

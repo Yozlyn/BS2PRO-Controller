@@ -18,9 +18,8 @@
                       :active="config.windowsAutoStart" @toggle="handleWindowsAutoStart"
                       :loading="loading.windowsAutoStart" />
         <div class="h-px bg-slate-50 dark:bg-white/6 mx-6" />
-        <SettingItem title="Monitor 开机自启动" desc="随系统启动后台 Monitor，提供托盘、通知与快捷键常驻能力"
-                     :active="config.monitorAutoStart ?? true" @toggle="handleMonitorAutoStart"
-                     :loading="loading.monitorAutoStart" />
+        <SettingItem title="启用托盘菜单" desc="启用托盘菜单；通知、快捷键、进程联动启用其一都会常驻 Monitor"
+                     :active="(config as any).trayEnabled ?? true" @toggle="handleTrayEnabled" />
         <div class="h-px bg-slate-50 dark:bg-white/6 mx-6" />
         <SettingItem title="允许系统通知" desc="在后台运行或窗口未置前时展示设备与服务状态提醒"
                      :active="config.notificationsEnabled ?? true" @toggle="handleNotificationsEnabled" />
@@ -217,7 +216,7 @@ const editingPreview = ref<Record<string, string>>({})
 const customGlobalUiError = ref('')
 const alertDialog = ref({ visible: false, title: '', message: '' })
 let buttonAnimTimer: ReturnType<typeof setTimeout> | null = null
-const loading = ref({ gearLight: false, powerOnStart: false, windowsAutoStart: false, monitorAutoStart: false })
+const loading = ref({ gearLight: false, powerOnStart: false, windowsAutoStart: false })
 const hotkeysConfig = computed(() => ((props.config as any).hotkeys ?? { enabled: true, global: [], inApp: [] }) as { enabled?: boolean; global?: Array<any>; inApp?: Array<any> })
 const defaultHotkeys = {
 	enabled: true,
@@ -347,14 +346,12 @@ async function handleWindowsAutoStart() {
   finally { loading.value.windowsAutoStart = false }
 }
 
-async function handleMonitorAutoStart() {
-  loading.value.monitorAutoStart = true
+async function handleTrayEnabled() {
   try {
-    const next = !(props.config.monitorAutoStart ?? true)
-    await apiService.setMonitorAutoStart(next)
-    emit('config-change', types.AppConfig.createFrom({ ...props.config, monitorAutoStart: next }))
-  } catch (e) { frontendLogger.error('系统设置', '设置 Monitor 开机自启动失败', e); showAlertDialog('设置失败', `设置 Monitor 自启动失败：${e}`) }
-  finally { loading.value.monitorAutoStart = false }
+    const nc = types.AppConfig.createFrom({ ...props.config, trayEnabled: !((props.config as any).trayEnabled ?? true) })
+    await apiService.updateConfig(nc)
+    emit('config-change', nc)
+  } catch (e) { frontendLogger.error('系统设置', '设置托盘菜单开关失败', e) }
 }
 
 async function handleIgnoreReconnect() {

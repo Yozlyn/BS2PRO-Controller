@@ -76,8 +76,10 @@ func (m *Manager) tryLoadFromPath(configPath string) bool {
 
 	var raw map[string]json.RawMessage
 	hasNotificationsEnabled := false
+	hasTrayEnabled := false
 	if err := json.Unmarshal(data, &raw); err == nil {
 		_, hasNotificationsEnabled = raw["notificationsEnabled"]
+		_, hasTrayEnabled = raw["trayEnabled"]
 	}
 
 	var config types.AppConfig
@@ -88,6 +90,10 @@ func (m *Manager) tryLoadFromPath(configPath string) bool {
 	if !hasNotificationsEnabled {
 		config.NotificationsEnabled = true
 		m.logInfo("配置缺少 notificationsEnabled，已按默认值 true 迁移: %s", configPath)
+	}
+	if !hasTrayEnabled {
+		config.TrayEnabled = true
+		m.logInfo("配置缺少 trayEnabled，已按默认值 true 迁移: %s", configPath)
 	}
 
 	// 补全缺失的配置项，兼容不同版本的配置文件

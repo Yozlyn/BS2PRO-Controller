@@ -263,6 +263,7 @@ export namespace types {
 	    fanCurve: FanCurvePoint[];
 	    gearLight: boolean;
 	    notificationsEnabled: boolean;
+	    trayEnabled: boolean;
 	    hotkeys?: HotkeyConfig;
 	    powerOnStart: boolean;
 	    windowsAutoStart: boolean;
@@ -296,6 +297,7 @@ export namespace types {
 	        this.fanCurve = this.convertValues(source["fanCurve"], FanCurvePoint);
 	        this.gearLight = source["gearLight"];
 	        this.notificationsEnabled = source["notificationsEnabled"];
+	        this.trayEnabled = source["trayEnabled"];
 	        this.hotkeys = this.convertValues(source["hotkeys"], HotkeyConfig);
 	        this.powerOnStart = source["powerOnStart"];
 	        this.windowsAutoStart = source["windowsAutoStart"];

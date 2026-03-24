@@ -37,6 +37,7 @@ var trayIconData []byte
 var globalHotkeys = newGlobalHotkeyAgent()
 var monitorInstance = createSingleInstanceGuard()
 var monitorTrayState = newMonitorTrayState()
+var monitorTrayManager *tray.Manager
 var monitorDebugMode bool
 var monitorWriter *os.File
 var hotkeyEditMode bool
@@ -109,7 +110,9 @@ func main() {
 	if err := notification.EnsureMonitorStartMenuShortcut(); err != nil {
 		monitorLog("ensure monitor shortcut failed: %v", err)
 	}
-	initMonitorTray()
+	configManager := config.NewManager(config.GetInstallDir(), nil)
+	startupCfg := configManager.Load(false)
+	syncTrayEnabled(startupCfg.TrayEnabled)
 
 	client := ipc.NewClient(nil)
 	client.SetRole(ipc.RoleMonitorAgent)
@@ -206,6 +209,9 @@ func (l *monitorTrayLoggerAdapter) SetDebugMode(enabled bool)     { setMonitorDe
 func (l *monitorTrayLoggerAdapter) GetLogDir() string             { return config.GetLogDir() }
 
 func initMonitorTray() {
+	if monitorTrayManager != nil && monitorTrayManager.IsInitialized() {
+		return
+	}
 	manager := tray.NewManager(&monitorTrayLoggerAdapter{}, trayIconData)
 	manager.SetCallbacks(
 		func() { showOrLaunchGUI() },
@@ -215,7 +221,19 @@ func initMonitorTray() {
 		func() bool { return toggleAutoControl() },
 		func() tray.Status { return monitorTrayState.GetStatus() },
 	)
+	monitorTrayManager = manager
 	manager.Init()
+}
+
+func syncTrayEnabled(enabled bool) {
+	if enabled {
+		initMonitorTray()
+		return
+	}
+	if monitorTrayManager != nil && monitorTrayManager.IsInitialized() {
+		monitorInfo("tray disabled by config, quitting tray manager")
+		monitorTrayManager.Quit()
+	}
 }
 
 func showOrLaunchGUI() {
@@ -510,6 +528,7 @@ func handleEvent(event ipc.Event) {
 		var cfg types.AppConfig
 		if err := json.Unmarshal(event.Data, &cfg); err == nil {
 			setMonitorDebugMode(cfg.DebugMode)
+			syncTrayEnabled(cfg.TrayEnabled)
 			if cfg.Hotkeys == nil {
 				monitorLog("config update hotkeys=nil")
 			} else {
