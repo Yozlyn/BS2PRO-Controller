@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/TIANLI0/BS2PRO-Controller/internal/config"
@@ -30,7 +31,7 @@ var (
 
 const hideWindowCmd = uintptr(0)
 
-//go:embed winres/icon.png
+//go:embed tray.ico
 var trayIconData []byte
 
 var globalHotkeys = newGlobalHotkeyAgent()
@@ -39,6 +40,7 @@ var monitorTrayState = newMonitorTrayState()
 var monitorDebugMode bool
 var monitorWriter *os.File
 var hotkeyEditMode bool
+var lastGUIShowRequest int64
 
 const serviceNotifyWindow = 3 * time.Second
 
@@ -206,7 +208,7 @@ func (l *monitorTrayLoggerAdapter) GetLogDir() string             { return confi
 func initMonitorTray() {
 	manager := tray.NewManager(&monitorTrayLoggerAdapter{}, trayIconData)
 	manager.SetCallbacks(
-		func() { launchGUI() },
+		func() { showOrLaunchGUI() },
 		func() { quitGUI() },
 		func() { triggerCoreRestart() },
 		func() bool { return toggleCorePaused() },
@@ -216,18 +218,33 @@ func initMonitorTray() {
 	manager.Init()
 }
 
+func showOrLaunchGUI() {
+	now := time.Now().UnixMilli()
+	last := atomic.LoadInt64(&lastGUIShowRequest)
+	if last != 0 && now-last < 1200 {
+		monitorInfo("show or launch gui ignored by debounce: delta=%dms", now-last)
+		return
+	}
+	atomic.StoreInt64(&lastGUIShowRequest, now)
+	monitorInfo("show or launch gui triggered: launch gui directly")
+	launchGUI()
+}
+
 func launchGUI() {
 	guiPath := filepath.Join(config.GetInstallDir(), "BS2PRO-Controller.exe")
+	monitorInfo("launch gui start: path=%s", guiPath)
 	cmd := exec.Command(guiPath)
 	cmd.Dir = filepath.Dir(guiPath)
 	platformutil.HideCommandWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		monitorInfo("launch gui failed: %v", err)
+		return
 	}
+	monitorInfo("launch gui started: pid=%d", cmd.Process.Pid)
 }
 
 func quitGUI() {
-	cmd := exec.Command("taskkill", "/F", "/IM", "BS2PRO-Controller.exe", "/T")
+	cmd := exec.Command("taskkill", "/F", "/IM", "BS2PRO-Controller.exe")
 	platformutil.HideCommandWindow(cmd)
 	if err := cmd.Run(); err != nil {
 		monitorInfo("quit gui failed: %v", err)
@@ -474,6 +491,11 @@ func refreshGlobalHotkeys(client *ipc.Client) {
 func handleGlobalAction(client *ipc.Client, action string) {
 	if hotkeyEditMode {
 		monitorLog("hotkey action ignored during edit mode: %s", action)
+		return
+	}
+	if action == "show-main-window" {
+		monitorLog("dispatch global hotkey action locally: %s", action)
+		showOrLaunchGUI()
 		return
 	}
 	monitorLog("dispatch global hotkey action: %s", action)

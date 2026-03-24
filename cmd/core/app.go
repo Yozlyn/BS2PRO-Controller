@@ -193,15 +193,6 @@ func (a *CoreApp) Stop() {
 	a.logInfo("核心服务已停止")
 }
 
-func (a *CoreApp) onShowWindowRequest() {
-	a.logInfo("收到切换窗口显示请求")
-	if a.ipcServer != nil && a.ipcServer.HasClients() {
-		a.ipcServer.BroadcastEvent("toggle-window", nil)
-	} else {
-		a.logInfo("没有 GUI 连接，服务模式下无法主动唤起窗口。")
-	}
-}
-
 func (a *CoreApp) onQuitRequest() {
 	a.logInfo("收到前端的彻底退出请求，准备关闭核心服务...")
 	if a.ipcServer != nil {
@@ -408,9 +399,6 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 			status = map[string]interface{}{"running": false, "status": "ASUS ACPI接口未初始化", "type": "none"}
 		}
 		return a.dataResponse(status)
-	case ipc.ReqShowWindow:
-		a.onShowWindowRequest()
-		return a.successResponse(true)
 	case ipc.ReqQuitApp:
 		go a.onQuitRequest()
 		return a.successResponse(true)
@@ -1381,7 +1369,7 @@ func (a *CoreApp) SetDebugMode(enabled bool) error {
 func (a *CoreApp) triggerHotkeyAction(action string) {
 	switch action {
 	case "show-main-window":
-		a.onShowWindowRequest()
+		a.logInfo("show-main-window 已改为由 Monitor 本地处理")
 	case "toggle-auto-control":
 		a.toggleAutoControlHotkey()
 	case "toggle-process-switch":

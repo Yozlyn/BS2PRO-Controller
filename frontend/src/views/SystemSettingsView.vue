@@ -14,7 +14,7 @@
     <div class="space-y-6 max-w-4xl">
       <!-- 基础设置 -->
       <div class="p-1 rounded-[2.5rem] border surface-card">
-        <SettingItem title="Windows 开机自启动" desc="随系统启动 BS2PRO 控制台，保持后台静默运行"
+        <SettingItem title="控制台开机自启动" desc="随系统启动 BS2PRO 控制台，保持后台静默运行"
                       :active="config.windowsAutoStart" @toggle="handleWindowsAutoStart"
                       :loading="loading.windowsAutoStart" />
         <div class="h-px bg-slate-50 dark:bg-white/6 mx-6" />

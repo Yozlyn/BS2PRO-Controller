@@ -233,10 +233,31 @@ wait_config:
 
 check_config:
     DetailPrint "正在检查 Monitor 相关配置..."
-    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"\"monitorAutoStart\": false" "$R0"'
+    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"\"monitorAutoStart\": true" "$R0"'
     Pop $R1
     Pop $R2
-    ${If} $R1 != 0
+    ${If} $R1 == 0
+        Goto enable_monitor
+    ${EndIf}
+
+    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"\"notificationsEnabled\": true" "$R0"'
+    Pop $R1
+    Pop $R2
+    ${If} $R1 == 0
+        Goto enable_monitor
+    ${EndIf}
+
+    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"\"processSwitchEnabled\": true" "$R0"'
+    Pop $R1
+    Pop $R2
+    ${If} $R1 == 0
+        Goto enable_monitor
+    ${EndIf}
+
+    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"    \"enabled\": true," "$R0"'
+    Pop $R1
+    Pop $R2
+    ${If} $R1 == 0
         Goto enable_monitor
     ${EndIf}
 
@@ -347,7 +368,7 @@ SectionEnd
 
 Section /o "Monitor 自启动" SEC_AUTOSTART
     DetailPrint "正在配置 Monitor 开机自启..."
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "BS2PRO-Monitor" 'powershell -WindowStyle Hidden -NoProfile -NonInteractive -Command "Start-Process -WindowStyle Hidden -FilePath ''$INSTDIR\BS2PRO-Monitor.exe''"'
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "BS2PRO-Monitor" "powershell -WindowStyle Hidden -NoProfile -NonInteractive -Command `$\"Start-Process -WindowStyle Hidden -FilePath '$INSTDIR\BS2PRO-Monitor.exe'`$\""
 SectionEnd
 
 Function .onInit

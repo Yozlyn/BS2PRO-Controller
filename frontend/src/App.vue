@@ -138,7 +138,7 @@ import AboutView from './views/AboutView.vue'
 import { apiService } from './services/api'
 import { frontendLogger } from './services/frontendLogger'
 import { types } from '../wailsjs/go/models'
-import { HideWindow } from '../wailsjs/go/main/App'
+import { HideWindow, QuitApp } from '../wailsjs/go/main/App'
 import { WindowToggleMaximise, WindowIsMaximised } from '../wailsjs/runtime/runtime'
 
 const THEME_STORAGE_KEY = 'theme'
@@ -591,8 +591,8 @@ const toggleMaximize = () => {
   window.setTimeout(() => { void syncWindowMaxState() }, 80)
 }
 const closeWindow = () => {
-  frontendLogger.info('窗口', '点击关闭(映射最小化)')
+  frontendLogger.info('窗口', '点击关闭(直接退出 GUI)')
   lockHoverImmediately('click-close-as-minimize')
-  HideWindow().catch((e) => frontendLogger.error('窗口', '关闭映射最小化失败', e))
+  QuitApp().catch((e) => frontendLogger.error('窗口', '关闭 GUI 失败', e))
 }
 </script>

@@ -162,6 +162,17 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	logInfo("GUI 启动 版本: %s", version.Get())
 
+	isAutoStart := false
+	for _, arg := range os.Args[1:] {
+		if arg == "--autostart" || arg == "/autostart" || arg == "-autostart" {
+			isAutoStart = true
+			break
+		}
+	}
+	a.mutex.Lock()
+	a.windowVisible = !isAutoStart
+	a.mutex.Unlock()
+
 	// 初始化自启动管理器
 	adapter := &trayLoggerAdapter{sugar: guiLogger, installDir: config.GetInstallDir()}
 	a.autostartManager = autostart.NewManager(adapter, config.GetInstallDir())
@@ -183,6 +194,7 @@ func (a *App) startup(ctx context.Context) {
 		}()
 	} else {
 		logInfo("已成功连接到核心服务 IPC 管道")
+		a.registerGUIClientRole()
 
 		// 启动时主动拉取一次配置，同步状态
 		cfg := a.GetConfig()
@@ -215,7 +227,34 @@ func (a *App) startup(ctx context.Context) {
 	// 启动连接健康检查
 	go a.startConnectionHealthCheck()
 
+	if !isAutoStart {
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			logInfo("首次非静默启动，主动显示主窗口")
+			a.ShowWindow()
+		}()
+	} else {
+		logInfo("当前为静默启动，跳过主动显示主窗口")
+	}
+
 	logInfo("GUI 启动完成")
+}
+
+func (a *App) registerGUIClientRole() {
+	if a.ipcClient == nil || !a.ipcClient.IsConnected() {
+		logWarn("注册 GUI 客户端角色失败: IPC 未连接")
+		return
+	}
+	resp, err := a.ipcClient.SendRequest(ipc.ReqRegisterClient, ipc.RegisterClientParams{Role: ipc.RoleGUI})
+	if err != nil {
+		logError("注册 GUI 客户端角色失败: %v", err)
+		return
+	}
+	if resp == nil || !resp.Success {
+		logError("注册 GUI 客户端角色失败: 响应无效")
+		return
+	}
+	logInfo("已注册 GUI 客户端角色")
 }
 
 func (a *App) ensureMonitorAgentRunningFromConfig() {
@@ -420,10 +459,6 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 			runtime.EventsEmit(a.ctx, "config-update", cfg)
 		}
 
-	case "show-window":
-		a.ShowWindow()
-	case "toggle-window":
-		a.ToggleWindowVisibility()
 	case ipc.EventHotkeyAction:
 		var params ipc.TriggerHotkeyActionParams
 		if err := json.Unmarshal(event.Data, &params); err == nil && params.Action != "" {
@@ -479,11 +514,16 @@ func (a *App) GetDeviceStatus() map[string]any {
 func (a *App) GetConfig() AppConfig {
 	resp, err := a.sendRequest(ipc.ReqGetConfig, nil)
 	if err != nil || resp == nil || !resp.Success {
-		return types.GetDefaultConfig(false)
+		cfg := types.GetDefaultConfig(false)
+		cfg.WindowsAutoStart = a.CheckWindowsAutoStart()
+		cfg.MonitorAutoStart = a.CheckMonitorAutoStart()
+		return cfg
 	}
 	var cfg AppConfig
 	json.Unmarshal(resp.Data, &cfg)
 	cfg.Repair() // 补全缺失配置
+	cfg.WindowsAutoStart = a.CheckWindowsAutoStart()
+	cfg.MonitorAutoStart = a.CheckMonitorAutoStart()
 	return cfg
 }
 
@@ -1235,7 +1275,10 @@ func (a *App) CheckMonitorAutoStart() bool {
 
 func (a *App) ShowWindow() {
 	if a.ctx != nil {
-		logDebug("ShowWindow 调用")
+		a.mutex.RLock()
+		wasVisible := a.windowVisible
+		a.mutex.RUnlock()
+		logInfo("ShowWindow 调用: previousVisible=%v", wasVisible)
 		a.mutex.Lock()
 		a.windowVisible = true
 		a.mutex.Unlock()
@@ -1249,7 +1292,10 @@ func (a *App) ShowWindow() {
 
 func (a *App) HideWindow() {
 	if a.ctx != nil {
-		logDebug("HideWindow 调用")
+		a.mutex.RLock()
+		wasVisible := a.windowVisible
+		a.mutex.RUnlock()
+		logInfo("HideWindow 调用: previousVisible=%v", wasVisible)
 		a.mutex.Lock()
 		a.windowVisible = false
 		a.mutex.Unlock()
@@ -1486,6 +1532,7 @@ func (a *App) startConnectionHealthCheck() {
 
 			if err := a.ipcClient.Connect(); err == nil {
 				logInfo("健康检查: 核心服务重连成功")
+				a.registerGUIClientRole()
 				currentInterval = baseInterval // 重置探测频率
 				retryStartTime = time.Now()    // 重置重试起点
 				retryStopped = false           // 重置停止标记

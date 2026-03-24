@@ -62,9 +62,7 @@ const (
 	ReqGetBridgeProgramStatus RequestType = "GetBridgeProgramStatus"
 
 	// 窗口相关
-	ReqShowWindow RequestType = "ShowWindow"
-	ReqToggleWindow RequestType = "ToggleWindow"
-	ReqQuitApp    RequestType = "QuitApp"
+	ReqQuitApp RequestType = "QuitApp"
 
 	// 调试相关
 	ReqGetDebugInfo RequestType = "GetDebugInfo"
@@ -150,6 +148,19 @@ type TriggerHotkeyActionParams struct {
 
 type ClientMeta struct {
 	Role string
+}
+
+func (s *Server) dropClient(conn net.Conn) bool {
+	s.mutex.Lock()
+	_, exists := s.clients[conn]
+	if exists {
+		delete(s.clients, conn)
+	}
+	s.mutex.Unlock()
+	if exists {
+		conn.Close()
+	}
+	return exists
 }
 
 // Server IPC 服务器
@@ -317,17 +328,23 @@ func (s *Server) BroadcastEvent(eventType string, data any) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	for conn := range s.clients {
-		go func(c net.Conn) {
+	for conn, meta := range s.clients {
+		role := ""
+		if meta != nil {
+			role = meta.Role
+		}
+		go func(c net.Conn, clientRole string) {
 			defer func() { recover() }()
 			// 设置写超时：若客户端 Pipe 缓冲区满（GUI 卡死），2 秒后放弃写入，避免 goroutine 永久泄漏。
 			c.SetWriteDeadline(time.Now().Add(2 * time.Second))
 			_, err := c.Write(append(eventBytes, '\n'))
 			c.SetWriteDeadline(time.Time{}) // 写完后清除，不影响后续读 deadline
 			if err != nil {
-				s.logDebug("发送事件失败: %v", err)
+				if s.dropClient(c) {
+					s.logWarn("发送事件失败，已移除客户端: role=%s err=%v", clientRole, err)
+				}
 			}
-		}(conn)
+		}(conn, role)
 	}
 }
 
@@ -352,15 +369,17 @@ func (s *Server) BroadcastEventToRole(role, eventType string, data any) {
 		if meta == nil || meta.Role != role {
 			continue
 		}
-		go func(c net.Conn) {
+		go func(c net.Conn, clientRole string) {
 			defer func() { recover() }()
 			c.SetWriteDeadline(time.Now().Add(2 * time.Second))
 			_, err := c.Write(append(eventBytes, '\n'))
 			c.SetWriteDeadline(time.Time{})
 			if err != nil {
-				s.logDebug("发送角色事件失败: %v", err)
+				if s.dropClient(c) {
+					s.logWarn("发送角色事件失败，已移除客户端: role=%s event=%s err=%v", clientRole, eventType, err)
+				}
 			}
-		}(conn)
+		}(conn, meta.Role)
 	}
 }
 

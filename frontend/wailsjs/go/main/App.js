@@ -6,16 +6,16 @@ export function ApplyOffsetToCurve() {
   return window['go']['main']['App']['ApplyOffsetToCurve']();
 }
 
+export function CheckMonitorAutoStart() {
+  return window['go']['main']['App']['CheckMonitorAutoStart']();
+}
+
 export function CheckProcessSwitchNow() {
   return window['go']['main']['App']['CheckProcessSwitchNow']();
 }
 
 export function CheckWindowsAutoStart() {
   return window['go']['main']['App']['CheckWindowsAutoStart']();
-}
-
-export function CheckMonitorAutoStart() {
-  return window['go']['main']['App']['CheckMonitorAutoStart']();
 }
 
 export function ConnectDevice() {
@@ -82,10 +82,6 @@ export function ImportFanCurveProfilesZip() {
   return window['go']['main']['App']['ImportFanCurveProfilesZip']();
 }
 
-export function InitSystemTray() {
-  return window['go']['main']['App']['InitSystemTray']();
-}
-
 export function ListRunningProcessNames() {
   return window['go']['main']['App']['ListRunningProcessNames']();
 }
@@ -150,6 +146,10 @@ export function SetManualGear(arg1, arg2) {
   return window['go']['main']['App']['SetManualGear'](arg1, arg2);
 }
 
+export function SetMonitorAutoStart(arg1) {
+  return window['go']['main']['App']['SetMonitorAutoStart'](arg1);
+}
+
 export function SetPowerOnStart(arg1) {
   return window['go']['main']['App']['SetPowerOnStart'](arg1);
 }
@@ -164,10 +164,6 @@ export function SetSmartStartStop(arg1) {
 
 export function SetWindowsAutoStart(arg1) {
   return window['go']['main']['App']['SetWindowsAutoStart'](arg1);
-}
-
-export function SetMonitorAutoStart(arg1) {
-  return window['go']['main']['App']['SetMonitorAutoStart'](arg1);
 }
 
 export function ShowWindow() {
