@@ -139,10 +139,11 @@ type HotkeyConflict struct {
 type Logger interface {
 	// 长期接口保持 message + key/value 形态。
 	// 具体实现可在迁移期兼容旧 printf 调用，但业务侧不再暴露单独的 *f 方法。
-	Info(msg string, args ...any)
-	Error(msg string, args ...any)
-	Warn(msg string, args ...any)
-	Debug(msg string, args ...any)
+	// message 语义上应传 string，这里保留 any 以避免 go vet 将其视为 printf 包装。
+	Info(msg any, args ...any)
+	Error(msg any, args ...any)
+	Warn(msg any, args ...any)
+	Debug(msg any, args ...any)
 	Close()
 	CleanOldLogs()
 	SetDebugMode(enabled bool)

@@ -23,9 +23,9 @@ import (
 )
 
 var (
-	monitorKernel32      = windows.NewLazySystemDLL("kernel32.dll")
-	monitorUser32        = windows.NewLazySystemDLL("user32.dll")
-	procConsoleWindow    = monitorKernel32.NewProc("GetConsoleWindow")
+	monitorKernel32       = windows.NewLazySystemDLL("kernel32.dll")
+	monitorUser32         = windows.NewLazySystemDLL("user32.dll")
+	procConsoleWindow     = monitorKernel32.NewProc("GetConsoleWindow")
 	procMonitorShowWindow = monitorUser32.NewProc("ShowWindow")
 )
 
@@ -48,15 +48,15 @@ func init() {
 	initMonitorLogger()
 }
 
-func monitorLog(format string, args ...any) {
+func monitorLog(msg any, args ...any) {
 	if monitorLogger != nil {
-		monitorLogger.Debug(format, args...)
+		monitorLogger.Debug(msg, args...)
 	}
 }
 
-func monitorInfo(format string, args ...any) {
+func monitorInfo(msg any, args ...any) {
 	if monitorLogger != nil {
-		monitorLogger.Info(format, args...)
+		monitorLogger.Info(msg, args...)
 	}
 }
 
@@ -183,20 +183,20 @@ func (s *monitorTrayStateStore) SetDisconnected() {
 
 type monitorTrayLoggerAdapter struct{}
 
-func (l *monitorTrayLoggerAdapter) Info(format string, v ...any)  { monitorInfo(format, v...) }
-func (l *monitorTrayLoggerAdapter) Error(format string, v ...any) { monitorInfo(format, v...) }
-func (l *monitorTrayLoggerAdapter) Debug(format string, v ...any) { monitorLog(format, v...) }
-func (l *monitorTrayLoggerAdapter) Warn(format string, v ...any)  { monitorInfo(format, v...) }
+func (l *monitorTrayLoggerAdapter) Info(msg any, args ...any)     { monitorInfo(msg, args...) }
+func (l *monitorTrayLoggerAdapter) Error(msg any, args ...any)    { monitorInfo(msg, args...) }
+func (l *monitorTrayLoggerAdapter) Debug(msg any, args ...any)    { monitorLog(msg, args...) }
+func (l *monitorTrayLoggerAdapter) Warn(msg any, args ...any)     { monitorInfo(msg, args...) }
 func (l *monitorTrayLoggerAdapter) Infof(format string, v ...any) { monitorInfo(format, v...) }
 func (l *monitorTrayLoggerAdapter) Errorf(format string, v ...any) {
 	monitorInfo(format, v...)
 }
 func (l *monitorTrayLoggerAdapter) Debugf(format string, v ...any) { monitorLog(format, v...) }
 func (l *monitorTrayLoggerAdapter) Warnf(format string, v ...any)  { monitorInfo(format, v...) }
-func (l *monitorTrayLoggerAdapter) Close()                        {}
-func (l *monitorTrayLoggerAdapter) CleanOldLogs()                 {}
-func (l *monitorTrayLoggerAdapter) SetDebugMode(enabled bool)     { setMonitorDebugMode(enabled) }
-func (l *monitorTrayLoggerAdapter) GetLogDir() string             { return config.GetLogDir() }
+func (l *monitorTrayLoggerAdapter) Close()                         {}
+func (l *monitorTrayLoggerAdapter) CleanOldLogs()                  {}
+func (l *monitorTrayLoggerAdapter) SetDebugMode(enabled bool)      { setMonitorDebugMode(enabled) }
+func (l *monitorTrayLoggerAdapter) GetLogDir() string              { return config.GetLogDir() }
 
 func initMonitorTray() {
 	if monitorTrayManager != nil && monitorTrayManager.IsInitialized() {
@@ -571,12 +571,12 @@ func handleEvent(event ipc.Event) {
 }
 
 type globalHotkeyAgent struct {
-	mu       sync.Mutex
-	handler  func(string)
-	bindings map[int]types.HotkeyBinding
-	loopStop func()
+	mu        sync.Mutex
+	handler   func(string)
+	bindings  map[int]types.HotkeyBinding
+	loopStop  func()
 	conflicts []types.HotkeyConflict
-	current  *types.HotkeyConfig
+	current   *types.HotkeyConfig
 }
 
 func newGlobalHotkeyAgent() *globalHotkeyAgent {

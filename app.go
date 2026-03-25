@@ -31,21 +31,21 @@ import (
 
 // App struct - GUI 应用程序结构
 type App struct {
-	ctx         context.Context
-	ipcClient   *ipc.Client
-	mutex       sync.RWMutex
-	iconData    []byte
-	windowVisible bool
+	ctx            context.Context
+	ipcClient      *ipc.Client
+	mutex          sync.RWMutex
+	iconData       []byte
+	windowVisible  bool
 	monitorDesired bool
 
 	// 缓存的状态 (托盘和前端随时读取)
-	isConnected      bool
-	coreRunning      bool
-	monitorManaged   bool
-	currentTemp      types.TemperatureData
-	currentFan       *types.FanData
-	autoControlState bool
-	registerGUIRoleRunning atomic.Bool
+	isConnected                 bool
+	coreRunning                 bool
+	monitorManaged              bool
+	currentTemp                 types.TemperatureData
+	currentFan                  *types.FanData
+	autoControlState            bool
+	registerGUIRoleRunning      atomic.Bool
 	registeredGUIRoleGeneration atomic.Int64
 
 	// 自启动管理器，启动时初始化一次
@@ -70,7 +70,6 @@ func init() {
 	guiLogger = initGUILogger()
 }
 
-
 func initGUILogger() *logger.CustomLogger {
 	baseDirs := []string{
 		filepath.Dir(config.GetLogDir()),
@@ -89,37 +88,37 @@ func initGUILogger() *logger.CustomLogger {
 }
 
 // GUI 日志包装函数，保持与其他包调用层数一致
-func logInfo(format string, v ...any) {
+func logInfo(msg any, args ...any) {
 	if guiLogger != nil {
-		guiLogger.Info(format, v...)
+		guiLogger.Info(msg, args...)
 	}
 }
 
-func logError(format string, v ...any) {
+func logError(msg any, args ...any) {
 	if guiLogger != nil {
-		guiLogger.Error(format, v...)
+		guiLogger.Error(msg, args...)
 	}
 }
 
-func logWarn(format string, v ...any) {
+func logWarn(msg any, args ...any) {
 	if guiLogger != nil {
-		guiLogger.Warn(format, v...)
+		guiLogger.Warn(msg, args...)
 	}
 }
 
-func logDebug(format string, v ...any) {
+func logDebug(msg any, args ...any) {
 	if guiLogger != nil {
-		guiLogger.Debug(format, v...)
+		guiLogger.Debug(msg, args...)
 	}
 }
 
 // NewApp 创建 GUI 应用实例
 func NewApp(icon []byte) *App {
 	return &App{
-		ipcClient:   ipc.NewClient(nil),
-		coreRunning: true,
-		currentTemp: types.TemperatureData{BridgeOk: true},
-		iconData:    icon,
+		ipcClient:     ipc.NewClient(nil),
+		coreRunning:   true,
+		currentTemp:   types.TemperatureData{BridgeOk: true},
+		iconData:      icon,
 		windowVisible: true,
 	}
 }
@@ -127,7 +126,7 @@ func NewApp(icon []byte) *App {
 // startup 应用启动时调用
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	logInfo("GUI 启动 版本: %s", version.Get())
+	logInfo("GUI 启动", "version", version.Get())
 
 	isAutoStart := false
 	for _, arg := range os.Args[1:] {
@@ -149,7 +148,7 @@ func (a *App) startup(ctx context.Context) {
 
 	// 连接到后台核心服务
 	if err := a.ipcClient.Connect(); err != nil {
-		logError("连接核心服务失败: %v", err)
+		logError("连接核心服务失败", "error", err)
 		runtime.EventsEmit(ctx, "core-service-error", "无法连接到核心服务，请检查服务是否运行")
 
 		go func() {
@@ -273,7 +272,7 @@ func (a *App) scheduleRegisterGUIClientRole(reason string) {
 
 func (a *App) ensureMonitorAgentReady() {
 	if err := a.startProcessSwitchMonitor(); err != nil {
-		logError("启动 Monitor 失败: %v", err)
+		logError("启动 Monitor 失败", "error", err)
 	} else {
 		logInfo("已确保 Monitor 运行")
 	}
@@ -313,7 +312,7 @@ func (a *App) syncMonitorAgentState() {
 		return
 	}
 	if err := a.stopProcessSwitchMonitor(); err != nil {
-		logError("停止 Monitor 失败: %v", err)
+		logError("停止 Monitor 失败", "error", err)
 	} else {
 		logInfo("已停止 Monitor 代理进程")
 	}
@@ -347,7 +346,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 	defer func() {
 		if r := recover(); r != nil {
 			if guiLogger != nil {
-				logError("处理核心事件发生异常: %v，事件类型: %v", r, event.Type)
+				logError("处理核心事件发生异常", "event_type", event.Type, "error", r)
 			}
 		}
 	}()
@@ -355,7 +354,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 		return
 	}
 
-	logDebug("收到核心事件，类型=%v", event.Type)
+	logDebug("收到核心事件", "event_type", event.Type)
 
 	switch event.Type {
 	case ipc.EventFanDataUpdate:
@@ -1271,7 +1270,7 @@ func (a *App) ShowWindow() {
 		a.mutex.RLock()
 		wasVisible := a.windowVisible
 		a.mutex.RUnlock()
-		logInfo("ShowWindow 调用: previousVisible=%v", wasVisible)
+		logInfo("ShowWindow 调用", "previous_visible", wasVisible)
 		a.mutex.Lock()
 		a.windowVisible = true
 		a.mutex.Unlock()
@@ -1290,7 +1289,7 @@ func (a *App) HideWindow() {
 		a.mutex.RLock()
 		wasVisible := a.windowVisible
 		a.mutex.RUnlock()
-		logInfo("HideWindow 调用: previousVisible=%v", wasVisible)
+		logInfo("HideWindow 调用", "previous_visible", wasVisible)
 		a.mutex.Lock()
 		a.windowVisible = false
 		a.mutex.Unlock()
@@ -1323,7 +1322,7 @@ func (a *App) RestartCoreService() bool {
 	logInfo("控制台请求重启核心服务")
 	resp, err := a.sendRequest(ipc.ReqRestartService, nil)
 	if err != nil {
-		logError("发送重启核心服务请求失败: %v", err)
+		logError("发送重启核心服务请求失败", "error", err)
 		return false
 	} else if resp != nil && resp.Success {
 		a.mutex.Lock()
@@ -1342,7 +1341,7 @@ func (a *App) StopCoreService() bool {
 	logInfo("控制台请求停止核心服务")
 	resp, err := a.sendRequest(ipc.ReqStopService, nil)
 	if err != nil {
-		logError("发送停止核心服务请求失败: %v", err)
+		logError("发送停止核心服务请求失败", "error", err)
 		return false
 	} else if resp != nil && resp.Success {
 		a.mutex.Lock()
@@ -1361,7 +1360,7 @@ func (a *App) ResumeCoreService() bool {
 	logInfo("控制台请求恢复核心服务")
 	resp, err := a.sendRequest(ipc.ReqRestartService, nil)
 	if err != nil {
-		logError("发送恢复核心服务请求失败: %v", err)
+		logError("发送恢复核心服务请求失败", "error", err)
 		return false
 	}
 	if resp == nil || !resp.Success {
@@ -1543,7 +1542,7 @@ func (a *App) startConnectionHealthCheck() {
 				if currentInterval > maxInterval {
 					currentInterval = maxInterval
 				}
-				logDebug("健康检查: 重连失败，下次探测间隔 %v", currentInterval)
+				logDebug("健康检查重连失败", "next_probe_interval", currentInterval)
 			}
 		} else {
 			// 连接正常时发送心跳

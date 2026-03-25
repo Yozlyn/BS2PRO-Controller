@@ -138,23 +138,23 @@ func (l *CustomLogger) GetSlogLogger() *slog.Logger {
 }
 
 // Info 记录信息日志
-func (l *CustomLogger) Info(msg string, args ...any) {
-	l.emit(slog.LevelInfo, msg, args...)
+func (l *CustomLogger) Info(msg any, args ...any) {
+	l.emit(slog.LevelInfo, stringifyMessage(msg), args...)
 }
 
 // Error 记录错误日志
-func (l *CustomLogger) Error(msg string, args ...any) {
-	l.emit(slog.LevelError, msg, args...)
+func (l *CustomLogger) Error(msg any, args ...any) {
+	l.emit(slog.LevelError, stringifyMessage(msg), args...)
 }
 
 // Debug 记录调试日志
-func (l *CustomLogger) Debug(msg string, args ...any) {
-	l.emit(slog.LevelDebug, msg, args...)
+func (l *CustomLogger) Debug(msg any, args ...any) {
+	l.emit(slog.LevelDebug, stringifyMessage(msg), args...)
 }
 
 // Warn 记录警告日志
-func (l *CustomLogger) Warn(msg string, args ...any) {
-	l.emit(slog.LevelWarn, msg, args...)
+func (l *CustomLogger) Warn(msg any, args ...any) {
+	l.emit(slog.LevelWarn, stringifyMessage(msg), args...)
 }
 
 // GetLogDir 获取日志目录
@@ -286,6 +286,13 @@ func looksStructured(args []any) bool {
 		}
 	}
 	return true
+}
+
+func stringifyMessage(msg any) string {
+	if s, ok := msg.(string); ok {
+		return s
+	}
+	return fmt.Sprint(msg)
 }
 
 func trimSource(file string, line int) string {
