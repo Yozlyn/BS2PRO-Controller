@@ -102,12 +102,14 @@ jobs:
 
           $releaseTag = $finalVersion
           $artifactName = "BS2PRO-Controller-$finalVersion-windows-amd64"
+          $installerName = "BS2PRO-Controller-$finalVersion-windows-amd64-installer.exe"
 
           "base_version=$baseVersion" >> $env:GITHUB_OUTPUT
           "build_type=$buildType" >> $env:GITHUB_OUTPUT
           "final_version=$finalVersion" >> $env:GITHUB_OUTPUT
           "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
           "artifact_name=$artifactName" >> $env:GITHUB_OUTPUT
+          "installer_name=$installerName" >> $env:GITHUB_OUTPUT
 
       - name: Apply version to wails.json
         shell: pwsh
@@ -135,8 +137,11 @@ jobs:
           $artifactDir = Join-Path "artifacts" "${{ steps.meta.outputs.artifact_name }}"
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
-          if (Test-Path "build/bin") {
-            Copy-Item "build/bin/*" $artifactDir -Recurse -Force
+          $installerSource = "build/bin/BS2PRO-Controller-amd64-installer.exe"
+          $installerTarget = Join-Path $artifactDir "${{ steps.meta.outputs.installer_name }}"
+
+          if (Test-Path $installerSource) {
+            Copy-Item $installerSource $installerTarget -Force
           }
 
       - name: Upload artifacts
@@ -214,7 +219,4 @@ jobs:
           body_path: ${{ steps.release_notes.outputs.notes_path }}
           fail_on_unmatched_files: false
           files: |
-            artifacts/${{ steps.meta.outputs.artifact_name }}/BS2PRO-Controller.exe
-            artifacts/${{ steps.meta.outputs.artifact_name }}/BS2PRO-CoreService.exe
-            artifacts/${{ steps.meta.outputs.artifact_name }}/BS2PRO-Monitor.exe
-            artifacts/${{ steps.meta.outputs.artifact_name }}/BS2PRO-Controller-amd64-installer.exe
+            artifacts/${{ steps.meta.outputs.artifact_name }}/${{ steps.meta.outputs.installer_name }}
