@@ -31,8 +31,9 @@ type Manager struct {
 	menuQuitGUI  *systray.MenuItem
 	menuStopCore *systray.MenuItem
 	menuQuitAll  *systray.MenuItem
-	lastStatus   Status
-	lastTooltip  string
+	lastStatus          Status
+	lastTooltip         string
+	showWindowInFlight  int32 // atomic: 0=空闲, 1=正在派发显示窗口
 
 	// 监控托盘健康状态
 	lastIconRefresh  int64
@@ -135,9 +136,7 @@ func (m *Manager) onTrayReady() {
 
 	systray.SetOnTapped(func() {
 		m.logDebug("托盘图标左键点击: 显示主窗口")
-		if m.onShowWindow != nil {
-			m.onShowWindow()
-		}
+		m.dispatchShowWindow()
 	})
 
 	menuItems, err := m.createMenu()
@@ -260,6 +259,25 @@ func formatMenuValue(label string, value int, unit string) string {
 	return label + ": 无数据"
 }
 
+func (m *Manager) dispatchShowWindow() {
+	if m.onShowWindow == nil {
+		return
+	}
+	if !atomic.CompareAndSwapInt32(&m.showWindowInFlight, 0, 1) {
+		m.logDebug("显示主窗口请求已在派发中，忽略重复触发")
+		return
+	}
+	go func() {
+		defer atomic.StoreInt32(&m.showWindowInFlight, 0)
+		defer func() {
+			if r := recover(); r != nil {
+				m.logError("派发显示主窗口时发生 panic", "reason", r)
+			}
+		}()
+		m.onShowWindow()
+	}()
+}
+
 func (m *Manager) handleMenuEvents() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -276,9 +294,7 @@ func (m *Manager) handleMenuEvents() {
 		select {
 		case <-m.menuItems.Show.ClickedCh:
 			m.logDebug("托盘菜单: 显示主窗口")
-			if m.onShowWindow != nil {
-				m.onShowWindow()
-			}
+			m.dispatchShowWindow()
 		case <-m.menuItems.AutoControl.ClickedCh:
 			m.logDebug("托盘菜单: 切换智能变频状态")
 			if m.onToggleAuto != nil {

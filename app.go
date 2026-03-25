@@ -47,6 +47,7 @@ type App struct {
 	autoControlState            bool
 	registerGUIRoleRunning      atomic.Bool
 	registeredGUIRoleGeneration atomic.Int64
+	showWindowInFlight          atomic.Bool
 
 	// 自启动管理器，启动时初始化一次
 	autostartManager *autostart.Manager
@@ -1266,22 +1267,32 @@ func (a *App) CheckMonitorAutoStart() bool {
 }
 
 func (a *App) ShowWindow() {
-	if a.ctx != nil {
-		a.mutex.RLock()
-		wasVisible := a.windowVisible
-		a.mutex.RUnlock()
-		logInfo("ShowWindow 调用", "previous_visible", wasVisible)
-		a.mutex.Lock()
-		a.windowVisible = true
-		a.mutex.Unlock()
-		runtime.WindowUnminimise(a.ctx)
-		runtime.WindowShow(a.ctx)
-		runtime.WindowSetAlwaysOnTop(a.ctx, true)
-		runtime.WindowSetAlwaysOnTop(a.ctx, false)
-		logInfo("ShowWindow 已执行 WindowShow/AlwaysOnTop 刷新")
-		runtime.EventsEmit(a.ctx, "window-shown", nil)
-		logInfo("ShowWindow 已发送 window-shown 事件")
+	if a.ctx == nil {
+		return
 	}
+	if !a.showWindowInFlight.CompareAndSwap(false, true) {
+		logDebug("ShowWindow 请求已在处理中，忽略重复触发")
+		return
+	}
+	defer a.showWindowInFlight.Store(false)
+
+	a.mutex.RLock()
+	wasVisible := a.windowVisible
+	a.mutex.RUnlock()
+	logInfo("ShowWindow 调用", "previous_visible", wasVisible)
+
+	a.mutex.Lock()
+	a.windowVisible = true
+	a.mutex.Unlock()
+
+	runtime.WindowUnminimise(a.ctx)
+	runtime.WindowShow(a.ctx)
+	runtime.WindowSetAlwaysOnTop(a.ctx, true)
+	runtime.WindowSetAlwaysOnTop(a.ctx, false)
+	logInfo("ShowWindow 已执行 WindowShow/AlwaysOnTop 刷新")
+
+	runtime.EventsEmit(a.ctx, "window-shown", nil)
+	logInfo("ShowWindow 已发送 window-shown 事件")
 }
 
 func (a *App) HideWindow() {
