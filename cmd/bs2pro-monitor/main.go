@@ -3,7 +3,7 @@ package main
 import (
 	_ "embed"
 	"encoding/json"
-	"log"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,15 +48,27 @@ func init() {
 	initMonitorLogger()
 }
 
-func monitorLog(msg any, args ...any) {
+func monitorDebug(msg string, args ...any) {
 	if monitorLogger != nil {
 		monitorLogger.Debug(msg, args...)
 	}
 }
 
-func monitorInfo(msg any, args ...any) {
+func monitorInfo(msg string, args ...any) {
 	if monitorLogger != nil {
 		monitorLogger.Info(msg, args...)
+	}
+}
+
+func monitorWarn(msg string, args ...any) {
+	if monitorLogger != nil {
+		monitorLogger.Warn(msg, args...)
+	}
+}
+
+func monitorError(msg string, args ...any) {
+	if monitorLogger != nil {
+		monitorLogger.Error(msg, args...)
 	}
 }
 
@@ -72,7 +84,7 @@ func initMonitorLogger() {
 		Console: false,
 	})
 	if err != nil {
-		log.Printf("init monitor logger failed: %v", err)
+		fmt.Fprintf(os.Stderr, "init monitor logger failed: %v\n", err)
 		return
 	}
 	customLogger.CleanOldLogs()
@@ -83,16 +95,16 @@ func main() {
 	hideConsoleWindow()
 
 	if !monitorInstance.Acquire() {
-		monitorLog("monitor instance already running, exit")
+		monitorDebug("monitor instance already running, exit")
 		return
 	}
 	defer monitorInstance.Release()
 
 	if err := notification.EnsureCurrentProcessAppID(""); err != nil {
-		monitorLog("ensure process app id failed: %v", err)
+		monitorWarn("ensure process app id failed", "error", err)
 	}
 	if err := notification.EnsureMonitorStartMenuShortcut(); err != nil {
-		monitorLog("ensure monitor shortcut failed: %v", err)
+		monitorWarn("ensure monitor shortcut failed", "error", err)
 	}
 	configManager := config.NewManager(config.GetInstallDir(), nil)
 	startupCfg := configManager.Load(false)
@@ -106,14 +118,14 @@ func main() {
 	for {
 		if err := client.Connect(); err != nil {
 			serviceState.MarkDisconnected()
-			monitorLog("connect core failed: %v", err)
+			monitorWarn("connect core failed", "error", err)
 			time.Sleep(3 * time.Second)
 			continue
 		}
 
 		serviceState.MarkConnected()
 		if _, err := client.SendRequest(ipc.ReqRegisterClient, ipc.RegisterClientParams{Role: ipc.RoleMonitorAgent}); err != nil {
-			monitorInfo("register monitor failed: %v", err)
+			monitorWarn("register monitor failed", "error", err)
 		} else {
 			monitorInfo("register monitor success")
 		}
@@ -128,7 +140,7 @@ func main() {
 					ProcessName: processName,
 					ReportedAt:  time.Now().Format(time.RFC3339),
 				}); err != nil {
-					monitorLog("report foreground process failed: %v", err)
+					monitorWarn("report foreground process failed", "error", err)
 					break
 				}
 			}
@@ -183,20 +195,18 @@ func (s *monitorTrayStateStore) SetDisconnected() {
 
 type monitorTrayLoggerAdapter struct{}
 
-func (l *monitorTrayLoggerAdapter) Info(msg any, args ...any)     { monitorInfo(msg, args...) }
-func (l *monitorTrayLoggerAdapter) Error(msg any, args ...any)    { monitorInfo(msg, args...) }
-func (l *monitorTrayLoggerAdapter) Debug(msg any, args ...any)    { monitorLog(msg, args...) }
-func (l *monitorTrayLoggerAdapter) Warn(msg any, args ...any)     { monitorInfo(msg, args...) }
-func (l *monitorTrayLoggerAdapter) Infof(format string, v ...any) { monitorInfo(format, v...) }
-func (l *monitorTrayLoggerAdapter) Errorf(format string, v ...any) {
-	monitorInfo(format, v...)
+func (l *monitorTrayLoggerAdapter) Info(msg any, args ...any) { monitorInfo(fmt.Sprint(msg), args...) }
+func (l *monitorTrayLoggerAdapter) Error(msg any, args ...any) {
+	monitorError(fmt.Sprint(msg), args...)
 }
-func (l *monitorTrayLoggerAdapter) Debugf(format string, v ...any) { monitorLog(format, v...) }
-func (l *monitorTrayLoggerAdapter) Warnf(format string, v ...any)  { monitorInfo(format, v...) }
-func (l *monitorTrayLoggerAdapter) Close()                         {}
-func (l *monitorTrayLoggerAdapter) CleanOldLogs()                  {}
-func (l *monitorTrayLoggerAdapter) SetDebugMode(enabled bool)      { setMonitorDebugMode(enabled) }
-func (l *monitorTrayLoggerAdapter) GetLogDir() string              { return config.GetLogDir() }
+func (l *monitorTrayLoggerAdapter) Debug(msg any, args ...any) {
+	monitorDebug(fmt.Sprint(msg), args...)
+}
+func (l *monitorTrayLoggerAdapter) Warn(msg any, args ...any) { monitorWarn(fmt.Sprint(msg), args...) }
+func (l *monitorTrayLoggerAdapter) Close()                    {}
+func (l *monitorTrayLoggerAdapter) CleanOldLogs()             {}
+func (l *monitorTrayLoggerAdapter) SetDebugMode(enabled bool) { setMonitorDebugMode(enabled) }
+func (l *monitorTrayLoggerAdapter) GetLogDir() string         { return config.GetLogDir() }
 
 func initMonitorTray() {
 	if monitorTrayManager != nil && monitorTrayManager.IsInitialized() {
@@ -229,9 +239,9 @@ func syncTrayEnabled(enabled bool) {
 func showOrLaunchGUI() {
 	now := time.Now().UnixMilli()
 	last := atomic.LoadInt64(&lastGUIShowRequest)
-	monitorInfo("show or launch gui requested: now=%d last=%d delta=%dms", now, last, now-last)
+	monitorInfo("show or launch gui requested", "now", now, "last", last, "delta_ms", now-last)
 	if last != 0 && now-last < 1200 {
-		monitorInfo("show or launch gui ignored by debounce: delta=%dms", now-last)
+		monitorInfo("show or launch gui ignored by debounce", "delta_ms", now-last)
 		return
 	}
 	atomic.StoreInt64(&lastGUIShowRequest, now)
@@ -241,34 +251,34 @@ func showOrLaunchGUI() {
 
 func launchGUI() {
 	guiPath := filepath.Join(config.GetInstallDir(), "BS2PRO-Controller.exe")
-	monitorInfo("launch gui start: path=%s", guiPath)
+	monitorInfo("launch gui start", "path", guiPath)
 	if _, err := os.Stat(guiPath); err != nil {
-		monitorInfo("launch gui stat failed: %v", err)
+		monitorWarn("launch gui stat failed", "path", guiPath, "error", err)
 		return
 	}
 	cmd := exec.Command(guiPath)
 	cmd.Dir = filepath.Dir(guiPath)
 	platformutil.HideCommandWindow(cmd)
 	if err := cmd.Start(); err != nil {
-		monitorInfo("launch gui failed: %v", err)
+		monitorError("launch gui failed", "path", guiPath, "error", err)
 		return
 	}
-	monitorInfo("launch gui started: pid=%d", cmd.Process.Pid)
+	monitorInfo("launch gui started", "path", guiPath, "pid", cmd.Process.Pid)
 }
 
 func quitGUI() {
 	checkCmd := exec.Command("tasklist", "/FI", "IMAGENAME eq BS2PRO-Controller.exe")
 	platformutil.HideCommandWindow(checkCmd)
 	if out, err := checkCmd.Output(); err == nil {
-		monitorInfo("quit gui precheck: processFound=%v", strings.Contains(strings.ToLower(string(out)), "bs2pro-controller.exe"))
+		monitorInfo("quit gui precheck", "process_found", strings.Contains(strings.ToLower(string(out)), "bs2pro-controller.exe"))
 	} else {
-		monitorInfo("quit gui precheck failed: %v", err)
+		monitorWarn("quit gui precheck failed", "error", err)
 	}
 	cmd := exec.Command("taskkill", "/F", "/IM", "BS2PRO-Controller.exe")
 	platformutil.HideCommandWindow(cmd)
 	monitorInfo("quit gui taskkill start")
 	if err := cmd.Run(); err != nil {
-		monitorInfo("quit gui failed: %v", err)
+		monitorWarn("quit gui failed", "error", err)
 		return
 	}
 	monitorInfo("quit gui taskkill success")
@@ -277,19 +287,19 @@ func quitGUI() {
 func triggerCoreRestart() {
 	client := ipc.NewClient(nil)
 	if err := client.Connect(); err != nil {
-		monitorInfo("restart core connect failed: %v", err)
+		monitorWarn("restart core connect failed", "error", err)
 		return
 	}
 	defer client.Close()
 	if _, err := client.SendRequest(ipc.ReqRestartService, nil); err != nil {
-		monitorInfo("restart core failed: %v", err)
+		monitorWarn("restart core failed", "error", err)
 	}
 }
 
 func toggleCorePaused() bool {
 	client := ipc.NewClient(nil)
 	if err := client.Connect(); err != nil {
-		monitorInfo("toggle core connect failed: %v", err)
+		monitorWarn("toggle core connect failed", "error", err)
 		return monitorTrayState.GetStatus().CoreRunning
 	}
 	defer client.Close()
@@ -301,7 +311,7 @@ func toggleCorePaused() bool {
 		nextRunning = true
 	}
 	if _, err := client.SendRequest(requestType, nil); err != nil {
-		monitorInfo("toggle core failed: %v", err)
+		monitorWarn("toggle core failed", "request_type", requestType, "error", err)
 		return status.CoreRunning
 	}
 	status.CoreRunning = nextRunning
@@ -318,14 +328,14 @@ func toggleCorePaused() bool {
 func toggleAutoControl() bool {
 	client := ipc.NewClient(nil)
 	if err := client.Connect(); err != nil {
-		monitorInfo("toggle auto control connect failed: %v", err)
+		monitorWarn("toggle auto control connect failed", "error", err)
 		return monitorTrayState.GetStatus().AutoControlState
 	}
 	defer client.Close()
 	status := monitorTrayState.GetStatus()
 	next := !status.AutoControlState
 	if _, err := client.SendRequest(ipc.ReqSetAutoControl, ipc.SetAutoControlParams{Enabled: next}); err != nil {
-		monitorInfo("toggle auto control failed: %v", err)
+		monitorWarn("toggle auto control failed", "enabled", next, "error", err)
 		return status.AutoControlState
 	}
 	status.AutoControlState = next
@@ -450,7 +460,11 @@ func createSingleInstanceGuard() *singleInstanceGuard {
 func (g *singleInstanceGuard) Acquire() bool {
 	name, err := windows.UTF16PtrFromString("Local\\BS2PRO-Controller-Monitor")
 	if err != nil {
-		log.Printf("create mutex name failed: %v", err)
+		if monitorLogger != nil {
+			monitorError("create mutex name failed", "error", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "create mutex name failed: %v\n", err)
+		}
 		return true
 	}
 	handle, err := windows.CreateMutex(nil, false, name)
@@ -461,7 +475,11 @@ func (g *singleInstanceGuard) Acquire() bool {
 			}
 			return false
 		}
-		log.Printf("create mutex failed: %v", err)
+		if monitorLogger != nil {
+			monitorError("create mutex failed", "error", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "create mutex failed: %v\n", err)
+		}
 		return true
 	}
 	g.handle = handle
@@ -480,21 +498,21 @@ func (g *singleInstanceGuard) Release() {
 func refreshGlobalHotkeys(client *ipc.Client) {
 	resp, err := client.SendRequest(ipc.ReqGetConfig, nil)
 	if err != nil || resp == nil || !resp.Success {
-		monitorLog("load config for hotkeys failed: %v", err)
+		monitorWarn("load config for hotkeys failed", "response_nil", resp == nil, "success", resp != nil && resp.Success, "error", err)
 		return
 	}
 	var cfg types.AppConfig
 	if err := json.Unmarshal(resp.Data, &cfg); err != nil {
-		monitorInfo("parse config for hotkeys failed: %v", err)
+		monitorWarn("parse config for hotkeys failed", "error", err)
 		return
 	}
 	setMonitorDebugMode(cfg.DebugMode)
 	if cfg.Hotkeys == nil {
-		monitorLog("refresh global hotkeys with nil config")
+		monitorDebug("refresh global hotkeys with nil config")
 	} else {
-		monitorLog("refresh global hotkeys bindings: enabled=%v global=%d inapp=%d", cfg.Hotkeys.Enabled, len(cfg.Hotkeys.Global), len(cfg.Hotkeys.InApp))
+		monitorDebug("refresh global hotkeys bindings", "enabled", cfg.Hotkeys.Enabled, "global", len(cfg.Hotkeys.Global), "inapp", len(cfg.Hotkeys.InApp))
 		for i, binding := range cfg.Hotkeys.Global {
-			monitorLog("global binding[%d]: action=%s accelerator=%s enabled=%v scope=%s", i, binding.Action, binding.Accelerator, binding.Enabled, binding.Scope)
+			monitorDebug("global binding", "index", i, "action", binding.Action, "accelerator", binding.Accelerator, "enabled", binding.Enabled, "scope", binding.Scope)
 		}
 	}
 	globalHotkeys.Apply(cfg.Hotkeys, func(action string) {
@@ -505,43 +523,43 @@ func refreshGlobalHotkeys(client *ipc.Client) {
 	if cfg.Hotkeys != nil {
 		globalCount = len(cfg.Hotkeys.Global)
 	}
-	monitorLog("refresh global hotkeys: enabled=%v global=%d conflicts=%d", cfg.Hotkeys != nil && cfg.Hotkeys.Enabled, globalCount, len(conflicts))
+	monitorDebug("refresh global hotkeys", "enabled", cfg.Hotkeys != nil && cfg.Hotkeys.Enabled, "global", globalCount, "conflicts", len(conflicts))
 	if _, err := client.SendRequest(ipc.ReqReportHotkeyConflicts, conflicts); err != nil {
-		monitorInfo("report hotkey conflicts failed: %v", err)
+		monitorWarn("report hotkey conflicts failed", "error", err)
 	}
 }
 
 func handleGlobalAction(client *ipc.Client, action string) {
 	if hotkeyEditMode {
-		monitorLog("hotkey action ignored during edit mode: %s", action)
+		monitorDebug("hotkey action ignored during edit mode", "action", action)
 		return
 	}
 	if action == "show-main-window" {
-		monitorLog("dispatch global hotkey action locally: %s", action)
+		monitorDebug("dispatch global hotkey action locally", "action", action)
 		showOrLaunchGUI()
 		return
 	}
-	monitorLog("dispatch global hotkey action: %s", action)
+	monitorDebug("dispatch global hotkey action", "action", action)
 	if _, err := client.SendRequest(ipc.ReqTriggerHotkeyAction, ipc.TriggerHotkeyActionParams{Action: action}); err != nil {
-		monitorInfo("trigger hotkey action failed: action=%s err=%v", action, err)
+		monitorWarn("trigger hotkey action failed", "action", action, "error", err)
 	}
 }
 
 func handleEvent(event ipc.Event) {
-	monitorLog("monitor event received: type=%s bytes=%d", event.Type, len(event.Data))
+	monitorDebug("monitor event received", "type", event.Type, "bytes", len(event.Data))
 	if event.Type == ipc.EventConfigUpdate {
 		var cfg types.AppConfig
 		if err := json.Unmarshal(event.Data, &cfg); err == nil {
 			setMonitorDebugMode(cfg.DebugMode)
 			syncTrayEnabled(cfg.TrayEnabled)
 			if cfg.Hotkeys == nil {
-				monitorLog("config update hotkeys=nil")
+				monitorDebug("config update hotkeys=nil")
 			} else {
-				monitorLog("config update hotkeys: enabled=%v global=%d", cfg.Hotkeys.Enabled, len(cfg.Hotkeys.Global))
+				monitorDebug("config update hotkeys", "enabled", cfg.Hotkeys.Enabled, "global", len(cfg.Hotkeys.Global))
 			}
 			globalHotkeys.Apply(cfg.Hotkeys, nil)
 		} else {
-			monitorLog("config update parse failed: %v", err)
+			monitorWarn("config update parse failed", "error", err)
 		}
 		return
 	}
@@ -549,7 +567,7 @@ func handleEvent(event ipc.Event) {
 		var params ipc.SetBoolParams
 		if err := json.Unmarshal(event.Data, &params); err == nil {
 			hotkeyEditMode = params.Enabled
-			monitorInfo("hotkey edit mode changed: enabled=%v", hotkeyEditMode)
+			monitorInfo("hotkey edit mode changed", "enabled", hotkeyEditMode)
 		}
 		return
 	}
@@ -559,15 +577,15 @@ func handleEvent(event ipc.Event) {
 
 	var req notification.Request
 	if err := json.Unmarshal(event.Data, &req); err != nil {
-		monitorInfo("parse notification failed: %v", err)
+		monitorWarn("parse notification failed", "error", err)
 		return
 	}
-	monitorLog("received notification event: type=%s title=%s", req.Type, req.Title)
+	monitorDebug("received notification event", "type", req.Type, "title", req.Title)
 	if err := notification.Send("", req.Title, req.Message); err != nil {
-		monitorInfo("show notification failed: %v", err)
+		monitorWarn("show notification failed", "type", req.Type, "title", req.Title, "error", err)
 		return
 	}
-	monitorLog("notification shown: type=%s", req.Type)
+	monitorDebug("notification shown", "type", req.Type)
 }
 
 type globalHotkeyAgent struct {
@@ -586,7 +604,7 @@ func newGlobalHotkeyAgent() *globalHotkeyAgent {
 func (a *globalHotkeyAgent) Apply(cfg *types.HotkeyConfig, handler func(string)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	monitorLog("globalHotkeyAgent.Apply start: handlerSet=%v cfgNil=%v", handler != nil, cfg == nil)
+	monitorDebug("globalHotkeyAgent.Apply start", "handler_set", handler != nil, "cfg_nil", cfg == nil)
 	if handler != nil {
 		a.handler = handler
 	}
@@ -603,14 +621,14 @@ func (a *globalHotkeyAgent) Apply(cfg *types.HotkeyConfig, handler func(string))
 	}
 	stop, bindings, err := registerGlobalHotkeys(cfg.Global, a.dispatch)
 	if err != nil {
-		monitorInfo("register global hotkeys failed: %v", err)
+		monitorWarn("register global hotkeys failed", "error", err)
 		a.conflicts = buildHotkeyConflictsFromError(err)
 		return
 	}
 	a.loopStop = stop
 	a.bindings = bindings
 	a.conflicts = collectSystemHotkeyConflicts(cfg.Global, bindings)
-	monitorInfo("global hotkeys active=%d conflicts=%d", len(bindings), len(a.conflicts))
+	monitorInfo("global hotkeys active", "bindings", len(bindings), "conflicts", len(a.conflicts))
 }
 
 func (a *globalHotkeyAgent) Conflicts() []types.HotkeyConflict {
@@ -626,7 +644,7 @@ func (a *globalHotkeyAgent) dispatch(action string) {
 	handler := a.handler
 	a.mu.Unlock()
 	if handler != nil {
-		monitorLog("received WM_HOTKEY action: %s", action)
+		monitorDebug("received WM_HOTKEY action", "action", action)
 		handler(action)
 	}
 }

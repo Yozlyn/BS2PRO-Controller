@@ -3,7 +3,6 @@ package main
 import (
 	"embed"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -147,7 +146,12 @@ func main() {
 	})
 
 	if err != nil {
-		log.Fatal(err)
+		if guiLogger != nil {
+			guiLogger.Error("启动 GUI 失败", "error", err)
+			guiLogger.Sync()
+		}
+		fmt.Fprintf(os.Stderr, "启动 GUI 失败: %v\n", err)
+		os.Exit(1)
 	}
 }
 

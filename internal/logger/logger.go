@@ -255,7 +255,7 @@ func shouldSkipFrame(frame runtime.Frame) bool {
 	if strings.Contains(file, "/internal/logger/") {
 		return true
 	}
-	for _, suffix := range []string{".logInfo", ".logError", ".logWarn", ".logDebug"} {
+	for _, suffix := range []string{".logInfo", ".logError", ".logWarn", ".logDebug", ".monitorInfo", ".monitorWarn", ".monitorError", ".monitorDebug"} {
 		if strings.HasSuffix(frame.Function, suffix) {
 			return true
 		}

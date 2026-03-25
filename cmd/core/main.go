@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/kardianos/service"
@@ -35,9 +34,10 @@ func (p *program) Start(s service.Service) error {
 			}
 		}()
 		if err := p.app.Start(); err != nil {
-			svcLogger, loggerErr := s.Logger(nil)
-			if loggerErr == nil {
-				svcLogger.Errorf("启动核心服务失败: %v", err)
+			if p.app != nil {
+				p.app.logError("启动核心服务失败", "error", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "启动核心服务失败: %v\n", err)
 			}
 		}
 	}()
@@ -88,7 +88,8 @@ func main() {
 	prg := &program{}
 	s, err := service.New(prg, svcConfig)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Fprintf(os.Stderr, "创建核心服务失败: %v\n", err)
+		os.Exit(1)
 	}
 
 	// 处理服务相关的命令行指令 (install, uninstall, start, stop 等)
@@ -97,7 +98,8 @@ func main() {
 		if cmd == "install" || cmd == "uninstall" || cmd == "start" || cmd == "stop" || cmd == "restart" {
 			err = service.Control(s, cmd)
 			if err != nil {
-				log.Fatalf("执行服务命令 '%s' 失败: %v", cmd, err)
+				fmt.Fprintf(os.Stderr, "执行服务命令失败: cmd=%s error=%v\n", cmd, err)
+				os.Exit(1)
 			}
 			fmt.Printf("成功执行服务命令: %s\n", cmd)
 			return
@@ -107,6 +109,7 @@ func main() {
 	// 默认运行（如果通过系统服务管理器启动，则进入服务运行模式）
 	err = s.Run()
 	if err != nil {
-		log.Fatal(err)
+		fmt.Fprintf(os.Stderr, "运行核心服务失败: %v\n", err)
+		os.Exit(1)
 	}
 }

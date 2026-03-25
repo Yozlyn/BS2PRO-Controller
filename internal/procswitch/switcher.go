@@ -10,18 +10,12 @@ import (
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
 )
 
-type Logger interface {
-	Debug(msg any, args ...any)
-	Error(msg any, args ...any)
-	Warn(msg any, args ...any)
-}
-
 type Switcher struct {
 	baseDir string
-	logger  Logger
+	logger  types.Logger
 }
 
-func New(baseDir string, logger Logger) *Switcher {
+func New(baseDir string, logger types.Logger) *Switcher {
 	return &Switcher{baseDir: baseDir, logger: logger}
 }
 

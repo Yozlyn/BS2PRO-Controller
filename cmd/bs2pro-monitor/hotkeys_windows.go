@@ -5,8 +5,8 @@ package main
 import (
 	"fmt"
 	"runtime"
-	"syscall"
 	"strings"
+	"syscall"
 	"unsafe"
 
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
@@ -16,11 +16,11 @@ import (
 const errorHotkeyAlreadyRegistered syscall.Errno = 1409
 
 const (
-	wmHotkey = 0x0312
-	modAlt   = 0x0001
-	modCtrl  = 0x0002
-	modShift = 0x0004
-	modWin   = 0x0008
+	wmHotkey    = 0x0312
+	modAlt      = 0x0001
+	modCtrl     = 0x0002
+	modShift    = 0x0004
+	modWin      = 0x0008
 	modNoRepeat = 0x4000
 )
 
@@ -59,18 +59,18 @@ func registerGlobalHotkeys(bindings []types.HotkeyBinding, onAction func(string)
 		defer runtime.UnlockOSThread()
 		defer close(doneCh)
 
-		monitorLog("hotkey worker thread entered")
+		monitorDebug("hotkey worker thread entered")
 
 		active := map[int]types.HotkeyBinding{}
 		ids := make([]int, 0, len(bindings))
 		failures := make([]string, 0)
 		for i, binding := range bindings {
 			if !binding.Enabled {
-				monitorLog("skip disabled hotkey: action=%s accelerator=%s", binding.Action, binding.Accelerator)
+				monitorDebug("skip disabled hotkey", "action", binding.Action, "accelerator", binding.Accelerator)
 				continue
 			}
 			mods, key, ok := parseWindowsAccelerator(binding.Accelerator)
-			monitorLog("parse hotkey: action=%s accelerator=%s ok=%v mods=0x%X vk=0x%X", binding.Action, binding.Accelerator, ok, mods, key)
+			monitorDebug("parse hotkey", "action", binding.Action, "accelerator", binding.Accelerator, "ok", ok, "mods", fmt.Sprintf("0x%X", mods), "vk", fmt.Sprintf("0x%X", key))
 			if !ok {
 				failures = append(failures, fmt.Sprintf("%s: invalid accelerator", binding.Action))
 				continue
@@ -87,10 +87,10 @@ func registerGlobalHotkeys(bindings []types.HotkeyBinding, onAction func(string)
 			}
 			ids = append(ids, id)
 			active[id] = binding
-			monitorLog("global hotkey registered: id=%d accelerator=%s action=%s mods=0x%X vk=0x%X", id, binding.Accelerator, binding.Action, mods|modNoRepeat, key)
+			monitorInfo("global hotkey registered", "id", id, "accelerator", binding.Accelerator, "action", binding.Action, "mods", fmt.Sprintf("0x%X", mods|modNoRepeat), "vk", fmt.Sprintf("0x%X", key))
 		}
 		if len(active) == 0 && len(failures) > 0 {
-			monitorLog("hotkey registration failed for all bindings: %s", strings.Join(failures, "; "))
+			monitorWarn("hotkey registration failed for all bindings", "failures", strings.Join(failures, "; "))
 			started <- struct {
 				threadID uint32
 				active   map[int]types.HotkeyBinding
@@ -101,7 +101,7 @@ func registerGlobalHotkeys(bindings []types.HotkeyBinding, onAction func(string)
 
 		threadID := windows.GetCurrentThreadId()
 		if len(failures) > 0 {
-			monitorLog("global hotkey partial failures: %s", strings.Join(failures, "; "))
+			monitorWarn("global hotkey partial failures", "failures", strings.Join(failures, "; "))
 		}
 		started <- struct {
 			threadID uint32
@@ -111,16 +111,16 @@ func registerGlobalHotkeys(bindings []types.HotkeyBinding, onAction func(string)
 
 		go func() {
 			<-stopCh
-			monitorLog("hotkey worker stop requested: thread=%d", threadID)
+			monitorDebug("hotkey worker stop requested", "thread", threadID)
 			procPostThreadMsg.Call(uintptr(threadID), wmQuit, 0, 0)
 		}()
-		monitorLog("global hotkey loop started: thread=%d active=%d", threadID, len(active))
+		monitorDebug("global hotkey loop started", "thread", threadID, "active", len(active))
 
 		var message msg
 		for {
 			ret, _, _ := procGetMessage.Call(uintptr(unsafe.Pointer(&message)), 0, 0, 0)
 			if int32(ret) <= 0 || message.message == wmQuit {
-				monitorLog("global hotkey loop exiting: thread=%d", threadID)
+				monitorDebug("global hotkey loop exiting", "thread", threadID)
 				unregisterIDs(ids)
 				return
 			}
@@ -128,7 +128,7 @@ func registerGlobalHotkeys(bindings []types.HotkeyBinding, onAction func(string)
 				continue
 			}
 			if binding, ok := active[int(message.wParam)]; ok && onAction != nil {
-				monitorLog("WM_HOTKEY matched: id=%d accelerator=%s action=%s", int(message.wParam), binding.Accelerator, binding.Action)
+				monitorDebug("WM_HOTKEY matched", "id", int(message.wParam), "accelerator", binding.Accelerator, "action", binding.Action)
 				go onAction(binding.Action)
 			}
 		}
