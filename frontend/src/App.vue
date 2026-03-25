@@ -57,7 +57,7 @@
           <SidebarItem :icon="Settings" label="系统设置" :active="currentView === 'system-settings'"
                        @click="setCurrentView('system-settings')" :is-dark="isDark" :is-collapsed="isCollapsed" />
         </div>
-        <div class="pt-4 border-t border-slate-100/50 dark:border-white/5">
+        <div class="pt-4 border-t border-slate-100/50 dark:border-white/5 space-y-3">
         <div class="flex items-center transition-all duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
              :class="isCollapsed ? 'flex-col space-y-2' : 'justify-between'">
           <button
@@ -79,7 +79,7 @@
           </button>
         </div>
           <SidebarItem :icon="Info" label="关于软件" :is-dark="isDark" :is-collapsed="isCollapsed"
-                       :active="currentView === 'about'" @click="setCurrentView('about')" />
+                        :active="currentView === 'about'" @click="setCurrentView('about')" />
         </div>
       </aside>
 
