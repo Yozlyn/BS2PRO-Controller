@@ -568,11 +568,6 @@ func (a *CoreApp) scheduleReconnect(gen int32) {
 		}
 		if a.ConnectDevice() {
 			a.logInfo("设备重连成功")
-			cfg := a.configManager.Get()
-			if cfg.IgnoreDeviceOnReconnect {
-				a.logInfo("断连保持配置模式已开启，重新应用APP配置")
-				a.applyConfigOnConnect()
-			}
 			return true
 		}
 		return false
@@ -1392,17 +1387,13 @@ func (a *CoreApp) triggerHotkeyAction(action string) {
 func (a *CoreApp) toggleAutoControlHotkey() {
 	cfg := a.configManager.Get()
 	next := !cfg.AutoControl
-	if err := a.SetAutoControl(next); err == nil {
-		a.emitNotification(notification.Request{Type: notification.TypeAutoControlChanged, Title: "智能变频已切换", Message: boolMessage(next, "智能变频已开启", "智能变频已关闭")})
-	}
+	_ = a.SetAutoControl(next)
 }
 
 func (a *CoreApp) toggleProcessSwitchHotkey() {
 	cfg := a.configManager.Get()
 	next := !cfg.ProcessSwitchEnabled
-	if err := a.SetProcessSwitchEnabled(next); err == nil {
-		a.emitNotification(notification.Request{Type: notification.TypeProcessSwitchChanged, Title: "进程联动已切换", Message: boolMessage(next, "进程联动已开启", "进程联动已关闭")})
-	}
+	_ = a.SetProcessSwitchEnabled(next)
 }
 
 func (a *CoreApp) toggleOffsetHotkey() {
