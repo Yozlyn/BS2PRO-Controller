@@ -1025,10 +1025,10 @@ func (a *CoreApp) SetAutoControl(enabled bool) error {
 			a.applyCurrentGearSetting()
 		})
 	} else if enabled && isConnected {
-		// 当开启智能变频时（从手动模式切换过来），需要恢复RGB状态
-		a.safeGo("restoreCurrentRGB-autoControl", func() {
+		// 当开启智能变频时，仅在智能灯光模式下静默补应用一次智能灯光
+		a.safeGo("restoreSmartRGB-autoControl", func() {
 			time.Sleep(300 * time.Millisecond) // 给硬件更多时间切换状态
-			a.restoreCurrentRGB()
+			a.restoreSmartRGBForAutoControl()
 		})
 		// 确保进入自动模式，即使温度监控已经在运行
 		a.safeGo("enterAutoMode", func() {
@@ -1196,19 +1196,7 @@ func (a *CoreApp) SetRGBMode(params ipc.SetRGBModeParams) bool {
 		curTemp := a.currentTemp.MaxTemp
 		a.mutex.Unlock()
 
-		var level byte = 1
-		if curTemp > 0 {
-			if curTemp < 60 {
-				level = 1
-			} else if curTemp < 85 {
-				level = 2
-			} else if curTemp < 90 {
-				level = 3
-			} else {
-				level = 4
-			}
-		}
-
+		level := smartRGBLevelForTemp(curTemp)
 		success = rgbCtrl.SetSmartTempLevel(level)
 		if success {
 			a.mutex.Lock()
@@ -1770,6 +1758,23 @@ func (a *CoreApp) logDebug(msg any, args ...any) {
 	}
 }
 
+// smartRGBLevelForTemp 根据当前温度映射智能灯光档位
+func smartRGBLevelForTemp(temp int) byte {
+	level := byte(1)
+	if temp > 0 {
+		if temp < 60 {
+			level = 1
+		} else if temp < 85 {
+			level = 2
+		} else if temp < 90 {
+			level = 3
+		} else {
+			level = 4
+		}
+	}
+	return level
+}
+
 // rgbParamsFromConfig 从配置构造 RGB 参数
 func rgbParamsFromConfig(cfg types.AppConfig) ipc.SetRGBModeParams {
 	params := ipc.SetRGBModeParams{
@@ -1790,6 +1795,30 @@ func (a *CoreApp) restoreCurrentRGB() {
 		return
 	}
 	a.SetRGBMode(rgbParamsFromConfig(a.configManager.Get()))
+}
+
+// restoreSmartRGBForAutoControl 在开启智能变频时，仅对智能灯光模式静默补应用一次
+func (a *CoreApp) restoreSmartRGBForAutoControl() {
+	if !a.isConnected {
+		return
+	}
+
+	cfg := a.configManager.Get()
+	if cfg.RGBConfig == nil || cfg.RGBConfig.Mode != "smart" {
+		return
+	}
+
+	a.mutex.Lock()
+	a.lastSmartModeLevel = 0
+	curTemp := a.currentTemp.MaxTemp
+	a.mutex.Unlock()
+
+	level := smartRGBLevelForTemp(curTemp)
+	if a.deviceManager.RGB().SetSmartTempLevel(level) {
+		a.mutex.Lock()
+		a.lastSmartModeLevel = level
+		a.mutex.Unlock()
+	}
 }
 
 func (a *CoreApp) RestartService() bool {
