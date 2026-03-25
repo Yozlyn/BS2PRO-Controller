@@ -27,9 +27,6 @@ import (
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/version"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // App struct - GUI 应用程序结构
@@ -67,87 +64,54 @@ type (
 	RGBColorParam         = ipc.RGBColorParam
 )
 
-var guiLogger *zap.SugaredLogger
+var guiLogger *logger.CustomLogger
 
 func init() {
-	installDir := config.GetInstallDir()
-	customLogger, err := logger.NewCustomLogger(false, installDir, "gui")
-	if err != nil {
-		fallbackInit()
-		return
-	}
-
-	guiLogger = customLogger.GetSugaredLogger()
+	guiLogger = initGUILogger()
 }
 
-func fallbackInit() {
-	logDir := config.GetLogDir()
-	_ = os.MkdirAll(logDir, 0755)
 
-	logFilePath := filepath.Join(logDir, fmt.Sprintf("gui_%s.log", time.Now().Format("2006-01-02")))
-
-	fileWriter := zapcore.AddSync(&lumberjack.Logger{
-		Filename:   logFilePath,
-		MaxSize:    10,
-		MaxBackups: 7,
-		MaxAge:     7,
-		Compress:   true,
-	})
-
-	// 使用CSV编码器，与核心服务日志格式保持一致
-	csvEncoderCfg := zapcore.EncoderConfig{
-		TimeKey:    "time",
-		LevelKey:   "level",
-		CallerKey:  "caller",
-		MessageKey: "msg",
-		LineEnding: zapcore.DefaultLineEnding,
-		EncodeLevel: func(l zapcore.Level, enc zapcore.PrimitiveArrayEncoder) {
-			enc.AppendString(`"` + l.CapitalString() + `"`)
-		},
-		EncodeTime: func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
-			enc.AppendString(`"` + t.Format("2006-01-02 15:04:05") + `"`)
-		},
-		EncodeDuration: zapcore.StringDurationEncoder,
-		EncodeCaller: func(caller zapcore.EntryCaller, enc zapcore.PrimitiveArrayEncoder) {
-			enc.AppendString(`"` + caller.TrimmedPath() + `"`)
-		},
+func initGUILogger() *logger.CustomLogger {
+	baseDirs := []string{
+		filepath.Dir(config.GetLogDir()),
+		os.TempDir(),
+		".",
 	}
-
-	core := zapcore.NewCore(
-		logger.NewCSVEncoder(csvEncoderCfg),
-		fileWriter,
-		zapcore.InfoLevel,
-	)
-
-	logger := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
-	guiLogger = logger.Sugar()
-}
-
-type trayLoggerAdapter struct {
-	sugar      *zap.SugaredLogger
-	installDir string
-}
-
-func (l *trayLoggerAdapter) Info(format string, v ...any)  { l.sugar.Infof(format, v...) }
-func (l *trayLoggerAdapter) Error(format string, v ...any) { l.sugar.Errorf(format, v...) }
-func (l *trayLoggerAdapter) Debug(format string, v ...any) { l.sugar.Debugf(format, v...) }
-func (l *trayLoggerAdapter) Warn(format string, v ...any)  { l.sugar.Warnf(format, v...) }
-func (l *trayLoggerAdapter) Close()                        { l.sugar.Sync() }
-func (l *trayLoggerAdapter) CleanOldLogs()                 {}
-func (l *trayLoggerAdapter) SetDebugMode(enabled bool)     {}
-
-func (l *trayLoggerAdapter) GetLogDir() string {
-	if l.installDir != "" {
-		return filepath.Join(l.installDir, "logs")
+	for _, baseDir := range baseDirs {
+		customLogger, err := logger.NewCustomLogger(false, baseDir, "gui")
+		if err != nil {
+			continue
+		}
+		customLogger.CleanOldLogs()
+		return customLogger
 	}
-	return ""
+	return nil
 }
 
 // GUI 日志包装函数，保持与其他包调用层数一致
-func logInfo(format string, v ...any)  { guiLogger.Infof(format, v...) }
-func logError(format string, v ...any) { guiLogger.Errorf(format, v...) }
-func logWarn(format string, v ...any)  { guiLogger.Warnf(format, v...) }
-func logDebug(format string, v ...any) { guiLogger.Debugf(format, v...) }
+func logInfo(format string, v ...any) {
+	if guiLogger != nil {
+		guiLogger.Info(format, v...)
+	}
+}
+
+func logError(format string, v ...any) {
+	if guiLogger != nil {
+		guiLogger.Error(format, v...)
+	}
+}
+
+func logWarn(format string, v ...any) {
+	if guiLogger != nil {
+		guiLogger.Warn(format, v...)
+	}
+}
+
+func logDebug(format string, v ...any) {
+	if guiLogger != nil {
+		guiLogger.Debug(format, v...)
+	}
+}
 
 // NewApp 创建 GUI 应用实例
 func NewApp(icon []byte) *App {
@@ -177,8 +141,7 @@ func (a *App) startup(ctx context.Context) {
 	a.mutex.Unlock()
 
 	// 初始化自启动管理器
-	adapter := &trayLoggerAdapter{sugar: guiLogger, installDir: config.GetInstallDir()}
-	a.autostartManager = autostart.NewManager(adapter, config.GetInstallDir())
+	a.autostartManager = autostart.NewManager(guiLogger, config.GetInstallDir())
 	a.syncMonitorAgentState()
 
 	// 提前注册事件处理器，确保 Watchdog 重连时也能触发前端通知
@@ -243,37 +206,68 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) scheduleRegisterGUIClientRole(reason string) {
 	if !a.registerGUIRoleRunning.CompareAndSwap(false, true) {
-		logDebug("GUI 客户端角色注册已在进行，跳过重复触发: %s", reason)
+		if guiLogger != nil {
+			guiLogger.Debug("GUI 客户端角色注册已在进行",
+				"reason", reason)
+		}
 		return
 	}
 	go func() {
 		defer a.registerGUIRoleRunning.Store(false)
 		for attempt := 1; attempt <= 6; attempt++ {
 			if a.ipcClient == nil || !a.ipcClient.IsConnected() {
-				logWarn("注册 GUI 客户端角色等待连接: reason=%s attempt=%d", reason, attempt)
+				if guiLogger != nil {
+					guiLogger.Warn("注册 GUI 客户端角色等待连接",
+						"reason", reason,
+						"attempt", attempt)
+				}
 				time.Sleep(300 * time.Millisecond)
 				continue
 			}
 			generation := a.ipcClient.ConnectionGeneration()
 			if generation == 0 {
-				logWarn("注册 GUI 客户端角色等待连接代稳定: reason=%s attempt=%d", reason, attempt)
+				if guiLogger != nil {
+					guiLogger.Warn("注册 GUI 客户端角色等待连接代稳定",
+						"reason", reason,
+						"attempt", attempt)
+				}
 				time.Sleep(300 * time.Millisecond)
 				continue
 			}
 			if a.registeredGUIRoleGeneration.Load() == generation {
-				logDebug("GUI 客户端角色已完成当前连接代注册，跳过重复触发: reason=%s generation=%d", reason, generation)
+				if guiLogger != nil {
+					guiLogger.Debug("GUI 客户端角色已完成当前连接代注册",
+						"reason", reason,
+						"generation", generation)
+				}
 				return
 			}
 			resp, err := a.ipcClient.SendRequest(ipc.ReqRegisterClient, ipc.RegisterClientParams{Role: ipc.RoleGUI})
 			if err == nil && resp != nil && resp.Success {
 				a.registeredGUIRoleGeneration.Store(generation)
-				logInfo("已注册 GUI 客户端角色: reason=%s attempt=%d generation=%d", reason, attempt, generation)
+				if guiLogger != nil {
+					guiLogger.Info("已注册 GUI 客户端角色",
+						"reason", reason,
+						"attempt", attempt,
+						"generation", generation)
+				}
 				return
 			}
-			logWarn("注册 GUI 客户端角色失败: reason=%s attempt=%d generation=%d respNil=%v respSuccess=%v err=%v", reason, attempt, generation, resp == nil, resp != nil && resp.Success, err)
+			if guiLogger != nil {
+				guiLogger.Warn("注册 GUI 客户端角色失败",
+					"reason", reason,
+					"attempt", attempt,
+					"generation", generation,
+					"resp_nil", resp == nil,
+					"resp_success", resp != nil && resp.Success,
+					"error", err)
+			}
 			time.Sleep(300 * time.Millisecond)
 		}
-		logError("注册 GUI 客户端角色最终失败: reason=%s", reason)
+		if guiLogger != nil {
+			guiLogger.Error("注册 GUI 客户端角色最终失败",
+				"reason", reason)
+		}
 	}()
 }
 
@@ -1251,8 +1245,7 @@ func (a *App) GetCurrentFanData() *FanData {
 
 func (a *App) getAutostartManager() *autostart.Manager {
 	if a.autostartManager == nil {
-		adapter := &trayLoggerAdapter{sugar: guiLogger, installDir: config.GetInstallDir()}
-		a.autostartManager = autostart.NewManager(adapter, config.GetInstallDir())
+		a.autostartManager = autostart.NewManager(guiLogger, config.GetInstallDir())
 	}
 	return a.autostartManager
 }
@@ -1318,8 +1311,9 @@ func (a *App) QuitApp() {
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		logInfo("控制台已退出")
-		// Sync 将 zap 缓冲区写入磁盘，避免日志在os.Exit时丢失
-		guiLogger.Sync()
+		if guiLogger != nil {
+			guiLogger.Close()
+		}
 		os.Exit(0)
 	}()
 }
@@ -1484,19 +1478,19 @@ func (a *App) LogFrontendError(level, source, message, stack string) {
 	if guiLogger == nil {
 		return
 	}
-	entry := fmt.Sprintf("来源=%s 内容=%s", source, message)
+	args := []any{"component", "frontend", "source", source, "message", message}
 	if stack != "" {
-		entry = fmt.Sprintf("%s 调用栈=%s", entry, stack)
+		args = append(args, "stack", stack)
 	}
 	switch level {
 	case "debug":
-		logDebug("%s", entry)
+		guiLogger.Debug("前端日志", args...)
 	case "warn":
-		logWarn("%s", entry)
+		guiLogger.Warn("前端日志", args...)
 	case "crash", "error":
-		logError("%s", entry)
+		guiLogger.Error("前端日志", args...)
 	default:
-		logDebug("%s", entry)
+		guiLogger.Info("前端日志", args...)
 	}
 }
 

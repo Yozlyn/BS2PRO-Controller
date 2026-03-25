@@ -3,7 +3,6 @@ package main
 import (
 	_ "embed"
 	"encoding/json"
-	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/TIANLI0/BS2PRO-Controller/internal/config"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/ipc"
+	"github.com/TIANLI0/BS2PRO-Controller/internal/logger"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/notification"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/platformutil"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/tray"
@@ -38,8 +38,7 @@ var globalHotkeys = newGlobalHotkeyAgent()
 var monitorInstance = createSingleInstanceGuard()
 var monitorTrayState = newMonitorTrayState()
 var monitorTrayManager *tray.Manager
-var monitorDebugMode bool
-var monitorWriter *os.File
+var monitorLogger *logger.CustomLogger
 var hotkeyEditMode bool
 var lastGUIShowRequest int64
 
@@ -50,49 +49,34 @@ func init() {
 }
 
 func monitorLog(format string, args ...any) {
-	if monitorDebugMode {
-		writeMonitorLog("DEBUG", format, args...)
+	if monitorLogger != nil {
+		monitorLogger.Debug(format, args...)
 	}
 }
 
 func monitorInfo(format string, args ...any) {
-	writeMonitorLog("INFO", format, args...)
+	if monitorLogger != nil {
+		monitorLogger.Info(format, args...)
+	}
 }
 
 func setMonitorDebugMode(enabled bool) {
-	monitorDebugMode = enabled
+	if monitorLogger != nil {
+		monitorLogger.SetDebugMode(enabled)
+	}
 }
 
 func initMonitorLogger() {
-	path := filepath.Join(filepath.Dir(config.GetLogDir()), "logs", fmt.Sprintf("monitor_%s.log", time.Now().Format("2006-01-02")))
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		log.Printf("create monitor log dir failed: %v", err)
-		return
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	customLogger, err := logger.NewCustomLoggerWithOptions(false, filepath.Dir(config.GetLogDir()), "monitor", logger.Options{
+		Format:  logger.FormatText,
+		Console: false,
+	})
 	if err != nil {
-		log.Printf("open monitor log failed: %v", err)
+		log.Printf("init monitor logger failed: %v", err)
 		return
 	}
-	monitorWriter = file
-}
-
-func writeMonitorLog(level, format string, args ...any) {
-	message := fmt.Sprintf(format, args...)
-	line := fmt.Sprintf("\"%s\",\"%s\",\"%s\"\n", level, time.Now().Format("2006-01-02 15:04:05"), escapeMonitorLog(message))
-	if monitorWriter != nil {
-		if _, err := monitorWriter.WriteString(line); err == nil {
-			return
-		}
-	}
-	log.Print(strings.TrimSpace(line))
-}
-
-func escapeMonitorLog(message string) string {
-	message = strings.ReplaceAll(message, "\r", " ")
-	message = strings.ReplaceAll(message, "\n", " ")
-	message = strings.ReplaceAll(message, "\"", "'")
-	return message
+	customLogger.CleanOldLogs()
+	monitorLogger = customLogger
 }
 
 func main() {
@@ -203,6 +187,12 @@ func (l *monitorTrayLoggerAdapter) Info(format string, v ...any)  { monitorInfo(
 func (l *monitorTrayLoggerAdapter) Error(format string, v ...any) { monitorInfo(format, v...) }
 func (l *monitorTrayLoggerAdapter) Debug(format string, v ...any) { monitorLog(format, v...) }
 func (l *monitorTrayLoggerAdapter) Warn(format string, v ...any)  { monitorInfo(format, v...) }
+func (l *monitorTrayLoggerAdapter) Infof(format string, v ...any) { monitorInfo(format, v...) }
+func (l *monitorTrayLoggerAdapter) Errorf(format string, v ...any) {
+	monitorInfo(format, v...)
+}
+func (l *monitorTrayLoggerAdapter) Debugf(format string, v ...any) { monitorLog(format, v...) }
+func (l *monitorTrayLoggerAdapter) Warnf(format string, v ...any)  { monitorInfo(format, v...) }
 func (l *monitorTrayLoggerAdapter) Close()                        {}
 func (l *monitorTrayLoggerAdapter) CleanOldLogs()                 {}
 func (l *monitorTrayLoggerAdapter) SetDebugMode(enabled bool)     { setMonitorDebugMode(enabled) }

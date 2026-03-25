@@ -51,8 +51,10 @@ func guiCapturePanic(recovered any) {
 
 	// 同步写入运行日志
 	if guiLogger != nil {
-		guiLogger.Errorf("界面崩溃异常: %v", recovered)
-		guiLogger.Errorf("界面崩溃调用栈:\n%s", string(stack))
+		guiLogger.Error("界面崩溃异常",
+			"error", recovered)
+		guiLogger.Error("界面崩溃调用栈",
+			"stack", string(stack))
 		guiLogger.Sync()
 	}
 }
@@ -105,7 +107,8 @@ func main() {
 			UniqueId: "BS2PRO-Controller-Unique-Lock-2025",
 			OnSecondInstanceLaunch: func(secondInstanceData options.SecondInstanceData) {
 				if guiLogger != nil {
-					guiLogger.Infof("检测到第二实例启动: args=%v", secondInstanceData.Args)
+					guiLogger.Info("检测到第二实例启动",
+						"args", secondInstanceData.Args)
 				}
 				hasAutostart := false
 				for _, arg := range secondInstanceData.Args {
@@ -116,11 +119,11 @@ func main() {
 				}
 				if !hasAutostart {
 					if guiLogger != nil {
-						guiLogger.Infof("第二实例触发主窗口唤起")
+						guiLogger.Info("第二实例触发主窗口唤起")
 					}
 					app.ShowWindow()
 				} else if guiLogger != nil {
-					guiLogger.Infof("第二实例为自启动参数，跳过唤起主窗口")
+					guiLogger.Info("第二实例为自启动参数，跳过唤起主窗口")
 				}
 			},
 		},
