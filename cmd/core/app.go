@@ -649,7 +649,7 @@ func (a *CoreApp) applyConfigOnConnect() {
 		a.deviceManager.SetBrightness(cfg.Brightness)
 	}
 
-	a.SetRGBMode(rgbParamsFromConfig(cfg))
+	a.applyRGBMode(rgbParamsFromConfig(cfg), false)
 
 	a.logDebug("配置应用完成")
 }
@@ -1166,6 +1166,10 @@ func (a *CoreApp) SetBrightness(percentage int) bool {
 }
 
 func (a *CoreApp) SetRGBMode(params ipc.SetRGBModeParams) bool {
+	return a.applyRGBMode(params, true)
+}
+
+func (a *CoreApp) applyRGBMode(params ipc.SetRGBModeParams, notify bool) bool {
 	if !a.isConnected {
 		return false
 	}
@@ -1257,7 +1261,7 @@ func (a *CoreApp) SetRGBMode(params ipc.SetRGBModeParams) bool {
 		if a.ipcServer != nil {
 			a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
 		}
-		if a.notificationManager != nil {
+		if notify && a.notificationManager != nil {
 			a.notificationManager.OnRGBModeChanged(describeRGBMode(params.Mode))
 		}
 	}
