@@ -1,6 +1,6 @@
 # BS2PRO-Controller
 
-BS2PRO-Controller 是一个面向飞智空间站 BS2 / BS2PRO 的第三方桌面控制程序，用于提供设备连接、风扇控制、温度监控、RGB控制等功能。
+BS2PRO-Controller 是一个面向飞智空间站 BS2 / BS2PRO 的第三方桌面控制程序，用于提供设备连接、风扇控制、温度监控、RGB 控制等功能。
 
 本项目依赖 ASUS System Control Interface v3，使用前请先确认系统已正确安装该驱动。
 
@@ -18,7 +18,7 @@ BS2PRO-Controller 是一个面向飞智空间站 BS2 / BS2PRO 的第三方桌面
 
 - `BS2PRO-Controller.exe`：图形界面主程序
 - `BS2PRO-CoreService.exe`：后台核心服务
-- `BS2PRO-Monitor.exe`：监控相关辅助进程
+- `BS2PRO-Monitor.exe`：可选功能辅助进程
 
 ## 技术栈
 
@@ -61,8 +61,14 @@ wails dev
 
 生产构建：
 
-```bash
-build.bat
+```powershell
+./scripts/build.ps1
+```
+
+调试构建：
+
+```powershell
+./scripts/build_debug.ps1
 ```
 
 构建输出位于 `build/bin/` 目录，包括：
@@ -70,6 +76,7 @@ build.bat
 - `BS2PRO-Controller.exe`
 - `BS2PRO-CoreService.exe`
 - `BS2PRO-Monitor.exe`
+- `BS2PRO-Controller-amd64-installer.exe`（安装 NSIS 后生成）
 
 ## 项目结构
 
@@ -77,10 +84,12 @@ build.bat
 BS2PRO-Controller/
 ├── main.go
 ├── app.go
+├── theme_preference.go
 ├── wails.json
-├── build.bat
-├── build_debug.bat
 ├── scripts/
+│   ├── build.ps1
+│   ├── build_debug.ps1
+│   └── sync_version.ps1
 ├── cmd/
 │   ├── core/
 │   └── bs2pro-monitor/
@@ -102,8 +111,9 @@ BS2PRO-Controller/
 
 ## 构建说明
 
-版本号定义于 `wails.json`，构建时会注入到可执行文件中。  
-`build.bat` 会依次构建核心服务、监控进程与图形界面程序；如已安装 NSIS，还会生成安装程序。
+版本号定义于 `wails.json`，构建时会同步注入到各个可执行文件中。
+`scripts/build.ps1` 会依次执行版本同步、核心服务构建、监控进程构建与 Wails 主程序构建；如已安装 NSIS，还会生成安装程序。
+`scripts/build_debug.ps1` 用于调试构建，方便在开发阶段生成调试版本。
 
 ## 贡献
 
