@@ -107,7 +107,7 @@ func (r *Reader) initNVMLWindows() {
 			nvmlDLL = syscall.NewLazyDLL(path)
 			err := nvmlDLL.Load()
 			if err == nil {
-				r.logger.Debug("成功加载nvml.dll从路径: %s", path)
+				r.logger.Debug("成功加载 nvml.dll", "path", path, "source", "nvml")
 				loaded = true
 				break
 			}
@@ -115,7 +115,7 @@ func (r *Reader) initNVMLWindows() {
 		}
 
 		if !loaded {
-			r.logger.Warn("未找到nvml.dll，可能未安装NVIDIA驱动，错误: %v", lastErr)
+			r.logger.Warn("未找到 nvml.dll，可能未安装 NVIDIA 驱动", "source", "nvml", "error", lastErr)
 			return
 		}
 
@@ -125,7 +125,7 @@ func (r *Reader) initNVMLWindows() {
 
 		ret, _, _ := nvmlInit.Call()
 		if ret != 0 {
-			r.logger.Warn("NVML初始化失败，返回码: %d", ret)
+			r.logger.Warn("NVML 初始化失败", "source", "nvml", "state", ret)
 			return
 		}
 
@@ -135,7 +135,7 @@ func (r *Reader) initNVMLWindows() {
 		if ret == 0 {
 			globalNvmlDevice = device // 存入全局缓存
 			nvmlLoaded = true
-			r.logger.Debug("NVML本地DLL加载并初始化成功")
+			r.logger.Debug("NVML 本地 DLL 加载并初始化成功", "source", "nvml")
 			// NVML初始化占用的临时内存归还OS
 			debug.FreeOSMemory()
 			kernel32 := syscall.NewLazyDLL("kernel32.dll")
@@ -143,7 +143,7 @@ func (r *Reader) initNVMLWindows() {
 			proc, _ := syscall.GetCurrentProcess()
 			setWorkingSet.Call(uintptr(proc), ^uintptr(0), ^uintptr(0))
 		} else {
-			r.logger.Warn("NVML无法获取主显卡句柄，返回码: %d", ret)
+			r.logger.Warn("NVML 无法获取主显卡句柄", "source", "nvml", "state", ret)
 		}
 	})
 

@@ -86,7 +86,7 @@ func NewCoreApp(debugMode bool) *CoreApp {
 			customLogger, _ = logger.NewCustomLogger(debugMode, ".", "core")
 		}
 		if customLogger != nil {
-			customLogger.Warn("日志目录初始化失败，已降级到临时目录: %s", fallbackDir)
+			customLogger.Warn("日志目录初始化失败，已降级到临时目录", "fallback_dir", fallbackDir)
 		}
 	} else {
 		customLogger.CleanOldLogs()
@@ -94,7 +94,7 @@ func NewCoreApp(debugMode bool) *CoreApp {
 
 	asusClient, err := asus.NewClient()
 	if err != nil {
-		customLogger.Warn("ASUS ACPI 客户端初始化失败: %v", err)
+		customLogger.Warn("ASUS ACPI 客户端初始化失败", "error", err)
 	}
 
 	deviceMgr := device.NewManager(customLogger)
@@ -1752,29 +1752,23 @@ func (a *CoreApp) cleanup() {
 	}
 }
 
-func (a *CoreApp) logInfo(format string, v ...any) {
+func (a *CoreApp) logInfo(msg any, args ...any) {
 	if a.logger != nil {
-		a.logger.Info(format, v...)
+		a.logger.Info(msg, args...)
 	}
 }
 
-func (a *CoreApp) logError(format string, v ...any) {
+func (a *CoreApp) logError(msg any, args ...any) {
 	if a.logger != nil {
-		a.logger.Error(format, v...)
+		a.logger.Error(msg, args...)
 	}
 }
 
-func (a *CoreApp) logDebug(format string, v ...any) {
+func (a *CoreApp) logDebug(msg any, args ...any) {
 	if a.logger != nil {
-		a.logger.Debug(format, v...)
+		a.logger.Debug(msg, args...)
 	}
 }
-
-// func (a *CoreApp) logWarn(format string, v ...any) {
-// 	if a.logger != nil {
-// 		a.logger.Warn(format, v...)
-// 	}
-// }
 
 // rgbParamsFromConfig 从配置构造 RGB 参数
 func rgbParamsFromConfig(cfg types.AppConfig) ipc.SetRGBModeParams {

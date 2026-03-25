@@ -286,7 +286,7 @@ func (c *Controller) Update(currentTemp int, fanCurve []types.FanCurvePoint, min
 					c.pendingSpikeDelta = d
 					c.pendingSpike = true
 					if c.logger != nil {
-						c.logger.Debug("[瞬变待确认] 捕捉到候选瞬变 %d°C -> %d°C, 等待下一次采样确认", c.lastTemp, currentTemp)
+						c.logger.Debug("风扇偏移捕捉到候选瞬变", "state", "pending", "prev_temp", c.lastTemp, "current_temp", currentTemp, "delta", d)
 					}
 				}
 			}
@@ -1129,7 +1129,7 @@ func (c *Controller) processPendingSpike(currentTemp int, fanCurve []types.FanCu
 	confirmed := sameSign(confirmedDelta, pendingDelta) && iabs(confirmedDelta) >= c.config.SpikeThreshold
 	if !confirmed {
 		if c.logger != nil {
-			c.logger.Debug("[瞬变忽略] 候选瞬变未持续: base=%d°C current=%d°C delta=%d", baseTemp, currentTemp, confirmedDelta)
+			c.logger.Debug("风扇偏移忽略候选瞬变", "state", "discarded", "base_temp", baseTemp, "current_temp", currentTemp, "delta", confirmedDelta)
 		}
 		return true
 	}
@@ -1475,8 +1475,7 @@ func (c *Controller) ensureZones(fanCurve []types.FanCurvePoint) {
 	}
 
 	if c.logger != nil && (len(c.zones) != n || reset > 0) {
-		c.logger.Debug("[确保区域] 曲线节点变更: %d -> %d 节点, 继承 %d 个区间状态, 重置 %d 个",
-			len(c.zones), n, inherited, reset)
+		c.logger.Debug("风扇偏移曲线节点变更", "state", "zone_reset", "previous", len(c.zones), "current", n, "inherited", inherited, "reset", reset)
 	}
 
 	c.zones = newZones

@@ -419,27 +419,27 @@ func (s *Server) HasClients() bool {
 }
 
 // 日志辅助方法
-func (s *Server) logInfo(format string, v ...any) {
+func (s *Server) logInfo(msg any, args ...any) {
 	if s.logger != nil {
-		s.logger.Info(format, v...)
+		s.logger.Info(msg, args...)
 	}
 }
 
-func (s *Server) logError(format string, v ...any) {
+func (s *Server) logError(msg any, args ...any) {
 	if s.logger != nil {
-		s.logger.Error(format, v...)
+		s.logger.Error(msg, args...)
 	}
 }
 
-func (s *Server) logDebug(format string, v ...any) {
+func (s *Server) logDebug(msg any, args ...any) {
 	if s.logger != nil {
-		s.logger.Debug(format, v...)
+		s.logger.Debug(msg, args...)
 	}
 }
 
-func (s *Server) logWarn(format string, v ...any) {
+func (s *Server) logWarn(msg any, args ...any) {
 	if s.logger != nil {
-		s.logger.Warn(format, v...)
+		s.logger.Warn(msg, args...)
 	}
 }
 
@@ -728,27 +728,27 @@ func (c *Client) ConnectionGeneration() int64 {
 }
 
 // 日志辅助方法
-func (c *Client) logInfo(format string, v ...any) {
+func (c *Client) logInfo(msg any, args ...any) {
 	if c.logger != nil {
-		c.logger.Info(format, v...)
+		c.logger.Info(msg, args...)
 	}
 }
 
-func (c *Client) logDebug(format string, v ...any) {
+func (c *Client) logDebug(msg any, args ...any) {
 	if c.logger != nil {
-		c.logger.Debug(format, v...)
+		c.logger.Debug(msg, args...)
 	}
 }
 
-func (c *Client) logError(format string, v ...any) {
+func (c *Client) logError(msg any, args ...any) {
 	if c.logger != nil {
-		c.logger.Error(format, v...)
+		c.logger.Error(msg, args...)
 	}
 }
 
-func (c *Client) logWarn(format string, v ...any) {
+func (c *Client) logWarn(msg any, args ...any) {
 	if c.logger != nil {
-		c.logger.Warn(format, v...)
+		c.logger.Warn(msg, args...)
 	}
 }
 

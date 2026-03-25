@@ -32,30 +32,30 @@ func (m *Manager) Load(isAutoStart bool) types.AppConfig {
 
 	installConfigPath := filepath.Join(m.installDir, "config", "config.json")
 
-	m.logDebug("尝试从默认目录加载配置: %s", defaultConfigPath)
+	m.logDebug("尝试从默认目录加载配置", "path", defaultConfigPath, "source", "default")
 
 	// 先尝试从默认目录加载
 	if m.tryLoadFromPath(defaultConfigPath) {
 		m.config.ConfigPath = defaultConfigPath
-		m.logInfo("配置加载成功: %s", defaultConfigPath)
+		m.logInfo("配置加载成功", "path", defaultConfigPath, "source", "default")
 		return m.config
 	}
 
-	m.logDebug("从默认目录加载配置失败，尝试从安装目录加载: %s", installConfigPath)
+	m.logDebug("从默认目录加载配置失败，尝试从安装目录加载", "path", installConfigPath, "source", "install")
 
 	// 默认目录失败，尝试从安装目录加载
 	if m.tryLoadFromPath(installConfigPath) {
 		m.config.ConfigPath = installConfigPath
-		m.logInfo("配置加载成功: %s", installConfigPath)
+		m.logInfo("配置加载成功", "path", installConfigPath, "source", "install")
 		return m.config
 	}
 
-	m.logError("所有配置目录加载失败，使用默认配置")
+	m.logError("所有配置目录加载失败，使用默认配置", "path", defaultConfigPath, "source", "default")
 
 	m.config = types.GetDefaultConfig(isAutoStart)
 	m.config.ConfigPath = defaultConfigPath
 	if err := m.Save(); err != nil {
-		m.logError("保存默认配置失败: %v", err)
+		m.logError("保存默认配置失败", "path", defaultConfigPath, "error", err)
 	}
 
 	return m.config
@@ -64,13 +64,13 @@ func (m *Manager) Load(isAutoStart bool) types.AppConfig {
 // tryLoadFromPath 尝试从指定路径加载配置
 func (m *Manager) tryLoadFromPath(configPath string) bool {
 	if _, err := os.Stat(configPath); err != nil {
-		m.logDebug("配置文件不存在: %s", configPath)
+		m.logDebug("配置文件不存在", "path", configPath)
 		return false
 	}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		m.logError("读取配置文件失败 %s: %v", configPath, err)
+		m.logError("读取配置文件失败", "path", configPath, "error", err)
 		return false
 	}
 
@@ -84,16 +84,16 @@ func (m *Manager) tryLoadFromPath(configPath string) bool {
 
 	var config types.AppConfig
 	if err := json.Unmarshal(data, &config); err != nil {
-		m.logError("解析配置文件失败 %s: %v", configPath, err)
+		m.logError("解析配置文件失败", "path", configPath, "error", err)
 		return false
 	}
 	if !hasNotificationsEnabled {
 		config.NotificationsEnabled = true
-		m.logInfo("配置缺少 notificationsEnabled，已按默认值 true 迁移: %s", configPath)
+		m.logInfo("配置缺少 notificationsEnabled，已按默认值迁移", "path", configPath, "enabled", true)
 	}
 	if !hasTrayEnabled {
 		config.TrayEnabled = true
-		m.logInfo("配置缺少 trayEnabled，已按默认值 true 迁移: %s", configPath)
+		m.logInfo("配置缺少 trayEnabled，已按默认值迁移", "path", configPath, "enabled", true)
 	}
 
 	// 补全缺失的配置项，兼容不同版本的配置文件
@@ -109,17 +109,17 @@ func (m *Manager) Save() error {
 	defaultConfigDir := m.GetDefaultConfigDir()
 	defaultConfigPath := filepath.Join(defaultConfigDir, "config.json")
 
-	m.logDebug("保存配置到默认目录: %s", defaultConfigPath)
+	m.logDebug("保存配置到默认目录", "path", defaultConfigPath, "source", "default")
 
 	// 确保默认配置目录存在
 	if err := os.MkdirAll(defaultConfigDir, 0755); err != nil {
-		m.logError("创建默认配置目录失败: %v", err)
+		m.logError("创建默认配置目录失败", "path", defaultConfigDir, "error", err)
 		return err
 	}
 
 	data, err := json.MarshalIndent(m.config, "", "  ")
 	if err != nil {
-		m.logError("序列化配置失败: %v", err)
+		m.logError("序列化配置失败", "error", err)
 		return err
 	}
 
@@ -132,12 +132,12 @@ func (m *Manager) Save() error {
 	}
 
 	if err := os.WriteFile(defaultConfigPath, data, 0644); err != nil {
-		m.logError("保存配置失败: %v", err)
+		m.logError("保存配置失败", "path", defaultConfigPath, "error", err)
 		return err
 	}
 
 	m.config.ConfigPath = defaultConfigPath
-	m.logDebug("配置保存成功: %s", defaultConfigPath)
+	m.logDebug("配置保存成功", "path", defaultConfigPath, "source", "default")
 	return nil
 }
 
@@ -145,7 +145,7 @@ func (m *Manager) Save() error {
 func (m *Manager) GetDefaultConfigDir() string {
 	programData := os.Getenv("PROGRAMDATA")
 	if programData == "" {
-		m.logError("PROGRAMDATA 环境变量未设置，回落到安装目录")
+		m.logError("PROGRAMDATA 环境变量未设置，回落到安装目录", "source", "PROGRAMDATA", "path", m.installDir)
 		return filepath.Join(m.installDir, "config")
 	}
 	return filepath.Join(programData, "BS2PRO-Controller")
@@ -163,29 +163,23 @@ func (m *Manager) Update(config types.AppConfig) error {
 }
 
 // 日志辅助方法
-func (m *Manager) logInfo(format string, v ...any) {
+func (m *Manager) logInfo(msg any, args ...any) {
 	if m.logger != nil {
-		m.logger.Info(format, v...)
+		m.logger.Info(msg, args...)
 	}
 }
 
-func (m *Manager) logError(format string, v ...any) {
+func (m *Manager) logError(msg any, args ...any) {
 	if m.logger != nil {
-		m.logger.Error(format, v...)
+		m.logger.Error(msg, args...)
 	}
 }
 
-func (m *Manager) logDebug(format string, v ...any) {
+func (m *Manager) logDebug(msg any, args ...any) {
 	if m.logger != nil {
-		m.logger.Debug(format, v...)
+		m.logger.Debug(msg, args...)
 	}
 }
-
-// func (m *Manager) logWarn(format string, v ...any) {
-// 	if m.logger != nil {
-// 		m.logger.Warn(format, v...)
-// 	}
-// }
 
 // GetInstallDir 获取安装目录
 func GetInstallDir() string {

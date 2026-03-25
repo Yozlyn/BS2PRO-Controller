@@ -11,9 +11,9 @@ import (
 )
 
 type Logger interface {
-	Debug(format string, v ...any)
-	Error(format string, v ...any)
-	Warn(format string, v ...any)
+	Debug(msg any, args ...any)
+	Error(msg any, args ...any)
+	Warn(msg any, args ...any)
 }
 
 type Switcher struct {
@@ -40,11 +40,11 @@ func (s *Switcher) ListProcessNames(name string) map[string]struct{} {
 	result := make(map[string]struct{}, 1)
 	if name != "" {
 		if s.logger != nil {
-			s.logger.Debug("进程联动前台进程: %s", name)
+			s.logger.Debug("进程联动前台进程", "source", "foreground", "process", name)
 		}
 		result[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
 	} else if s.logger != nil {
-		s.logger.Debug("进程联动前台进程为空")
+		s.logger.Debug("进程联动前台进程为空", "source", "foreground")
 	}
 	return result
 }
@@ -60,11 +60,11 @@ func (s *Switcher) MatchRule(rules []types.ProcessFanRule, processNames map[stri
 			continue
 		}
 		if s.logger != nil {
-			s.logger.Debug("进程联动规则检查: ruleProcess=%s enabled=%v", pname, rule.Enabled)
+			s.logger.Debug("进程联动规则检查", "process", pname, "enabled", rule.Enabled)
 		}
 		if _, ok := processNames[pname]; ok {
 			if s.logger != nil {
-				s.logger.Debug("进程联动规则命中: %s", pname)
+				s.logger.Debug("进程联动规则命中", "process", pname, "enabled", rule.Enabled)
 			}
 			return &rule
 		}

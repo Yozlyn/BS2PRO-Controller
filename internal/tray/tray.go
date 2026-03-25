@@ -103,7 +103,7 @@ func (m *Manager) Init() {
 		defer runtime.UnlockOSThread()
 		defer func() {
 			if r := recover(); r != nil {
-				m.logError("托盘初始化过程中发生panic: %v", r)
+				m.logError("托盘初始化过程中发生 panic", "reason", r)
 				atomic.StoreInt32(&m.initialized, 0)
 				atomic.StoreInt32(&m.readyState, 0)
 			}
@@ -117,7 +117,7 @@ func (m *Manager) Init() {
 func (m *Manager) onTrayReady() {
 	defer func() {
 		if r := recover(); r != nil {
-			m.logError("托盘回调函数中发生panic: %v", r)
+			m.logError("托盘回调函数中发生 panic", "reason", r)
 			atomic.StoreInt32(&m.initialized, 0)
 			atomic.StoreInt32(&m.readyState, 0)
 		}
@@ -126,7 +126,7 @@ func (m *Manager) onTrayReady() {
 	m.logInfo("托盘回调函数已启动")
 
 	if err := m.setupIcon(); err != nil {
-		m.logError("设置托盘图标失败: %v", err)
+		m.logError("设置托盘图标失败", "error", err)
 		atomic.StoreInt32(&m.readyState, 0)
 		atomic.StoreInt32(&m.initialized, 0)
 		systray.Quit()
@@ -142,7 +142,7 @@ func (m *Manager) onTrayReady() {
 
 	menuItems, err := m.createMenu()
 	if err != nil {
-		m.logError("创建托盘菜单失败: %v", err)
+		m.logError("创建托盘菜单失败", "error", err)
 		atomic.StoreInt32(&m.readyState, 0)
 		atomic.StoreInt32(&m.initialized, 0)
 		systray.Quit()
@@ -219,13 +219,13 @@ func (m *Manager) createMenu() (items *MenuItems, err error) {
 
 	systray.AddSeparator()
 
-    coreTitle := "暂停核心"
-    coreTooltip := "停止底层守护服务"
-    if m.getStatus != nil && !m.getStatus().CoreRunning {
-        coreTitle = "恢复核心"
-        coreTooltip = "重新启动底层守护服务"
-    }
-    m.menuStopCore = systray.AddMenuItem(coreTitle, coreTooltip)
+	coreTitle := "暂停核心"
+	coreTooltip := "停止底层守护服务"
+	if m.getStatus != nil && !m.getStatus().CoreRunning {
+		coreTitle = "恢复核心"
+		coreTooltip = "重新启动底层守护服务"
+	}
+	m.menuStopCore = systray.AddMenuItem(coreTitle, coreTooltip)
 	m.menuQuitAll = systray.AddMenuItem("重启核心", "重启底层守护服务")
 	m.menuQuitGUI = systray.AddMenuItem("退出控制台", "只关闭前端界面")
 
@@ -235,7 +235,7 @@ func (m *Manager) createMenu() (items *MenuItems, err error) {
 // triggerMenuAction 执行菜单动作，并在执行期间临时禁用菜单项，5秒后自动恢复。
 func (m *Manager) triggerMenuAction(item *systray.MenuItem, busyTitle, originalTitle string, fn func()) {
 	if fn == nil {
-		m.logWarn("菜单动作未定义: %s", originalTitle)
+		m.logWarn("菜单动作未定义", "state", originalTitle)
 		return
 	}
 	fn()
@@ -263,12 +263,12 @@ func formatMenuValue(label string, value int, unit string) string {
 func (m *Manager) handleMenuEvents() {
 	defer func() {
 		if r := recover(); r != nil {
-			m.logError("处理托盘菜单事件时发生panic: %v", r)
+			m.logError("处理托盘菜单事件时发生 panic", "reason", r)
 		}
 	}()
 
 	if m.menuItems == nil || m.menuItems.Show == nil || m.menuItems.AutoControl == nil {
-		m.logError("托盘菜单未正确初始化，无法处理菜单事件")
+		m.logError("托盘菜单未正确初始化，无法处理菜单事件", "state", "not_ready")
 		return
 	}
 
@@ -322,7 +322,7 @@ func (m *Manager) handleMenuEvents() {
 func (m *Manager) updateMenuStatus() {
 	defer func() {
 		if r := recover(); r != nil {
-			m.logError("更新托盘菜单状态时发生panic: %v", r)
+			m.logError("更新托盘菜单状态时发生 panic", "reason", r)
 		}
 	}()
 
@@ -339,7 +339,7 @@ func (m *Manager) updateMenuStatus() {
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						m.logWarn("托盘更新时发生错误（可能是正在退出）: %v", r)
+						m.logWarn("托盘更新时发生错误（可能是正在退出）", "reason", r)
 					}
 				}()
 
@@ -413,7 +413,7 @@ func (m *Manager) onTrayExit() {
 func (m *Manager) startIconHealthMonitor() {
 	defer func() {
 		if r := recover(); r != nil {
-			m.logError("托盘图标健康监控发生panic: %v", r)
+			m.logError("托盘图标健康监控发生 panic", "reason", r)
 		}
 	}()
 
@@ -436,7 +436,7 @@ func (m *Manager) startIconHealthMonitor() {
 func (m *Manager) refreshTrayIcon() {
 	defer func() {
 		if r := recover(); r != nil {
-			m.logError("刷新托盘图标时发生panic: %v", r)
+			m.logError("刷新托盘图标时发生 panic", "reason", r)
 			atomic.AddInt32(&m.consecutiveFails, 1)
 		}
 	}()
@@ -446,7 +446,7 @@ func (m *Manager) refreshTrayIcon() {
 
 	if len(m.iconData) == 0 {
 		atomic.AddInt32(&m.consecutiveFails, 1)
-		m.logError("刷新托盘图标失败: 图标数据为空")
+		m.logError("刷新托盘图标失败", "reason", "图标数据为空")
 		return
 	}
 
@@ -480,7 +480,7 @@ func (m *Manager) Quit() {
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				m.logWarn("退出托盘时发生错误（可忽略）: %v", r)
+				m.logWarn("退出托盘时发生错误（可忽略）", "reason", r)
 			}
 		}()
 		systray.Quit()
@@ -490,7 +490,7 @@ func (m *Manager) Quit() {
 func (m *Manager) CheckHealth() {
 	defer func() {
 		if r := recover(); r != nil {
-			m.logError("检查托盘健康状态时发生panic: %v", r)
+			m.logError("检查托盘健康状态时发生 panic", "reason", r)
 		}
 	}()
 
@@ -500,36 +500,36 @@ func (m *Manager) CheckHealth() {
 
 	lastRefresh := atomic.LoadInt64(&m.lastIconRefresh)
 	if lastRefresh > 0 && time.Now().Unix()-lastRefresh > 90 {
-		m.logWarn("检测到托盘图标长时间未刷新，尝试刷新")
+		m.logWarn("检测到托盘图标长时间未刷新，尝试刷新", "refresh", time.Now().Unix()-lastRefresh)
 		m.refreshTrayIcon()
 	}
 
 	if atomic.LoadInt32(&m.consecutiveFails) >= 3 {
-		m.logWarn("检测到托盘连续失败，尝试刷新图标")
+		m.logWarn("检测到托盘连续失败，尝试刷新图标", "attempt", atomic.LoadInt32(&m.consecutiveFails))
 		m.refreshTrayIcon()
 	}
 }
 
-func (m *Manager) logInfo(format string, v ...any) {
+func (m *Manager) logInfo(msg any, args ...any) {
 	if m.logger != nil {
-		m.logger.Info(format, v...)
+		m.logger.Info(msg, args...)
 	}
 }
 
-func (m *Manager) logError(format string, v ...any) {
+func (m *Manager) logError(msg any, args ...any) {
 	if m.logger != nil {
-		m.logger.Error(format, v...)
+		m.logger.Error(msg, args...)
 	}
 }
 
-func (m *Manager) logDebug(format string, v ...any) {
+func (m *Manager) logDebug(msg any, args ...any) {
 	if m.logger != nil {
-		m.logger.Debug(format, v...)
+		m.logger.Debug(msg, args...)
 	}
 }
 
-func (m *Manager) logWarn(format string, v ...any) {
+func (m *Manager) logWarn(msg any, args ...any) {
 	if m.logger != nil {
-		m.logger.Warn(format, v...)
+		m.logger.Warn(msg, args...)
 	}
 }

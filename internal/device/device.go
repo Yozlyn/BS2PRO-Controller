@@ -617,26 +617,26 @@ func (m *Manager) SetBrightness(percentage int) bool {
 	return m.writeCmd(cmd)
 }
 
-func (m *Manager) logInfo(format string, v ...any) {
+func (m *Manager) logInfo(msg any, args ...any) {
 	if m.logger != nil {
-		m.logger.Info(format, v...)
+		m.logger.Info(msg, args...)
 	}
 }
 
-func (m *Manager) logError(format string, v ...any) {
+func (m *Manager) logError(msg any, args ...any) {
 	if m.logger != nil {
-		m.logger.Error(format, v...)
+		m.logger.Error(msg, args...)
 	}
 }
 
-func (m *Manager) logDebug(format string, v ...any) {
+func (m *Manager) logDebug(msg any, args ...any) {
 	if m.logger != nil {
-		m.logger.Debug(format, v...)
+		m.logger.Debug(msg, args...)
 	}
 }
 
-func (m *Manager) logWarn(format string, v ...any) {
+func (m *Manager) logWarn(msg any, args ...any) {
 	if m.logger != nil {
-		m.logger.Warn(format, v...)
+		m.logger.Warn(msg, args...)
 	}
 }

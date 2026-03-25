@@ -51,13 +51,13 @@ func (m *Manager) SetWindowsAutoStart(enable bool) error {
 		if err != nil {
 			return fmt.Errorf("设置注册表失败: %v", err)
 		}
-		m.logger.Info("已通过注册表设置控制台开机自启动，路径: %s", guiPath)
+		m.logger.Info("已通过注册表设置控制台开机自启动", "source", "gui", "path", guiPath, "enabled", true)
 	} else {
 		err = key.DeleteValue("BS2PRO-Controller")
 		if err != nil && err != registry.ErrNotExist {
 			return fmt.Errorf("删除注册表项失败: %v", err)
 		}
-		m.logger.Info("已移除前端控制台开机自启动")
+		m.logger.Info("已移除前端控制台开机自启动", "source", "gui", "enabled", false)
 	}
 	return nil
 }
@@ -94,7 +94,7 @@ func (m *Manager) SetMonitorAutoStart(enable bool) error {
 		if err := key.SetStringValue(valueName, val); err != nil {
 			return fmt.Errorf("设置 Monitor 自启动失败: %v", err)
 		}
-		m.logger.Info("已设置 Monitor 开机自启动，路径: %s", monitorPath)
+		m.logger.Info("已设置 Monitor 开机自启动", "source", "monitor", "path", monitorPath, "enabled", true)
 		return nil
 	}
 
@@ -102,7 +102,7 @@ func (m *Manager) SetMonitorAutoStart(enable bool) error {
 	if err != nil && err != registry.ErrNotExist {
 		return fmt.Errorf("删除 Monitor 自启动失败: %v", err)
 	}
-	m.logger.Info("已移除 Monitor 开机自启动")
+	m.logger.Info("已移除 Monitor 开机自启动", "source", "monitor", "enabled", false)
 	return nil
 }
 

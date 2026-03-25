@@ -42,8 +42,8 @@ func capturePanic(app *CoreApp, source string, recovered any) string {
 	}
 
 	if app != nil {
-		app.logError("%s 捕获到异常: %v", source, recovered)
-		app.logError("%s 异常调用栈:\n%s", source, string(stack))
+		app.logError("捕获到异常", "source", source, "error", recovered)
+		app.logError("异常调用栈", "source", source, "stack", string(stack))
 		if app.logger != nil {
 			app.logger.Close()
 		}
