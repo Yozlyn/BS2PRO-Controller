@@ -34,11 +34,11 @@ const (
 	ReqGetCurrentFanData RequestType = "GetCurrentFanData"
 
 	// 配置相关
-	ReqGetConfig             RequestType = "GetConfig"
-	ReqUpdateConfig          RequestType = "UpdateConfig"
-	ReqSetFanCurve           RequestType = "SetFanCurve"
-	ReqGetFanCurve           RequestType = "GetFanCurve"
-	ReqCheckProcessSwitchNow RequestType = "CheckProcessSwitchNow"
+	ReqGetConfig               RequestType = "GetConfig"
+	ReqUpdateConfig            RequestType = "UpdateConfig"
+	ReqSetFanCurve             RequestType = "SetFanCurve"
+	ReqGetFanCurve             RequestType = "GetFanCurve"
+	ReqCheckProcessSwitchNow   RequestType = "CheckProcessSwitchNow"
 	ReqReportForegroundProcess RequestType = "ReportForegroundProcess"
 	ReqRegisterClient          RequestType = "RegisterClient"
 	ReqNotifyImportCompleted   RequestType = "NotifyImportCompleted"
@@ -75,13 +75,13 @@ const (
 	ReqApplyOffsetToCurve RequestType = "ApplyOffsetToCurve"
 
 	// RGB 灯效控制
-	ReqSetRGBMode        RequestType = "SetRGBMode"
-	ReqCycleRGBMode      RequestType = "CycleRGBMode"
+	ReqSetRGBMode            RequestType = "SetRGBMode"
+	ReqCycleRGBMode          RequestType = "CycleRGBMode"
 	ReqReportHotkeyConflicts RequestType = "ReportHotkeyConflicts"
-	ReqUnsubscribeEvents RequestType = "UnsubscribeEvents"
-	ReqToggleProcessSwitch RequestType = "ToggleProcessSwitch"
-	ReqTriggerHotkeyAction RequestType = "TriggerHotkeyAction"
-	ReqSetHotkeyEditMode   RequestType = "SetHotkeyEditMode"
+	ReqUnsubscribeEvents     RequestType = "UnsubscribeEvents"
+	ReqToggleProcessSwitch   RequestType = "ToggleProcessSwitch"
+	ReqTriggerHotkeyAction   RequestType = "TriggerHotkeyAction"
+	ReqSetHotkeyEditMode     RequestType = "SetHotkeyEditMode"
 
 	// 服务管理
 	ReqRestartService RequestType = "RestartService"
@@ -199,7 +199,7 @@ func (s *Server) Start() error {
 
 	s.listener = listener
 	s.running.Store(true)
-	s.logInfo("IPC 服务器已启动: %s", PipePath)
+	s.logInfo("IPC 服务器已启动", "pipe", PipePath)
 
 	// 接受连接
 	go s.acceptConnections()
@@ -211,14 +211,14 @@ func (s *Server) Start() error {
 func (s *Server) acceptConnections() {
 	defer func() {
 		if r := recover(); r != nil {
-			s.logError("acceptConnections 发生 panic: %v", r)
+			s.logError("acceptConnections panic", "error", r)
 		}
 	}()
 	for s.running.Load() {
 		conn, err := s.listener.Accept()
 		if err != nil {
 			if s.running.Load() {
-				s.logWarn("接受连接失败: %v", err)
+				s.logWarn("接受 IPC 连接失败", "error", err)
 				continue
 			}
 			return
@@ -228,7 +228,7 @@ func (s *Server) acceptConnections() {
 		s.clients[conn] = &ClientMeta{}
 		s.mutex.Unlock()
 
-		s.logDebug("新的 IPC 客户端已连接")
+		s.logDebug("IPC 客户端已连接")
 		go s.handleClient(conn)
 	}
 }
@@ -239,7 +239,7 @@ func (s *Server) handleClient(conn net.Conn) {
 		if r := recover(); r != nil {
 			stack := make([]byte, 4096)
 			n := goruntime.Stack(stack, false)
-			s.logError("handleClient 发生 panic: %v\nstack:\n%s", r, stack[:n])
+			s.logError("handleClient panic", "error", r, "stack", string(stack[:n]))
 		}
 		s.mutex.Lock()
 		delete(s.clients, conn)
@@ -258,11 +258,11 @@ func (s *Server) handleClient(conn net.Conn) {
 		if err != nil {
 			if s.running.Load() {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					s.logDebug("IPC读取超时 - 类型: 客户端无响应超时, 超时阈值: 30s, 错误详情: %v", netErr)
+					s.logDebug("IPC 读取超时", "reason", "client_unresponsive", "timeout", "30s", "error", netErr)
 				} else if strings.Contains(err.Error(), "i/o timeout") {
-					s.logDebug("IPC读取超时 - 类型: I/O操作超时, 位置: 命名管道读取, 错误详情: %v", err)
+					s.logDebug("IPC 读取超时", "reason", "io_timeout", "timeout", "30s", "error", err)
 				} else {
-					s.logDebug("IPC读取失败 - 错误类型: %T, 错误详情: %v", err, err)
+					s.logDebug("IPC 读取失败", "error", err)
 				}
 			}
 			return
@@ -273,7 +273,7 @@ func (s *Server) handleClient(conn net.Conn) {
 		// 解析请求
 		var req Request
 		if err := json.Unmarshal(line, &req); err != nil {
-			s.logError("解析请求失败: %v", err)
+			s.logError("解析 IPC 请求失败", "error", err)
 			continue
 		}
 		if req.Type == ReqRegisterClient {
@@ -284,7 +284,7 @@ func (s *Server) handleClient(conn net.Conn) {
 					meta.Role = params.Role
 				}
 				s.mutex.Unlock()
-				s.logInfo("IPC 客户端角色已注册: %s", params.Role)
+				s.logInfo("IPC 客户端角色已注册", "role", params.Role)
 			}
 		}
 		resp := s.handler(req)
@@ -293,13 +293,13 @@ func (s *Server) handleClient(conn net.Conn) {
 		// 发送响应
 		respBytes, err := json.Marshal(resp)
 		if err != nil {
-			s.logError("序列化响应失败: %v", err)
+			s.logError("序列化 IPC 响应失败", "error", err)
 			continue
 		}
 
 		_, err = conn.Write(append(respBytes, '\n'))
 		if err != nil {
-			s.logError("发送响应失败: %v", err)
+			s.logError("发送 IPC 响应失败", "error", err)
 			return
 		}
 	}
@@ -309,7 +309,7 @@ func (s *Server) handleClient(conn net.Conn) {
 func (s *Server) BroadcastEvent(eventType string, data any) {
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
-		s.logError("序列化事件数据失败: %v", err)
+		s.logError("序列化 IPC 事件数据失败", "event", eventType, "error", err)
 		return
 	}
 
@@ -321,7 +321,7 @@ func (s *Server) BroadcastEvent(eventType string, data any) {
 
 	eventBytes, err := json.Marshal(event)
 	if err != nil {
-		s.logError("序列化事件失败: %v", err)
+		s.logError("序列化 IPC 事件失败", "event", eventType, "error", err)
 		return
 	}
 
@@ -341,7 +341,7 @@ func (s *Server) BroadcastEvent(eventType string, data any) {
 			c.SetWriteDeadline(time.Time{}) // 写完后清除，不影响后续读 deadline
 			if err != nil {
 				if s.dropClient(c) {
-					s.logWarn("发送事件失败，已移除客户端: role=%s err=%v", clientRole, err)
+					s.logWarn("发送 IPC 事件失败，已移除客户端", "role", clientRole, "event", eventType, "error", err)
 				}
 			}
 		}(conn, role)
@@ -351,14 +351,14 @@ func (s *Server) BroadcastEvent(eventType string, data any) {
 func (s *Server) BroadcastEventToRole(role, eventType string, data any) {
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
-		s.logError("序列化事件数据失败: %v", err)
+		s.logError("序列化 IPC 事件数据失败", "role", role, "event", eventType, "error", err)
 		return
 	}
 
 	event := Event{IsEvent: true, Type: eventType, Data: dataBytes}
 	eventBytes, err := json.Marshal(event)
 	if err != nil {
-		s.logError("序列化事件失败: %v", err)
+		s.logError("序列化 IPC 事件失败", "role", role, "event", eventType, "error", err)
 		return
 	}
 
@@ -376,7 +376,7 @@ func (s *Server) BroadcastEventToRole(role, eventType string, data any) {
 			c.SetWriteDeadline(time.Time{})
 			if err != nil {
 				if s.dropClient(c) {
-					s.logWarn("发送角色事件失败，已移除客户端: role=%s event=%s err=%v", clientRole, eventType, err)
+					s.logWarn("发送定向 IPC 事件失败，已移除客户端", "role", clientRole, "event", eventType, "error", err)
 				}
 			}
 		}(conn, meta.Role)
@@ -490,7 +490,7 @@ func (c *Client) Connect() error {
 	// 递增generation：旧readLoop检测到generation变化后会主动退出，
 	// 确保任意时刻只有一个readLoop goroutine在运行。
 	gen := atomic.AddInt64(&c.connGeneration, 1)
-	c.logInfo("已连接到 IPC 服务器")
+	c.logInfo("已连接到 IPC 服务器", "connected", true, "role", c.role)
 
 	// 启动消息接收循环
 	go c.readLoop(gen)
@@ -511,18 +511,18 @@ func (c *Client) Connect() error {
 // readLoop 统一读取消息循环
 // gen 表示连接代数，变化时主动退出旧循环
 func (c *Client) readLoop(gen int64) {
-	c.logInfo("读取循环启动，连接代数=%d", gen)
+	c.logInfo("IPC 读取循环已启动", "generation", gen)
 	for {
 		// 连接代数变化时退出旧循环
 		if atomic.LoadInt64(&c.connGeneration) != gen {
-			c.logInfo("读取循环退出，检测到新连接，连接代数=%d", gen)
+			c.logInfo("IPC 读取循环已退出", "generation", gen, "reason", "new_connection")
 			return
 		}
 
 		c.connMutex.RLock()
 		if !c.connected || c.reader == nil {
 			c.connMutex.RUnlock()
-			c.logInfo("读取循环退出，连接已断开或读取器为空，连接代数=%d", gen)
+			c.logInfo("IPC 读取循环已退出", "generation", gen, "connected", false, "reason", "connection_unavailable")
 			return
 		}
 		reader := c.reader
@@ -532,10 +532,10 @@ func (c *Client) readLoop(gen int64) {
 		if err != nil {
 			// 若已被新连接取代则直接退出
 			if atomic.LoadInt64(&c.connGeneration) != gen {
-				c.logInfo("读取循环退出，读取失败但已有新连接，连接代数=%d", gen)
+				c.logInfo("IPC 读取循环已退出", "generation", gen, "reason", "superseded_after_read_error")
 				return
 			}
-			c.logInfo("读取消息失败，连接可能已断开，连接代数=%d: %v", gen, err)
+			c.logInfo("读取 IPC 消息失败，连接可能已断开", "generation", gen, "error", err)
 			c.connMutex.Lock()
 			c.connected = false
 			if c.conn != nil {
@@ -544,7 +544,7 @@ func (c *Client) readLoop(gen int64) {
 			}
 			c.reader = nil
 			c.connMutex.Unlock()
-			c.logInfo("已标记连接断开，连接代数=%d", gen)
+			c.logInfo("已标记 IPC 连接断开", "generation", gen, "connected", false)
 
 			// 触发服务断开事件
 			if c.eventHandler != nil {
@@ -564,7 +564,7 @@ func (c *Client) readLoop(gen int64) {
 			IsEvent    bool `json:"isEvent"`
 		}
 		if err := json.Unmarshal(line, &msg); err != nil {
-			c.logDebug("解析消息类型失败: %v", err)
+			c.logDebug("解析 IPC 消息类型失败", "error", err)
 			continue
 		}
 
@@ -574,7 +574,7 @@ func (c *Client) readLoop(gen int64) {
 				select {
 				case c.responseChan <- &resp:
 				default:
-					c.logDebug("响应通道已满，丢弃响应")
+					c.logDebug("IPC 响应通道已满，丢弃响应")
 				}
 			}
 		} else if msg.IsEvent {
@@ -603,16 +603,16 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 	needsConnect := !c.connected || c.conn == nil
 	c.connMutex.RUnlock()
 
-	c.logInfo("SendRequest: 类型=%v, needsConnect=%v", reqType, needsConnect)
+	c.logInfo("准备发送 IPC 请求", "type", reqType, "connected", !needsConnect)
 
 	if needsConnect {
 		// 先连接后加请求锁，避免阻塞其他请求方
-		c.logInfo("SendRequest: 尝试连接服务器")
+		c.logInfo("尝试连接 IPC 服务器", "type", reqType)
 		if err := c.Connect(); err != nil {
-			c.logInfo("SendRequest: 连接服务器失败: %v", err)
+			c.logInfo("连接 IPC 服务器失败", "type", reqType, "error", err)
 			return nil, fmt.Errorf("未连接到服务器: %v", err)
 		}
-		c.logInfo("SendRequest: 连接服务器成功")
+		c.logInfo("IPC 服务器连接成功", "type", reqType)
 	}
 
 	var dataBytes json.RawMessage
@@ -641,14 +641,14 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 		conn := c.conn
 		c.connMutex.RUnlock()
 
-		c.logInfo("SendRequest: 尝试 %d, connected=%v, conn=%v", attempt+1, connected, conn != nil)
+		c.logInfo("发送 IPC 请求尝试", "type", reqType, "attempt", attempt+1, "connected", connected, "conn_present", conn != nil)
 
 		if !connected || conn == nil {
 			// 断连后尝试重连
-			c.logWarn("SendRequest: 连接已断开，尝试重新连接")
+			c.logWarn("IPC 连接已断开，尝试重连", "type", reqType, "attempt", attempt+1, "connected", connected)
 			if err := c.Connect(); err != nil {
 				lastErr = fmt.Errorf("重连失败: %v", err)
-				c.logWarn("SendRequest: 重连失败: %v", err)
+				c.logWarn("IPC 重连失败", "type", reqType, "attempt", attempt+1, "error", err)
 				continue
 			}
 			c.connMutex.RLock()
@@ -656,10 +656,10 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 			c.connMutex.RUnlock()
 			if conn == nil {
 				lastErr = fmt.Errorf("重连后连接仍为空")
-				c.logError("SendRequest: 重连后连接仍为空")
+				c.logError("IPC 重连后连接为空", "type", reqType, "attempt", attempt+1)
 				continue
 			}
-			c.logInfo("SendRequest: 重连成功")
+			c.logInfo("IPC 重连成功", "type", reqType, "attempt", attempt+1)
 		}
 
 		// 清空旧响应
@@ -671,7 +671,7 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 		_, err = conn.Write(append(reqBytes, '\n'))
 		if err != nil {
 			lastErr = err
-			c.logWarn("发送请求失败 (尝试 %d): %v", attempt+1, err)
+			c.logWarn("发送 IPC 请求失败", "type", reqType, "attempt", attempt+1, "error", err)
 			// 标记断连，下次循环重连
 			c.connMutex.Lock()
 			c.connected = false

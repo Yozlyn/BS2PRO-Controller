@@ -133,7 +133,7 @@ func NewCoreApp(debugMode bool) *CoreApp {
 }
 
 func (a *CoreApp) Start() error {
-	a.logInfo("核心服务启动 版本: %s, 安装目录: %s", version.Get(), config.GetInstallDir())
+	a.logInfo("核心服务启动", "version", version.Get(), "install_dir", config.GetInstallDir())
 
 	cfg := a.configManager.Load(false)
 	if cfg.DebugMode {
@@ -144,7 +144,7 @@ func (a *CoreApp) Start() error {
 	}
 
 	if err := a.deviceManager.Init(); err != nil {
-		a.logError("初始化HID库失败: %v", err)
+		a.logError("初始化 HID 库失败", "error", err)
 		return err
 	}
 	a.deviceManager.SetCallbacks(a.onFanDataUpdate, a.onDeviceDisconnect)
@@ -152,7 +152,7 @@ func (a *CoreApp) Start() error {
 	a.logInfo("启动 IPC 服务器 (Named Pipe)")
 	a.ipcServer = ipc.NewServer(a.handleIPCRequest, a.logger)
 	if err := a.ipcServer.Start(); err != nil {
-		a.logError("启动 IPC 服务器失败: %v", err)
+		a.logError("启动 IPC 服务器失败", "pipe", ipc.PipePath, "error", err)
 		return err
 	}
 
@@ -211,7 +211,7 @@ func (a *CoreApp) onQuitRequest() {
 func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 	defer func() {
 		if r := recover(); r != nil {
-			a.logError("处理 IPC 请求时发生致命异常: %v", r)
+			a.logError("处理 IPC 请求时发生致命异常", "event", req.Type, "error", r)
 			res = a.errorResponse(fmt.Sprintf("内部异常: %v", r))
 		}
 	}()
@@ -280,7 +280,7 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 		if err := json.Unmarshal(req.Data, &params); err != nil {
 			return a.errorResponse("解析导入通知失败: " + err.Error())
 		}
-		a.logInfo("收到导入完成通知请求: profileCount=%d", params.ProfileCount)
+		a.logInfo("收到导入完成通知请求", "event", req.Type, "profile_count", params.ProfileCount)
 		if a.notificationManager != nil {
 			a.notificationManager.OnConfigImportCompleted(params.ProfileCount)
 		}
@@ -290,7 +290,7 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 		if err := json.Unmarshal(req.Data, &params); err != nil {
 			return a.errorResponse("解析导出通知失败: " + err.Error())
 		}
-		a.logInfo("收到导出完成通知请求: profileCount=%d", params.ProfileCount)
+		a.logInfo("收到导出完成通知请求", "event", req.Type, "profile_count", params.ProfileCount)
 		if a.notificationManager != nil {
 			a.notificationManager.OnConfigExportCompleted(params.ProfileCount)
 		}
@@ -311,7 +311,7 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 		return a.successResponse(true)
 	case ipc.ReqToggleAutoControl:
 		cfg := a.configManager.Get()
-		a.logInfo("收到快捷键切换智能变频请求: current=%v next=%v", cfg.AutoControl, !cfg.AutoControl)
+		a.logInfo("收到快捷键切换智能变频请求", "event", req.Type, "current", cfg.AutoControl, "next", !cfg.AutoControl)
 		if err := a.SetAutoControl(!cfg.AutoControl); err != nil {
 			return a.errorResponse(err.Error())
 		}
@@ -426,7 +426,7 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 	case ipc.ReqToggleProcessSwitch:
 		cfg := a.configManager.Get()
 		next := !cfg.ProcessSwitchEnabled
-		a.logInfo("收到快捷键切换进程联动请求: current=%v next=%v", cfg.ProcessSwitchEnabled, next)
+		a.logInfo("收到快捷键切换进程联动请求", "event", req.Type, "current", cfg.ProcessSwitchEnabled, "next", next)
 		if err := a.SetProcessSwitchEnabled(next); err != nil {
 			return a.errorResponse(err.Error())
 		}
@@ -487,10 +487,10 @@ func (a *CoreApp) onFanDataUpdate(fanData *types.FanData) {
 	var shouldBroadcastConfig bool
 	var broadcastCfg types.AppConfig
 	if fanData.WorkMode == "挡位工作模式" && cfg.AutoControl && a.lastDeviceMode == "自动模式(实时转速)" && !a.userSetAutoControl && !cfg.IgnoreDeviceOnReconnect && !a.monitoringTemp {
-		a.logInfo("检测到设备从自动模式切换到挡位工作模式，自动关闭智能变频")
+		a.logInfo("检测到设备从自动模式切换到挡位工作模式，自动关闭智能变频", "previous_mode", a.lastDeviceMode, "mode", fanData.WorkMode)
 		cfg.AutoControl = false
 		if err := a.configManager.Update(cfg); err != nil {
-			a.logError("保存配置失败: %v", err)
+			a.logError("保存配置失败", "error", err)
 		}
 		shouldBroadcastConfig = true
 		broadcastCfg = cfg
@@ -548,7 +548,7 @@ func (a *CoreApp) onDeviceDisconnect() {
 func (a *CoreApp) scheduleReconnect(gen int32) {
 	defer func() {
 		if r := recover(); r != nil {
-			a.logError("自动重连时发生Panic: %v", r)
+			a.logError("自动重连发生 panic", "error", r, "attempt", gen)
 		}
 	}()
 
@@ -611,7 +611,7 @@ func (a *CoreApp) scheduleReconnect(gen int32) {
 func (a *CoreApp) applyConfigOnConnect() {
 	cfg := a.configManager.Get()
 	a.logDebug("开始应用配置到设备")
-	a.logDebug("连接后配置摘要: autoControl=%v customSpeedEnabled=%v customSpeedRPM=%d", cfg.AutoControl, cfg.CustomSpeedEnabled, cfg.CustomSpeedRPM)
+	a.logDebug("连接后配置摘要", "auto_control", cfg.AutoControl, "custom_speed_enabled", cfg.CustomSpeedEnabled, "custom_speed_rpm", cfg.CustomSpeedRPM)
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -629,7 +629,7 @@ func (a *CoreApp) applyConfigOnConnect() {
 	}
 
 	if cfg.CustomSpeedEnabled {
-		a.logDebug("连接后应用自定义转速: rpm=%d", cfg.CustomSpeedRPM)
+		a.logDebug("连接后应用自定义转速", "rpm", cfg.CustomSpeedRPM)
 		a.deviceManager.SetCustomFanSpeed(cfg.CustomSpeedRPM)
 	}
 
@@ -723,7 +723,7 @@ func (a *CoreApp) DisconnectDevice() {
 	// 重置自动偏移控制器
 	a.fanOffsetCtrl.Reset()
 	if fd := a.deviceManager.GetCurrentFanData(); fd != nil {
-		a.logInfo("DisconnectDevice 前设备状态: mode=%s currentRPM=%d targetRPM=%d", fd.WorkMode, fd.CurrentRPM, fd.TargetRPM)
+		a.logInfo("DisconnectDevice 前设备状态", "mode", fd.WorkMode, "current_rpm", fd.CurrentRPM, "target_rpm", fd.TargetRPM)
 	} else {
 		a.logInfo("DisconnectDevice 前设备状态: 无风扇数据")
 	}
@@ -860,15 +860,15 @@ func (a *CoreApp) handleForegroundProcessReport(processName string) {
 	a.mutex.Lock()
 	a.lastReportedForegroundProcess = strings.ToLower(strings.TrimSpace(processName))
 	a.mutex.Unlock()
-	a.logDebug("进程联动收到探针上报前台进程: %s", processName)
+	a.logDebug("进程联动收到探针上报前台进程", "process", processName)
 }
 
 func (a *CoreApp) emitNotification(req notification.Request) {
 	if a.ipcServer == nil || !a.ipcServer.HasRoleClient(ipc.RoleMonitorAgent) {
-		a.logDebug("通知未投递，monitor 未连接: %s", req.Type)
+		a.logDebug("通知未投递，monitor 未连接", "role", ipc.RoleMonitorAgent, "type", req.Type)
 		return
 	}
-	a.logInfo("投递通知到 monitor: type=%s title=%s", req.Type, req.Title)
+	a.logInfo("投递通知到 monitor", "role", ipc.RoleMonitorAgent, "type", req.Type, "title", req.Title)
 	a.ipcServer.BroadcastEventToRole(ipc.RoleMonitorAgent, ipc.EventNotificationRequest, req)
 }
 
@@ -881,7 +881,7 @@ func (a *CoreApp) runProcessSwitchCheck(cfg types.AppConfig) {
 	foregroundProcess := a.lastReportedForegroundProcess
 	a.mutex.RUnlock()
 	procs := a.processSwitcher.ListProcessNames(foregroundProcess)
-	a.logDebug("进程联动当前前台进程集合: %+v", procs)
+	a.logDebug("进程联动当前前台进程集合", "processes", procs)
 
 	rule := a.processSwitcher.MatchRule(cfg.ProcessSwitchRules, procs)
 	if rule == nil {
@@ -898,22 +898,22 @@ func (a *CoreApp) runProcessSwitchCheck(cfg types.AppConfig) {
 	alreadyApplied := strings.EqualFold(a.activeProcessProfilePath, resolved)
 	a.mutex.RUnlock()
 	if alreadyApplied {
-		a.logDebug("进程联动命中但已应用，无需重复切换: process=%s path=%s", rule.ProcessName, resolved)
+		a.logDebug("进程联动命中但已应用，无需重复切换", "process", rule.ProcessName, "path", resolved)
 		return
 	}
 
 	curve, err := a.processSwitcher.LoadCurve(rule.ProfilePath)
 	if err != nil {
-		a.logError("进程联动加载配置失败: process=%s path=%s err=%v", rule.ProcessName, rule.ProfilePath, err)
+		a.logError("进程联动加载配置失败", "process", rule.ProcessName, "path", rule.ProfilePath, "error", err)
 		return
 	}
 
 	if err := a.applyProcessCurve(curve, resolved); err != nil {
-		a.logError("进程联动应用配置失败: process=%s path=%s err=%v", rule.ProcessName, rule.ProfilePath, err)
+		a.logError("进程联动应用配置失败", "process", rule.ProcessName, "path", rule.ProfilePath, "error", err)
 		return
 	}
 
-	a.logInfo("进程联动已切换风扇配置: process=%s path=%s", rule.ProcessName, resolved)
+	a.logInfo("进程联动已切换风扇配置", "process", rule.ProcessName, "path", resolved)
 }
 
 func (a *CoreApp) applyProcessCurve(curve []types.FanCurvePoint, profilePath string) error {
@@ -959,7 +959,7 @@ func (a *CoreApp) restoreBaseFanCurveAfterProcessSwitch() {
 		a.mutex.Unlock()
 		return
 	}
-	a.logDebug("进程联动退出前台，恢复原始风扇曲线: previous=%s", a.activeProcessProfilePath)
+	a.logDebug("进程联动退出前台，恢复原始风扇曲线", "previous", a.activeProcessProfilePath)
 	cfg := a.configManager.Get()
 	cfg.FanCurve = cloneFanCurvePoints(a.baseFanCurveBeforeSwitch)
 	if a.baseOffsetEnabledBeforeSwitch != nil {
@@ -967,13 +967,13 @@ func (a *CoreApp) restoreBaseFanCurveAfterProcessSwitch() {
 	}
 	err := a.configManager.Update(cfg)
 	if err == nil {
-		a.logDebug("进程联动恢复完成: restoredCurvePoints=%d restoredOffsetEnabled=%v", len(cfg.FanCurve), cfg.FanCurveOffsetEnabled)
+		a.logDebug("进程联动恢复完成", "restored_curve_points", len(cfg.FanCurve), "restored_offset_enabled", cfg.FanCurveOffsetEnabled)
 		a.baseFanCurveBeforeSwitch = nil
 		a.baseOffsetEnabledBeforeSwitch = nil
 	}
 	a.mutex.Unlock()
 	if err != nil {
-		a.logError("恢复原始风扇曲线失败: %v", err)
+		a.logError("恢复原始风扇曲线失败", "error", err)
 		return
 	}
 	if a.ipcServer != nil {
@@ -1034,7 +1034,7 @@ func (a *CoreApp) SetAutoControl(enabled bool) error {
 		a.safeGo("enterAutoMode", func() {
 			time.Sleep(100 * time.Millisecond) // 等待一下再进入自动模式
 			if err := a.deviceManager.EnterAutoMode(); err != nil {
-				a.logError("进入自动模式失败: %v", err)
+				a.logError("进入自动模式失败", "error", err)
 			}
 		})
 	}
@@ -1264,7 +1264,7 @@ func (a *CoreApp) SetRGBMode(params ipc.SetRGBModeParams) bool {
 			Brightness: params.Brightness,
 		}
 		if err := a.configManager.Update(cfg); err != nil {
-			a.logError("保存RGB配置失败: %v", err)
+			a.logError("保存 RGB 配置失败", "mode", params.Mode, "error", err)
 		}
 		if a.ipcServer != nil {
 			a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
@@ -1488,7 +1488,7 @@ func (a *CoreApp) startTemperatureMonitoring() {
 
 	if isConnected && cfg.AutoControl {
 		if err := a.deviceManager.EnterAutoMode(); err != nil {
-			a.logError("进入自动模式失败: %v", err)
+			a.logError("进入自动模式失败", "error", err)
 		}
 		time.Sleep(100 * time.Millisecond)
 		cfg = a.configManager.Get()
@@ -1541,10 +1541,10 @@ func (a *CoreApp) startTemperatureMonitoring() {
 				if temp.MaxTemp <= 0 {
 					tempReadFailCount++
 					if tempReadFailCount <= maxTempReadFailures {
-						a.logDebug("温度读取失败 (尝试 %d/%d): %s", tempReadFailCount, maxTempReadFailures, temp.BridgeMsg)
+						a.logDebug("温度读取失败", "attempt", tempReadFailCount, "max_attempts", maxTempReadFailures, "reason", temp.BridgeMsg)
 						continue
 					} else {
-						a.logInfo("温度读取连续失败 %d 次，继续执行但智能变频可能不生效", maxTempReadFailures)
+						a.logInfo("温度读取连续失败，继续执行但智能变频可能不生效", "attempt", maxTempReadFailures, "reason", temp.BridgeMsg)
 					}
 				} else {
 					// 温度读取成功，重置失败计数器
@@ -1673,11 +1673,10 @@ func (a *CoreApp) startTemperatureMonitoring() {
 						rpmError := targetRPM - int(latestFanData.CurrentRPM)
 						targetGap := int(latestFanData.TargetRPM) - int(latestFanData.CurrentRPM)
 						a.fanOffsetCtrl.ObserveFanResponse(targetRPM, int(latestFanData.CurrentRPM), int(latestFanData.TargetRPM))
-						a.logDebug("智能变频监控：计算出的 targetRPM=%d, avgTemp=%d, len(fanCurve)=%d, currentRPM=%d, deviceTargetRPM=%d, rpmError=%d, targetGap=%d, mode=%s, gear=%s",
-							targetRPM, avgTemp, len(cfg.FanCurve), latestFanData.CurrentRPM, latestFanData.TargetRPM, rpmError, targetGap, latestFanData.WorkMode, latestFanData.SetGear)
+						a.logDebug("智能变频监控计算结果", "target_rpm", targetRPM, "avg_temp", avgTemp, "curve_points", len(cfg.FanCurve), "current_rpm", latestFanData.CurrentRPM, "device_target_rpm", latestFanData.TargetRPM, "rpm_error", rpmError, "target_gap", targetGap, "mode", latestFanData.WorkMode, "gear", latestFanData.SetGear)
 					} else {
 						a.fanOffsetCtrl.ObserveFanResponse(0, 0, 0)
-						a.logDebug("智能变频监控：计算出的 targetRPM=%d, avgTemp=%d, len(fanCurve)=%d, currentRPM=unknown", targetRPM, avgTemp, len(cfg.FanCurve))
+						a.logDebug("智能变频监控计算结果", "target_rpm", targetRPM, "avg_temp", avgTemp, "curve_points", len(cfg.FanCurve), "current_rpm", "unknown")
 					}
 					if targetRPM > 0 {
 						if latestFanData != nil && latestFanData.WorkMode == "挡位工作模式" {
@@ -1686,7 +1685,7 @@ func (a *CoreApp) startTemperatureMonitoring() {
 								time.Sleep(100 * time.Millisecond)
 							}
 						}
-						a.logDebug("智能变频监控：下发新风扇转速 targetRPM=%d", targetRPM)
+						a.logDebug("智能变频监控下发新风扇转速", "target_rpm", targetRPM)
 						a.deviceManager.SetFanSpeed(targetRPM)
 					}
 				}
