@@ -1077,7 +1077,7 @@ func (a *CoreApp) applyCurrentGearSetting() {
 	if success && a.isConnected {
 		a.safeGo("restoreCurrentRGB-applyGear", func() {
 			time.Sleep(200 * time.Millisecond)
-			a.restoreCurrentRGB()
+			a.restoreCurrentRGBSilently()
 		})
 	}
 }
@@ -1860,6 +1860,19 @@ func (a *CoreApp) restoreCurrentRGB() {
 	params := rgbParamsFromConfig(a.configManager.Get())
 	if !a.SetRGBMode(params) {
 		a.logError("恢复当前 RGB 失败", "mode", params.Mode, "colors", len(params.Colors), "speed", params.Speed, "brightness", params.Brightness)
+	}
+}
+
+// restoreCurrentRGBSilently 静默恢复当前配置的RGB设置
+func (a *CoreApp) restoreCurrentRGBSilently() {
+	if !a.isConnected {
+		a.logDebug("跳过静默恢复当前 RGB：设备未连接")
+		return
+	}
+	params := rgbParamsFromConfig(a.configManager.Get())
+	a.logDebug("静默恢复当前 RGB", "mode", params.Mode, "colors", len(params.Colors), "speed", params.Speed, "brightness", params.Brightness)
+	if !a.applyRGBMode(params, false) {
+		a.logError("静默恢复当前 RGB 失败", "mode", params.Mode, "colors", len(params.Colors), "speed", params.Speed, "brightness", params.Brightness)
 	}
 }
 
