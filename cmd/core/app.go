@@ -612,39 +612,57 @@ func (a *CoreApp) applyConfigOnConnect() {
 
 	if !cfg.AutoControl {
 		if cfg.ManualGear != "" && cfg.ManualLevel != "" {
+			manualApplied := false
 			for i := 0; i < 3; i++ {
 				if a.deviceManager.SetManualGear(cfg.ManualGear, cfg.ManualLevel) {
+					manualApplied = true
 					break
 				}
 				if i < 2 {
 					time.Sleep(100 * time.Millisecond)
 				}
 			}
+			if !manualApplied {
+				a.logError("连接后恢复手动挡失败", "gear", cfg.ManualGear, "level", cfg.ManualLevel, "attempts", 3)
+			}
 		}
 	}
 
 	if cfg.CustomSpeedEnabled {
 		a.logDebug("连接后应用自定义转速", "rpm", cfg.CustomSpeedRPM)
-		a.deviceManager.SetCustomFanSpeed(cfg.CustomSpeedRPM)
+		if !a.deviceManager.SetCustomFanSpeed(cfg.CustomSpeedRPM) {
+			a.logError("连接后应用自定义转速失败", "rpm", cfg.CustomSpeedRPM)
+		}
 	}
 
 	if cfg.GearLight {
-		a.deviceManager.SetGearLight(true)
+		if !a.deviceManager.SetGearLight(true) {
+			a.logError("连接后恢复挡位灯失败", "enabled", true)
+		}
 	}
 
 	if cfg.PowerOnStart {
-		a.deviceManager.SetPowerOnStart(true)
+		if !a.deviceManager.SetPowerOnStart(true) {
+			a.logError("连接后恢复开机自启设置失败", "enabled", true)
+		}
 	}
 
 	if cfg.SmartStartStop != "" && cfg.SmartStartStop != "off" {
-		a.deviceManager.SetSmartStartStop(cfg.SmartStartStop)
+		if !a.deviceManager.SetSmartStartStop(cfg.SmartStartStop) {
+			a.logError("连接后恢复智能启停设置失败", "mode", cfg.SmartStartStop)
+		}
 	}
 
 	if cfg.Brightness > 0 {
-		a.deviceManager.SetBrightness(cfg.Brightness)
+		if !a.deviceManager.SetBrightness(cfg.Brightness) {
+			a.logError("连接后恢复亮度失败", "brightness", cfg.Brightness)
+		}
 	}
 
-	a.applyRGBMode(rgbParamsFromConfig(cfg), false)
+	rgbParams := rgbParamsFromConfig(cfg)
+	if !a.applyRGBMode(rgbParams, false) {
+		a.logError("连接后恢复 RGB 失败", "mode", rgbParams.Mode, "colors", len(rgbParams.Colors), "speed", rgbParams.Speed, "brightness", rgbParams.Brightness)
+	}
 
 	a.logDebug("配置应用完成")
 }
@@ -938,7 +956,9 @@ func (a *CoreApp) applyProcessCurve(curve []types.FanCurvePoint, profilePath str
 	if isConnected && cfg.AutoControl && currentTemp > 0 {
 		targetRPM := temperature.CalculateTargetRPM(currentTemp, cfg.FanCurve)
 		if targetRPM > 0 {
-			a.deviceManager.SetFanSpeed(targetRPM)
+			if !a.deviceManager.SetFanSpeed(targetRPM) {
+				a.logError("进程联动应用目标转速失败", "target_rpm", targetRPM, "temp", currentTemp, "profile", profilePath)
+			}
 		}
 	}
 
@@ -1050,6 +1070,9 @@ func (a *CoreApp) applyCurrentGearSetting() {
 	}
 	cfg := a.configManager.Get()
 	success := a.deviceManager.SetManualGear(fanData.SetGear, cfg.ManualLevel)
+	if !success {
+		a.logError("按当前设备挡位恢复手动挡失败", "gear", fanData.SetGear, "level", cfg.ManualLevel)
+	}
 
 	if success && a.isConnected {
 		a.safeGo("restoreCurrentRGB-applyGear", func() {
@@ -1063,9 +1086,14 @@ func (a *CoreApp) SetManualGear(gear, level string) bool {
 	cfg := a.configManager.Get()
 	cfg.ManualGear = gear
 	cfg.ManualLevel = level
-	a.configManager.Update(cfg)
+	if err := a.configManager.Update(cfg); err != nil {
+		a.logError("保存手动挡位配置失败", "gear", gear, "level", level, "error", err)
+	}
 
 	success := a.deviceManager.SetManualGear(gear, level)
+	if !success {
+		a.logError("手动挡位下发失败", "gear", gear, "level", level, "connected", a.isConnected)
+	}
 
 	// 当用户主动点击按钮切换到 手动低/中/高时，硬件必定会重置状态
 	if success && a.isConnected {
@@ -1101,7 +1129,9 @@ func (a *CoreApp) SetCustomSpeed(enabled bool, rpm int) error {
 
 	if enabled && isConnected {
 		a.safeGo("setCustomFanSpeed", func() {
-			a.deviceManager.SetCustomFanSpeed(rpm)
+			if !a.deviceManager.SetCustomFanSpeed(rpm) {
+				a.logError("设置自定义转速失败", "rpm", rpm, "stage", "user_apply")
+			}
 		})
 	}
 
@@ -1119,13 +1149,18 @@ func (a *CoreApp) SetCustomSpeed(enabled bool, rpm int) error {
 	return err
 }
 
-func (a *CoreApp) applyDeviceFlag(deviceCall func() bool, updateCfg func(*types.AppConfig)) bool {
+func (a *CoreApp) applyDeviceFlag(action string, deviceCall func() bool, updateCfg func(*types.AppConfig), args ...any) bool {
 	if !deviceCall() {
+		logArgs := append([]any{"action", action}, args...)
+		a.logError("设备设置下发失败", logArgs...)
 		return false
 	}
 	cfg := a.configManager.Get()
 	updateCfg(&cfg)
-	a.configManager.Update(cfg)
+	if err := a.configManager.Update(cfg); err != nil {
+		logArgs := append(append([]any{"action", action}, args...), "error", err)
+		a.logError("保存设备设置配置失败", logArgs...)
+	}
 	if a.ipcServer != nil {
 		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
 	}
@@ -1134,29 +1169,37 @@ func (a *CoreApp) applyDeviceFlag(deviceCall func() bool, updateCfg func(*types.
 
 func (a *CoreApp) SetGearLight(enabled bool) bool {
 	return a.applyDeviceFlag(
+		"gear_light",
 		func() bool { return a.deviceManager.SetGearLight(enabled) },
 		func(cfg *types.AppConfig) { cfg.GearLight = enabled },
+		"enabled", enabled,
 	)
 }
 
 func (a *CoreApp) SetPowerOnStart(enabled bool) bool {
 	return a.applyDeviceFlag(
+		"power_on_start",
 		func() bool { return a.deviceManager.SetPowerOnStart(enabled) },
 		func(cfg *types.AppConfig) { cfg.PowerOnStart = enabled },
+		"enabled", enabled,
 	)
 }
 
 func (a *CoreApp) SetSmartStartStop(mode string) bool {
 	return a.applyDeviceFlag(
+		"smart_start_stop",
 		func() bool { return a.deviceManager.SetSmartStartStop(mode) },
 		func(cfg *types.AppConfig) { cfg.SmartStartStop = mode },
+		"mode", mode,
 	)
 }
 
 func (a *CoreApp) SetBrightness(percentage int) bool {
 	return a.applyDeviceFlag(
+		"brightness",
 		func() bool { return a.deviceManager.SetBrightness(percentage) },
 		func(cfg *types.AppConfig) { cfg.Brightness = percentage },
+		"brightness", percentage,
 	)
 }
 
@@ -1166,6 +1209,7 @@ func (a *CoreApp) SetRGBMode(params ipc.SetRGBModeParams) bool {
 
 func (a *CoreApp) applyRGBMode(params ipc.SetRGBModeParams, notify bool) bool {
 	if !a.isConnected {
+		a.logError("RGB 下发失败：设备未连接", "mode", params.Mode, "colors", len(params.Colors), "speed", params.Speed, "brightness", params.Brightness)
 		return false
 	}
 
@@ -1197,6 +1241,9 @@ func (a *CoreApp) applyRGBMode(params ipc.SetRGBModeParams, notify bool) bool {
 
 		level := smartRGBLevelForTemp(curTemp)
 		success = rgbCtrl.SetSmartTempLevel(level)
+		if !success {
+			a.logError("智能 RGB 下发失败", "level", level, "temp", curTemp)
+		}
 		if success {
 			a.mutex.Lock()
 			a.lastSmartModeLevel = level
@@ -1234,7 +1281,11 @@ func (a *CoreApp) applyRGBMode(params ipc.SetRGBModeParams, notify bool) bool {
 	case "flowing":
 		success = rgbCtrl.SetFlowing(speed, brightness)
 	default:
+		a.logError("RGB 下发失败：模式不支持", "mode", params.Mode, "colors", len(params.Colors), "speed", params.Speed, "brightness", params.Brightness)
 		return false
+	}
+	if !success {
+		a.logError("RGB 下发失败", "mode", params.Mode, "colors", len(params.Colors), "speed", params.Speed, "brightness", params.Brightness, "notify", notify)
 	}
 
 	if success {
@@ -1387,13 +1438,19 @@ func (a *CoreApp) triggerHotkeyAction(action string) {
 func (a *CoreApp) toggleAutoControlHotkey() {
 	cfg := a.configManager.Get()
 	next := !cfg.AutoControl
-	_ = a.SetAutoControl(next)
+	if err := a.SetAutoControl(next); err != nil {
+		a.logError("快捷键切换智能变频失败", "current", cfg.AutoControl, "next", next, "error", err)
+		a.emitNotification(notification.Request{Title: "智能变频切换失败", Message: err.Error()})
+	}
 }
 
 func (a *CoreApp) toggleProcessSwitchHotkey() {
 	cfg := a.configManager.Get()
 	next := !cfg.ProcessSwitchEnabled
-	_ = a.SetProcessSwitchEnabled(next)
+	if err := a.SetProcessSwitchEnabled(next); err != nil {
+		a.logError("快捷键切换进程联动失败", "current", cfg.ProcessSwitchEnabled, "next", next, "error", err)
+		a.emitNotification(notification.Request{Title: "进程联动切换失败", Message: err.Error()})
+	}
 }
 
 func (a *CoreApp) toggleOffsetHotkey() {
@@ -1638,7 +1695,9 @@ func (a *CoreApp) startTemperatureMonitoring() {
 						changed := a.fanOffsetCtrl.Update(avgTemp, fanCurveCopy, 500, deviceMaxRPM)
 						if changed {
 							cfg.FanCurve = fanCurveCopy
-							a.configManager.Update(cfg)
+							if err := a.configManager.Update(cfg); err != nil {
+								a.logError("智能变频偏移学习结果保存失败", "avg_temp", avgTemp, "curve_points", len(fanCurveCopy), "error", err)
+							}
 							if a.ipcServer != nil {
 								go func(c types.AppConfig) {
 									defer func() { recover() }()
@@ -1655,10 +1714,10 @@ func (a *CoreApp) startTemperatureMonitoring() {
 					if latestFanData != nil {
 						rpmError := targetRPM - int(latestFanData.CurrentRPM)
 						targetGap := int(latestFanData.TargetRPM) - int(latestFanData.CurrentRPM)
-						a.fanOffsetCtrl.ObserveFanResponse(targetRPM, int(latestFanData.CurrentRPM), int(latestFanData.TargetRPM))
+						a.fanOffsetCtrl.ObserveFanResponse(avgTemp, targetRPM, int(latestFanData.CurrentRPM), int(latestFanData.TargetRPM))
 						a.logDebug("智能变频监控计算结果", "target_rpm", targetRPM, "avg_temp", avgTemp, "curve_points", len(cfg.FanCurve), "current_rpm", latestFanData.CurrentRPM, "device_target_rpm", latestFanData.TargetRPM, "rpm_error", rpmError, "target_gap", targetGap, "mode", latestFanData.WorkMode, "gear", latestFanData.SetGear)
 					} else {
-						a.fanOffsetCtrl.ObserveFanResponse(0, 0, 0)
+						a.fanOffsetCtrl.ObserveFanResponse(avgTemp, 0, 0, 0)
 						a.logDebug("智能变频监控计算结果", "target_rpm", targetRPM, "avg_temp", avgTemp, "curve_points", len(cfg.FanCurve), "current_rpm", "unknown")
 					}
 					if targetRPM > 0 {
@@ -1666,10 +1725,18 @@ func (a *CoreApp) startTemperatureMonitoring() {
 							a.logDebug("智能变频监控：设备进入手动模式，重新进入自动模式")
 							if err := a.deviceManager.EnterAutoMode(); err == nil {
 								time.Sleep(100 * time.Millisecond)
+							} else {
+								a.logError("智能变频监控恢复自动模式失败", "target_rpm", targetRPM, "avg_temp", avgTemp, "error", err)
 							}
 						}
 						a.logDebug("智能变频监控下发新风扇转速", "target_rpm", targetRPM)
-						a.deviceManager.SetFanSpeed(targetRPM)
+						if !a.deviceManager.SetFanSpeed(targetRPM) {
+							if latestFanData != nil {
+								a.logError("智能变频监控下发风扇转速失败", "target_rpm", targetRPM, "avg_temp", avgTemp, "mode", latestFanData.WorkMode, "gear", latestFanData.SetGear)
+							} else {
+								a.logError("智能变频监控下发风扇转速失败", "target_rpm", targetRPM, "avg_temp", avgTemp)
+							}
+						}
 					}
 				}
 			}
@@ -1787,19 +1854,29 @@ func rgbParamsFromConfig(cfg types.AppConfig) ipc.SetRGBModeParams {
 // restoreCurrentRGB 恢复当前配置的RGB设置
 func (a *CoreApp) restoreCurrentRGB() {
 	if !a.isConnected {
+		a.logDebug("跳过恢复当前 RGB：设备未连接")
 		return
 	}
-	a.SetRGBMode(rgbParamsFromConfig(a.configManager.Get()))
+	params := rgbParamsFromConfig(a.configManager.Get())
+	if !a.SetRGBMode(params) {
+		a.logError("恢复当前 RGB 失败", "mode", params.Mode, "colors", len(params.Colors), "speed", params.Speed, "brightness", params.Brightness)
+	}
 }
 
 // restoreSmartRGBForAutoControl 在开启智能变频时，仅对智能灯光模式静默补应用一次
 func (a *CoreApp) restoreSmartRGBForAutoControl() {
 	if !a.isConnected {
+		a.logDebug("跳过恢复智能 RGB：设备未连接")
 		return
 	}
 
 	cfg := a.configManager.Get()
-	if cfg.RGBConfig == nil || cfg.RGBConfig.Mode != "smart" {
+	if cfg.RGBConfig == nil {
+		a.logDebug("跳过恢复智能 RGB：RGB 配置为空")
+		return
+	}
+	if cfg.RGBConfig.Mode != "smart" {
+		a.logDebug("跳过恢复智能 RGB：当前模式不是智能模式", "mode", cfg.RGBConfig.Mode)
 		return
 	}
 
@@ -1809,11 +1886,13 @@ func (a *CoreApp) restoreSmartRGBForAutoControl() {
 	a.mutex.Unlock()
 
 	level := smartRGBLevelForTemp(curTemp)
-	if a.deviceManager.RGB().SetSmartTempLevel(level) {
-		a.mutex.Lock()
-		a.lastSmartModeLevel = level
-		a.mutex.Unlock()
+	if !a.deviceManager.RGB().SetSmartTempLevel(level) {
+		a.logError("恢复智能 RGB 失败", "mode", cfg.RGBConfig.Mode, "level", level, "temp", curTemp)
+		return
 	}
+	a.mutex.Lock()
+	a.lastSmartModeLevel = level
+	a.mutex.Unlock()
 }
 
 func (a *CoreApp) RestartService() bool {

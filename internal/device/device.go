@@ -460,6 +460,7 @@ func (m *Manager) getDevice() *hid.Device {
 func (m *Manager) writeCmd(cmd []byte) bool {
 	dev := m.getDevice()
 	if dev == nil {
+		m.logError("设备命令下发失败，设备未连接", "cmd_len", len(cmd))
 		return false
 	}
 	size := 23
@@ -471,6 +472,9 @@ func (m *Manager) writeCmd(cmd []byte) bool {
 	m.deviceOpMutex.Lock()
 	_, err := dev.Write(buf)
 	m.deviceOpMutex.Unlock()
+	if err != nil {
+		m.logError("设备命令写入失败", "cmd_len", len(buf), "error", err)
+	}
 	return err == nil
 }
 
@@ -480,6 +484,7 @@ func (m *Manager) validateAndGetDevice(rpm int, label string) (*hid.Device, bool
 	m.mutex.Lock()
 	if !m.isConnected || m.device == nil {
 		m.mutex.Unlock()
+		m.logError("风扇转速设置失败，设备未连接", "label", label, "rpm", rpm)
 		return nil, false
 	}
 	if rpm < 500 || rpm > 4500 {
@@ -514,6 +519,9 @@ func (m *Manager) SetFanSpeed(rpm int) bool {
 	m.deviceOpMutex.Lock()
 	_, err := dev.Write(cmd)
 	m.deviceOpMutex.Unlock()
+	if err != nil {
+		m.logError("设置风扇转速失败", "rpm", rpm, "error", err)
+	}
 	return err == nil
 }
 
@@ -527,15 +535,21 @@ func (m *Manager) SetCustomFanSpeed(rpm int) bool {
 	enterModeCmd := []byte{0x02, 0x5A, 0xA5, 0x23, 0x02, 0x25, 0x00}
 	enterModeCmd = append(enterModeCmd, make([]byte, 23-len(enterModeCmd))...)
 	m.deviceOpMutex.Lock()
-	dev.Write(enterModeCmd)
+	_, err := dev.Write(enterModeCmd)
 	m.deviceOpMutex.Unlock()
+	if err != nil {
+		m.logWarn("设置自定义转速前切换自动模式失败，继续尝试下发转速", "rpm", rpm, "error", err)
+	}
 
 	time.Sleep(50 * time.Millisecond)
 
 	cmd := buildSpeedCmd(rpm)
 	m.deviceOpMutex.Lock()
-	_, err := dev.Write(cmd)
+	_, err = dev.Write(cmd)
 	m.deviceOpMutex.Unlock()
+	if err != nil {
+		m.logError("设置自定义转速失败", "rpm", rpm, "error", err)
+	}
 	return err == nil
 }
 
@@ -556,6 +570,7 @@ func (m *Manager) EnterAutoMode() error {
 func (m *Manager) SetManualGear(gear, level string) bool {
 	commands, exists := types.GearCommands[gear]
 	if !exists {
+		m.logError("设置手动挡失败，挡位不支持", "gear", gear, "level", level)
 		return false
 	}
 	var selectedCommand *types.GearCommand
@@ -566,6 +581,7 @@ func (m *Manager) SetManualGear(gear, level string) bool {
 		}
 	}
 	if selectedCommand == nil {
+		m.logError("设置手动挡失败，档位级别不支持", "gear", gear, "level", level)
 		return false
 	}
 	return m.writeCmd(append([]byte{0x02}, selectedCommand.Command...))
@@ -595,6 +611,7 @@ func (m *Manager) SetSmartStartStop(mode string) bool {
 	case "delayed":
 		cmd = []byte{0x02, 0x5A, 0xA5, 0x0D, 0x03, 0x02, 0x12}
 	default:
+		m.logError("设置智能启停失败，模式不支持", "mode", mode)
 		return false
 	}
 	return m.writeCmd(cmd)

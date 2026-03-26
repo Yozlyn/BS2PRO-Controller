@@ -34,10 +34,7 @@ type Controller struct {
 	config Config
 	logger types.Logger
 
-	hasRPMFeedback     bool
-	latestTargetRPM    int
-	latestCurrentRPM   int
-	latestDeviceTarget int
+	latestRPMFeedback rpmFeedback
 }
 
 type tempSample struct {
@@ -49,6 +46,14 @@ type learnedState struct {
 	confidence float64
 	successes  int
 	failures   int
+}
+
+type rpmFeedback struct {
+	targetRPM       int
+	currentRPM      int
+	deviceTargetRPM int
+	observedTemp    int
+	observedAt      time.Time
 }
 
 // zoneState 每个温度控制点的独立运行状态
@@ -247,20 +252,20 @@ func New(cfg Config, logger types.Logger) *Controller {
 }
 
 // ObserveFanResponse 记录一次目标转速与实际转速反馈，供后续偏置微调使用。
-func (c *Controller) ObserveFanResponse(targetRPM, currentRPM, deviceTargetRPM int) {
+func (c *Controller) ObserveFanResponse(observedTemp, targetRPM, currentRPM, deviceTargetRPM int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if targetRPM <= 0 || currentRPM <= 0 {
-		c.latestTargetRPM = 0
-		c.latestCurrentRPM = 0
-		c.latestDeviceTarget = 0
-		c.hasRPMFeedback = false
+		c.clearRPMFeedback()
 		return
 	}
-	c.latestTargetRPM = targetRPM
-	c.latestCurrentRPM = currentRPM
-	c.latestDeviceTarget = deviceTargetRPM
-	c.hasRPMFeedback = true
+	c.latestRPMFeedback = rpmFeedback{
+		targetRPM:       targetRPM,
+		currentRPM:      currentRPM,
+		deviceTargetRPM: deviceTargetRPM,
+		observedTemp:    observedTemp,
+		observedAt:      time.Now(),
+	}
 }
 
 // Update 根据当前温度调整对应区间的偏移量
@@ -371,7 +376,7 @@ NORMAL_LOGIC:
 	switch {
 	case !defenseTriggered && !stagnationHandled:
 		if zone.converged {
-			c.checkDrift(zone, currentTemp, point)
+			c.checkDrift(zone, currentTemp, point, now)
 			break NORMAL_LOGIC
 		}
 
@@ -579,7 +584,7 @@ NORMAL_LOGIC:
 					break NORMAL_LOGIC
 				}
 
-				if c.shouldProbeUp(zone, point, currentTemp) {
+				if c.shouldProbeUp(zone, point, currentTemp, now) {
 					zone.probeUp = true
 					probeUpStep := c.calculateProbeUpStep(currentTemp)
 					c.adjustZoneOffset(point, probeUpStep, minRPM, maxRPM)
@@ -603,7 +608,7 @@ NORMAL_LOGIC:
 					c.startVerifying(zone, currentTemp, now)
 					break NORMAL_LOGIC
 				}
-				probeDrop := c.calculateProbeDrop(zone, point, currentTemp, stabilityCount, minSafeOffset)
+				probeDrop := c.calculateProbeDrop(zone, point, currentTemp, stabilityCount, minSafeOffset, now)
 				if probeDrop <= 0 {
 					c.startVerifying(zone, currentTemp, now)
 					break NORMAL_LOGIC
@@ -778,8 +783,8 @@ func (c *Controller) handleVerifying(zoneIdx int, fanCurve []types.FanCurvePoint
 		}
 		return
 	}
-	if c.hasRPMFeedback {
-		rpmError := c.latestTargetRPM - c.latestCurrentRPM
+	if feedback, ok := c.getRPMFeedback(currentTemp, now); ok {
+		rpmError := feedback.targetRPM - feedback.currentRPM
 		if rpmError >= c.config.Step*3 && currentTemp >= point.Temperature-c.config.StableDelta {
 			c.noteLearnFailure(point.Temperature, zone)
 			zone.verifying = false
@@ -805,7 +810,7 @@ func (c *Controller) handleVerifying(zoneIdx int, fanCurve []types.FanCurvePoint
 		zone.stableCount = 0
 		return
 	}
-	verifyScore := c.calculateVerifyScore(point, currentTemp, trend)
+	verifyScore := c.calculateVerifyScore(point, currentTemp, trend, now)
 	zone.verifyScoreSum += verifyScore
 	zone.verifySamples++
 
@@ -856,7 +861,7 @@ func (c *Controller) startVerifying(zone *zoneState, currentTemp int, now time.T
 	zone.verifySamples = 0
 }
 
-func (c *Controller) checkDrift(zone *zoneState, currentTemp int, point *types.FanCurvePoint) {
+func (c *Controller) checkDrift(zone *zoneState, currentTemp int, point *types.FanCurvePoint, now time.Time) {
 	upwardThreshold := c.config.UpwardDriftThreshold
 	downwardThreshold := c.config.DownwardDriftThreshold
 	requiredCount := c.config.DriftCount
@@ -867,8 +872,8 @@ func (c *Controller) checkDrift(zone *zoneState, currentTemp int, point *types.F
 	}
 
 	delta := currentTemp - zone.convergeTmp
-	if c.hasRPMFeedback {
-		rpmError := c.latestTargetRPM - c.latestCurrentRPM
+	if feedback, ok := c.getRPMFeedback(currentTemp, now); ok {
+		rpmError := feedback.targetRPM - feedback.currentRPM
 		if rpmError >= c.config.Step*4 {
 			zone.driftCount++
 			if zone.driftCount >= max(3, c.config.DriftCount/4) {
@@ -909,10 +914,14 @@ func (c *Controller) checkDrift(zone *zoneState, currentTemp int, point *types.F
 }
 
 func (c *Controller) applyFeedbackBias(zone *zoneState, point *types.FanCurvePoint, currentTemp int, now time.Time, minRPM, maxRPM int) {
-	if !c.hasRPMFeedback || !zone.converged {
+	if !zone.converged {
 		return
 	}
-	rpmError := c.latestTargetRPM - c.latestCurrentRPM
+	feedback, ok := c.getRPMFeedback(currentTemp, now)
+	if !ok {
+		return
+	}
+	rpmError := feedback.targetRPM - feedback.currentRPM
 	if iabs(rpmError) <= c.config.Step {
 		oldBias := zone.bias
 		zone.bias = moveTowardZero(zone.bias, c.config.BiasLeakStep)
@@ -961,9 +970,9 @@ func (c *Controller) applyFeedbackBias(zone *zoneState, point *types.FanCurvePoi
 		c.logger.Debug("风扇偏移应用反馈偏置",
 			"zone_temp", point.Temperature,
 			"rpm_error", rpmError,
-			"current_rpm", c.latestCurrentRPM,
-			"target_rpm", c.latestTargetRPM,
-			"device_target_rpm", c.latestDeviceTarget,
+			"current_rpm", feedback.currentRPM,
+			"target_rpm", feedback.targetRPM,
+			"device_target_rpm", feedback.deviceTargetRPM,
 			"old_bias", oldBias,
 			"new_bias", zone.bias,
 			"bias_state", freezeState,
@@ -1011,6 +1020,7 @@ func (c *Controller) handleSpike(currentTemp, tempDelta int, fanCurve []types.Fa
 func (c *Controller) Reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.clearRPMFeedback()
 	c.ringHead = 0
 	c.ringCount = 0
 	c.lastTemp = -1
@@ -1031,6 +1041,7 @@ func (c *Controller) Reset() {
 func (c *Controller) ResetOffsets(fanCurve []types.FanCurvePoint) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.clearRPMFeedback()
 	c.ringHead = 0
 	c.ringCount = 0
 	c.lastTemp = -1
@@ -1137,7 +1148,7 @@ func (c *Controller) processPendingSpike(currentTemp int, fanCurve []types.FanCu
 	return true
 }
 
-func (c *Controller) calculateProbeDrop(zone *zoneState, point *types.FanCurvePoint, currentTemp, stabilityCount, minSafeOffset int) int {
+func (c *Controller) calculateProbeDrop(zone *zoneState, point *types.FanCurvePoint, currentTemp, stabilityCount, minSafeOffset int, now time.Time) int {
 	probeDrop := c.config.Step
 	if point.Offset > 0 {
 		probeDrop = c.config.Step * 3
@@ -1151,8 +1162,8 @@ func (c *Controller) calculateProbeDrop(zone *zoneState, point *types.FanCurvePo
 	if currentTemp < c.config.HighTempThreshold-c.config.PreheatBand {
 		confidence++
 	}
-	if c.hasRPMFeedback {
-		rpmError := c.latestTargetRPM - c.latestCurrentRPM
+	if feedback, ok := c.getRPMFeedback(currentTemp, now); ok {
+		rpmError := feedback.targetRPM - feedback.currentRPM
 		if iabs(rpmError) <= c.config.Step {
 			confidence++
 		} else if rpmError >= c.config.Step*2 {
@@ -1249,7 +1260,7 @@ func (c *Controller) applyLearnedOffsetMemory(zone *zoneState, point *types.FanC
 	return true
 }
 
-func (c *Controller) shouldProbeUp(zone *zoneState, point *types.FanCurvePoint, currentTemp int) bool {
+func (c *Controller) shouldProbeUp(zone *zoneState, point *types.FanCurvePoint, currentTemp int, now time.Time) bool {
 	if currentTemp >= c.config.CriticalTemp {
 		return false
 	}
@@ -1266,7 +1277,7 @@ func (c *Controller) shouldProbeUp(zone *zoneState, point *types.FanCurvePoint, 
 	if currentTemp >= c.config.HighTempThreshold {
 		pressure++
 	}
-	if c.hasRPMFeedback && c.latestTargetRPM-c.latestCurrentRPM >= c.config.Step*2 {
+	if feedback, ok := c.getRPMFeedback(currentTemp, now); ok && feedback.targetRPM-feedback.currentRPM >= c.config.Step*2 {
 		pressure++
 	}
 	if zone.bias >= c.config.Step*2 {
@@ -1372,7 +1383,7 @@ func (c *Controller) getRequiredTrendConfirm(currentTemp, trend int) int {
 	return max(1, int(math.Round(confirm*tempFactor*trendFactor)))
 }
 
-func (c *Controller) calculateVerifyScore(point *types.FanCurvePoint, currentTemp, trend int) float64 {
+func (c *Controller) calculateVerifyScore(point *types.FanCurvePoint, currentTemp, trend int, now time.Time) float64 {
 	score := 0.0
 	if currentTemp > point.Temperature {
 		score += float64(currentTemp-point.Temperature) * 0.45
@@ -1380,8 +1391,8 @@ func (c *Controller) calculateVerifyScore(point *types.FanCurvePoint, currentTem
 	if trend > 0 {
 		score += float64(trend) * 0.9
 	}
-	if c.hasRPMFeedback {
-		rpmError := c.latestTargetRPM - c.latestCurrentRPM
+	if feedback, ok := c.getRPMFeedback(currentTemp, now); ok {
+		rpmError := feedback.targetRPM - feedback.currentRPM
 		if rpmError > 0 {
 			score += float64(rpmError) / float64(max(1, c.config.Step))
 		}
@@ -1402,6 +1413,40 @@ func (c *Controller) getVerifyScoreThreshold(currentTemp int) float64 {
 	default:
 		return 4.6
 	}
+}
+
+func (c *Controller) clearRPMFeedback() {
+	c.latestRPMFeedback = rpmFeedback{}
+}
+
+func (c *Controller) getRPMFeedback(currentTemp int, now time.Time) (rpmFeedback, bool) {
+	feedback := c.latestRPMFeedback
+	if feedback.observedAt.IsZero() {
+		return rpmFeedback{}, false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if now.Sub(feedback.observedAt) > c.rpmFeedbackTTL() {
+		c.clearRPMFeedback()
+		return rpmFeedback{}, false
+	}
+	if iabs(currentTemp-feedback.observedTemp) > c.rpmFeedbackTempTolerance() {
+		return rpmFeedback{}, false
+	}
+	return feedback, true
+}
+
+func (c *Controller) rpmFeedbackTTL() time.Duration {
+	ttl := c.config.AdjustCooldown * 2
+	if ttl < 15*time.Second {
+		ttl = 15 * time.Second
+	}
+	return ttl
+}
+
+func (c *Controller) rpmFeedbackTempTolerance() int {
+	return max(4, max(c.config.VerifyMaxDelta, c.config.StableDelta*3))
 }
 
 func (c *Controller) applyPreheatClamp(minSafeOffset, currentTemp int) int {
