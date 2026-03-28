@@ -283,9 +283,29 @@ func (a *App) shouldMonitorBeRunning() bool {
 	return a.shouldEnsureMonitorAgent()
 }
 
+func (a *App) getMonitorDecisionConfig() (AppConfig, string) {
+	if a.ipcClient != nil && a.ipcClient.IsConnected() {
+		return a.GetConfig(), "ipc"
+	}
+
+	manager := config.NewManager(config.GetInstallDir(), guiLogger)
+	cfg := manager.Load(false)
+	cfg.WindowsAutoStart = a.CheckWindowsAutoStart()
+	cfg.MonitorAutoStart = a.CheckMonitorAutoStart()
+	return cfg, "local"
+}
+
 func (a *App) shouldEnsureMonitorAgent() bool {
-	cfg := a.GetConfig()
-	return cfg.TrayEnabled || cfg.NotificationsEnabled || cfg.ProcessSwitchEnabled || hotkeysRequireMonitor(cfg)
+	cfg, source := a.getMonitorDecisionConfig()
+	shouldRun := cfg.TrayEnabled || cfg.NotificationsEnabled || cfg.ProcessSwitchEnabled || hotkeysRequireMonitor(cfg)
+	logInfo("Monitor 启动判定",
+		"source", source,
+		"tray", cfg.TrayEnabled,
+		"notifications", cfg.NotificationsEnabled,
+		"process_switch", cfg.ProcessSwitchEnabled,
+		"hotkeys", hotkeysRequireMonitor(cfg),
+		"should_run", shouldRun)
+	return shouldRun
 }
 
 func hotkeysRequireMonitor(cfg AppConfig) bool {
