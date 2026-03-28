@@ -154,8 +154,8 @@ func (a *App) startup(ctx context.Context) {
 
 		go func() {
 			defaultCfg := types.GetDefaultConfig(false)
+			defaultCfg = normalizeMonitorConfig(defaultCfg)
 			defaultCfg.WindowsAutoStart = a.autostartManager.CheckWindowsAutoStart()
-			defaultCfg.MonitorAutoStart = a.autostartManager.CheckMonitorAutoStart()
 			runtime.EventsEmit(ctx, "config-update", defaultCfg)
 		}()
 	} else {
@@ -166,7 +166,7 @@ func (a *App) startup(ctx context.Context) {
 		cfg := a.GetConfig()
 		status := a.GetDeviceStatus()
 		cfg.WindowsAutoStart = a.autostartManager.CheckWindowsAutoStart()
-		cfg.MonitorAutoStart = a.autostartManager.CheckMonitorAutoStart()
+		a.syncMonitorAutoStartFromConfig("startup-connect")
 
 		a.mutex.Lock()
 		a.autoControlState = cfg.AutoControl
@@ -283,33 +283,53 @@ func (a *App) shouldMonitorBeRunning() bool {
 	return a.shouldEnsureMonitorAgent()
 }
 
+func normalizeMonitorConfig(cfg AppConfig) AppConfig {
+	cfg.Repair()
+	return cfg
+}
+
 func (a *App) getMonitorDecisionConfig() (AppConfig, string) {
 	if a.ipcClient != nil && a.ipcClient.IsConnected() {
-		return a.GetConfig(), "ipc"
+		return normalizeMonitorConfig(a.GetConfig()), "ipc"
 	}
 
 	manager := config.NewManager(config.GetInstallDir(), guiLogger)
-	cfg := manager.Load(false)
+	cfg := normalizeMonitorConfig(manager.Load(false))
 	cfg.WindowsAutoStart = a.CheckWindowsAutoStart()
-	cfg.MonitorAutoStart = a.CheckMonitorAutoStart()
 	return cfg, "local"
 }
 
 func (a *App) shouldEnsureMonitorAgent() bool {
 	cfg, source := a.getMonitorDecisionConfig()
-	shouldRun := cfg.TrayEnabled || cfg.NotificationsEnabled || cfg.ProcessSwitchEnabled || hotkeysRequireMonitor(cfg)
+	shouldRun := cfg.MonitorRequired()
 	logInfo("Monitor 启动判定",
 		"source", source,
 		"tray", cfg.TrayEnabled,
 		"notifications", cfg.NotificationsEnabled,
 		"process_switch", cfg.ProcessSwitchEnabled,
 		"hotkeys", hotkeysRequireMonitor(cfg),
+		"monitor_autostart", cfg.MonitorAutoStart,
 		"should_run", shouldRun)
 	return shouldRun
 }
 
 func hotkeysRequireMonitor(cfg AppConfig) bool {
-	return cfg.Hotkeys != nil && cfg.Hotkeys.Enabled
+	return cfg.HotkeysRequireMonitor()
+}
+
+func (a *App) syncMonitorAutoStartFromConfig(reason string) {
+	cfg, source := a.getMonitorDecisionConfig()
+	desired := cfg.MonitorAutoStart
+	actual := a.getAutostartManager().CheckMonitorAutoStart()
+	if actual == desired {
+		logDebug("Monitor 自启动已与配置一致", "reason", reason, "source", source, "enabled", desired)
+		return
+	}
+	if err := a.getAutostartManager().SetMonitorAutoStart(desired); err != nil {
+		logError("同步 Monitor 自启动失败", "reason", reason, "source", source, "desired", desired, "actual", actual, "error", err)
+		return
+	}
+	logInfo("已同步 Monitor 自启动", "reason", reason, "source", source, "enabled", desired)
 }
 
 func (a *App) syncMonitorAgentState() {
@@ -464,9 +484,9 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 	case ipc.EventConfigUpdate:
 		var cfg types.AppConfig
 		if err := json.Unmarshal(event.Data, &cfg); err == nil {
-			// 用注册表状态覆盖配置值
+			cfg = normalizeMonitorConfig(cfg)
 			cfg.WindowsAutoStart = a.CheckWindowsAutoStart()
-			cfg.MonitorAutoStart = a.CheckMonitorAutoStart()
+			a.syncMonitorAutoStartFromConfig("event-config-update")
 			a.mutex.Lock()
 			a.autoControlState = cfg.AutoControl
 			a.mutex.Unlock()
@@ -528,20 +548,21 @@ func (a *App) GetDeviceStatus() map[string]any {
 func (a *App) GetConfig() AppConfig {
 	resp, err := a.sendRequest(ipc.ReqGetConfig, nil)
 	if err != nil || resp == nil || !resp.Success {
-		cfg := types.GetDefaultConfig(false)
+		cfg := normalizeMonitorConfig(types.GetDefaultConfig(false))
 		cfg.WindowsAutoStart = a.CheckWindowsAutoStart()
 		cfg.MonitorAutoStart = a.CheckMonitorAutoStart()
 		return cfg
 	}
 	var cfg AppConfig
 	json.Unmarshal(resp.Data, &cfg)
-	cfg.Repair() // 补全缺失配置
+	cfg = normalizeMonitorConfig(cfg)
 	cfg.WindowsAutoStart = a.CheckWindowsAutoStart()
 	cfg.MonitorAutoStart = a.CheckMonitorAutoStart()
 	return cfg
 }
 
 func (a *App) UpdateConfig(cfg AppConfig) error {
+	cfg = normalizeMonitorConfig(cfg)
 	oldCfg := a.GetConfig()
 	resp, err := a.sendRequest(ipc.ReqUpdateConfig, cfg)
 	if err != nil {
@@ -556,7 +577,8 @@ func (a *App) UpdateConfig(cfg AppConfig) error {
 	if oldCfg.ProcessSwitchEnabled != cfg.ProcessSwitchEnabled {
 		a.syncProcessSwitchMonitor(cfg.ProcessSwitchEnabled)
 	}
-	if oldCfg.TrayEnabled != cfg.TrayEnabled || oldCfg.NotificationsEnabled != cfg.NotificationsEnabled || hotkeysRequireMonitor(oldCfg) != hotkeysRequireMonitor(cfg) {
+	a.syncMonitorAutoStartFromConfig("update-config")
+	if oldCfg.MonitorAutoStart != cfg.MonitorAutoStart {
 		a.syncMonitorAgentState()
 	}
 	return nil
@@ -1279,11 +1301,17 @@ func (a *App) CheckWindowsAutoStart() bool {
 }
 
 func (a *App) SetMonitorAutoStart(enable bool) error {
-	return a.getAutostartManager().SetMonitorAutoStart(enable)
+	cfg, _ := a.getMonitorDecisionConfig()
+	if enable != cfg.MonitorAutoStart {
+		return fmt.Errorf("monitorAutoStart 已改为联动值，当前应为 %t", cfg.MonitorAutoStart)
+	}
+	a.syncMonitorAutoStartFromConfig("api-set-monitor-autostart")
+	return nil
 }
 
 func (a *App) CheckMonitorAutoStart() bool {
-	return a.getAutostartManager().CheckMonitorAutoStart()
+	cfg, _ := a.getMonitorDecisionConfig()
+	return cfg.MonitorAutoStart
 }
 
 func (a *App) ShowWindow() {

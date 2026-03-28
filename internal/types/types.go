@@ -197,7 +197,7 @@ func GetDefaultFanCurve() []FanCurvePoint {
 
 // GetDefaultConfig 获取默认配置
 func GetDefaultConfig(isAutoStart bool) AppConfig {
-	return AppConfig{
+	cfg := AppConfig{
 		AutoControl:             false,
 		FanCurve:                GetDefaultFanCurve(),
 		GearLight:               true,
@@ -206,7 +206,7 @@ func GetDefaultConfig(isAutoStart bool) AppConfig {
 		Hotkeys:                 GetDefaultHotkeyConfig(),
 		PowerOnStart:            false,
 		WindowsAutoStart:        false,
-		MonitorAutoStart:        true,
+		MonitorAutoStart:        false,
 		SmartStartStop:          "off",
 		Brightness:              100,
 		TempUpdateRate:          2,
@@ -230,6 +230,25 @@ func GetDefaultConfig(isAutoStart bool) AppConfig {
 			Brightness: 100,
 		},
 	}
+	cfg.NormalizeMonitorAutoStart()
+	return cfg
+}
+
+func (c AppConfig) HotkeysRequireMonitor() bool {
+	return c.Hotkeys != nil && c.Hotkeys.Enabled
+}
+
+func (c AppConfig) MonitorRequired() bool {
+	return c.TrayEnabled || c.NotificationsEnabled || c.ProcessSwitchEnabled || c.HotkeysRequireMonitor()
+}
+
+func (c *AppConfig) NormalizeMonitorAutoStart() bool {
+	desired := c.MonitorRequired()
+	if c.MonitorAutoStart == desired {
+		return false
+	}
+	c.MonitorAutoStart = desired
+	return true
 }
 
 func GetDefaultHotkeyConfig() *HotkeyConfig {
@@ -394,6 +413,7 @@ func (c *AppConfig) Repair() {
 		c.Hotkeys.Global = repairHotkeyBindings(c.Hotkeys.Global, defaultCfg.Hotkeys.Global)
 		c.Hotkeys.InApp = repairHotkeyBindings(c.Hotkeys.InApp, defaultCfg.Hotkeys.InApp)
 	}
+	c.NormalizeMonitorAutoStart()
 }
 
 func repairHotkeyBindings(current []HotkeyBinding, defaults []HotkeyBinding) []HotkeyBinding {

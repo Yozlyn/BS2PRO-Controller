@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"github.com/TIANLI0/BS2PRO-Controller/internal/types"
 )
@@ -35,8 +36,13 @@ func (m *Manager) Load(isAutoStart bool) types.AppConfig {
 	m.logDebug("尝试从默认目录加载配置", "path", defaultConfigPath, "source", "default")
 
 	// 先尝试从默认目录加载
-	if m.tryLoadFromPath(defaultConfigPath) {
+	if loaded, changed := m.tryLoadFromPath(defaultConfigPath); loaded {
 		m.config.ConfigPath = defaultConfigPath
+		if changed {
+			if err := m.Save(); err != nil {
+				m.logError("保存迁移后的配置失败", "path", defaultConfigPath, "error", err)
+			}
+		}
 		m.logInfo("配置加载成功", "path", defaultConfigPath, "source", "default")
 		return m.config
 	}
@@ -44,8 +50,13 @@ func (m *Manager) Load(isAutoStart bool) types.AppConfig {
 	m.logDebug("从默认目录加载配置失败，尝试从安装目录加载", "path", installConfigPath, "source", "install")
 
 	// 默认目录失败，尝试从安装目录加载
-	if m.tryLoadFromPath(installConfigPath) {
+	if loaded, changed := m.tryLoadFromPath(installConfigPath); loaded {
 		m.config.ConfigPath = installConfigPath
+		if changed {
+			if err := m.Save(); err != nil {
+				m.logError("保存迁移后的配置失败", "path", installConfigPath, "error", err)
+			}
+		}
 		m.logInfo("配置加载成功", "path", installConfigPath, "source", "install")
 		return m.config
 	}
@@ -62,16 +73,16 @@ func (m *Manager) Load(isAutoStart bool) types.AppConfig {
 }
 
 // tryLoadFromPath 尝试从指定路径加载配置
-func (m *Manager) tryLoadFromPath(configPath string) bool {
+func (m *Manager) tryLoadFromPath(configPath string) (bool, bool) {
 	if _, err := os.Stat(configPath); err != nil {
 		m.logDebug("配置文件不存在", "path", configPath)
-		return false
+		return false, false
 	}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		m.logError("读取配置文件失败", "path", configPath, "error", err)
-		return false
+		return false, false
 	}
 
 	var raw map[string]json.RawMessage
@@ -85,22 +96,29 @@ func (m *Manager) tryLoadFromPath(configPath string) bool {
 	var config types.AppConfig
 	if err := json.Unmarshal(data, &config); err != nil {
 		m.logError("解析配置文件失败", "path", configPath, "error", err)
-		return false
+		return false, false
 	}
+	original := config
+	changed := false
 	if !hasNotificationsEnabled {
 		config.NotificationsEnabled = true
+		changed = true
 		m.logInfo("配置缺少 notificationsEnabled，已按默认值迁移", "path", configPath, "enabled", true)
 	}
 	if !hasTrayEnabled {
 		config.TrayEnabled = true
+		changed = true
 		m.logInfo("配置缺少 trayEnabled，已按默认值迁移", "path", configPath, "enabled", true)
 	}
 
 	// 补全缺失的配置项，兼容不同版本的配置文件
 	config.Repair()
+	if !reflect.DeepEqual(original, config) {
+		changed = true
+	}
 
 	m.config = config
-	return true
+	return true, changed
 }
 
 // Save 保存配置
@@ -158,6 +176,7 @@ func (m *Manager) Get() types.AppConfig {
 
 // Update 更新配置并保存
 func (m *Manager) Update(config types.AppConfig) error {
+	config.Repair()
 	m.config = config
 	return m.Save()
 }
