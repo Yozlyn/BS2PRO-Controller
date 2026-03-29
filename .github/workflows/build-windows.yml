@@ -181,15 +181,21 @@ jobs:
           }
 
           if ([string]::IsNullOrWhiteSpace($previousTag)) {
-            $commits = git log --pretty=format:"- %s%n"
+            $commitSubjects = @(git log --pretty=format:"%s")
           } else {
-            $commits = git log --pretty=format:"- %s%n" "$previousTag..HEAD"
+            $commitSubjects = @(git log --pretty=format:"%s" "$previousTag..HEAD")
           }
 
-          if ([string]::IsNullOrWhiteSpace($commits)) {
+          $commitSubjects = @(
+            $commitSubjects |
+              ForEach-Object { $_.Trim() } |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          )
+
+          if ($commitSubjects.Count -eq 0) {
             $commits = "- No changes."
           } else {
-            $commits = $commits.TrimEnd()
+            $commits = ($commitSubjects | ForEach-Object { "- $_" }) -join [Environment]::NewLine
           }
 
           $notesPath = Join-Path $env:RUNNER_TEMP "release-notes.txt"
