@@ -56,7 +56,9 @@ jobs:
 
       - name: Setup Wails
         shell: pwsh
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+        run: |
+          $wailsVersion = (go list -m -f "{{.Version}}" github.com/wailsapp/wails/v2).Trim()
+          go install "github.com/wailsapp/wails/v2/cmd/wails@$wailsVersion"
 
       - name: Setup go-winres
         shell: pwsh
