@@ -183,9 +183,9 @@ jobs:
           }
 
           if ([string]::IsNullOrWhiteSpace($previousTag)) {
-            $commitSubjects = @(git log --pretty=format:"%s")
+            $commitSubjects = @(git log --reverse --pretty=format:"%s")
           } else {
-            $commitSubjects = @(git log --pretty=format:"%s" "$previousTag..HEAD")
+            $commitSubjects = @(git log --reverse --pretty=format:"%s" "$previousTag..HEAD")
           }
 
           $commitSubjects = @(
