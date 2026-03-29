@@ -254,7 +254,7 @@ check_config:
         Goto enable_monitor
     ${EndIf}
 
-    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /C:"    \"enabled\": true," "$R0"'
+    nsExec::ExecToStack '"$SYSDIR\findstr.exe" /R /C:"^    \"enabled\": true,$" "$R0"'
     Pop $R1
     Pop $R2
     ${If} $R1 == 0
