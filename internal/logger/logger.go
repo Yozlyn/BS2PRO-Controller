@@ -46,6 +46,32 @@ type Options struct {
 const (
 	logMaxSizeMB     = 10
 	logRetentionDays = 7
+	projectSourceTag = "BS2PRO-Controller/"
+	moduleCacheTag   = "/pkg/mod/"
+)
+
+type framePriority uint8
+
+const (
+	framePriorityNone framePriority = iota
+	framePriorityStdlib
+	framePriorityExternal
+	framePriorityProject
+)
+
+var (
+	projectSourcePrefix = detectProjectSourcePrefix()
+	goRootSourcePrefix  = detectGoRootSourcePrefix()
+	wrapperFuncSuffixes = []string{
+		".logInfo",
+		".logError",
+		".logWarn",
+		".logDebug",
+		".monitorInfo",
+		".monitorWarn",
+		".monitorError",
+		".monitorDebug",
+	}
 )
 
 // NewCustomLogger 创建新的日志记录器
@@ -63,8 +89,9 @@ func NewCustomLoggerWithOptions(debugMode bool, installDir string, prefix string
 	if prefix == "" {
 		prefix = "core"
 	}
+	opts.Format = normalizeFormat(opts.Format)
 
-	fileWriter, err := newDailyFileWriter(logDir, prefix)
+	fileWriter, err := newDailyFileWriter(logDir, prefix, opts.Format)
 	if err != nil {
 		return nil, fmt.Errorf("创建日志文件失败: %v", err)
 	}
@@ -91,14 +118,16 @@ func NewCustomLoggerWithOptions(debugMode bool, installDir string, prefix string
 type dailyFileWriter struct {
 	mu          sync.Mutex
 	logDir      string
+	format      Format
 	prefix      string
 	currentDate string
 	logger      *lumberjack.Logger
 }
 
-func newDailyFileWriter(logDir string, prefix string) (*dailyFileWriter, error) {
+func newDailyFileWriter(logDir string, prefix string, format Format) (*dailyFileWriter, error) {
 	writer := &dailyFileWriter{
 		logDir: logDir,
+		format: normalizeFormat(format),
 		prefix: prefix,
 	}
 	if err := writer.rotateIfNeeded(time.Now()); err != nil {
@@ -156,7 +185,7 @@ func (w *dailyFileWriter) rotateIfNeededLocked(now time.Time) error {
 	}
 
 	nextLogger := &lumberjack.Logger{
-		Filename:   filepath.Join(w.logDir, fmt.Sprintf("%s_%s.log", w.prefix, date)),
+		Filename:   filepath.Join(w.logDir, runtimeLogFilename(w.prefix, date, w.format)),
 		MaxSize:    logMaxSizeMB,
 		MaxBackups: 0,
 		MaxAge:     logRetentionDays,
@@ -203,7 +232,7 @@ func newHandler(fileWriter io.Writer, levelVar *slog.LevelVar, prefix string, op
 				if !ok || source == nil {
 					return slog.Attr{}
 				}
-				return slog.String(slog.SourceKey, trimSource(source.File, source.Line))
+				return slog.String(slog.SourceKey, trimSource(source.File, source.Line, source.Function))
 			}
 			return attr
 		},
@@ -318,30 +347,65 @@ func (l *CustomLogger) writeRecord(level slog.Level, msg string, args ...any) {
 }
 
 func callerPC() uintptr {
-	pcs := make([]uintptr, 16)
+	pcs := make([]uintptr, 32)
 	n := runtime.Callers(3, pcs)
+	if n == 0 {
+		return 0
+	}
 	frames := runtime.CallersFrames(pcs[:n])
+	var bestPC uintptr
+	bestPriority := framePriorityNone
 	for {
 		frame, more := frames.Next()
-		if !shouldSkipFrame(frame) {
-			return frame.PC
+		priority := framePriorityOf(frame)
+		if priority > bestPriority {
+			bestPC = frame.PC
+			bestPriority = priority
+			if priority == framePriorityProject {
+				return bestPC
+			}
 		}
 		if !more {
 			break
 		}
 	}
-	return 0
+	return bestPC
+}
+
+func framePriorityOf(frame runtime.Frame) framePriority {
+	if shouldSkipFrame(frame) {
+		return framePriorityNone
+	}
+	if isProjectFrame(frame.File) {
+		return framePriorityProject
+	}
+	if isStdlibFrame(frame) {
+		return framePriorityStdlib
+	}
+	return framePriorityExternal
 }
 
 func shouldSkipFrame(frame runtime.Frame) bool {
 	file := filepath.ToSlash(frame.File)
+	if file == "" {
+		return true
+	}
 	if strings.Contains(file, "/internal/logger/") {
 		return true
 	}
-	for _, suffix := range []string{".logInfo", ".logError", ".logWarn", ".logDebug", ".monitorInfo", ".monitorWarn", ".monitorError", ".monitorDebug"} {
+	if strings.Contains(frame.Function, "monitorTrayLoggerAdapter") {
+		return true
+	}
+	for _, suffix := range wrapperFuncSuffixes {
 		if strings.HasSuffix(frame.Function, suffix) {
 			return true
 		}
+	}
+	if isRuntimeBoilerplateFrame(file, frame.Function) {
+		return true
+	}
+	if isStdlibBridgeFrame(file, frame.Function) {
+		return true
 	}
 	return false
 }
@@ -378,13 +442,163 @@ func stringifyMessage(msg any) string {
 	return fmt.Sprint(msg)
 }
 
-func trimSource(file string, line int) string {
-	normalized := filepath.ToSlash(file)
-	marker := "BS2PRO-Controller/"
-	if idx := strings.LastIndex(normalized, marker); idx >= 0 {
-		normalized = normalized[idx+len(marker):]
+func trimSource(file string, line int, function string) string {
+	normalized := normalizeSourcePath(file)
+	if shouldUseFunctionSource(file) {
+		if fallback := normalizeSourceFunction(function); fallback != "" {
+			return fallback
+		}
+	}
+	if normalized == "" {
+		if fallback := normalizeSourceFunction(function); fallback != "" {
+			return fallback
+		}
+		normalized = filepath.Base(file)
+	}
+	if line <= 0 {
+		return normalized
 	}
 	return fmt.Sprintf("%s:%d", normalized, line)
+}
+
+func normalizeFormat(format Format) Format {
+	if format == FormatJSON {
+		return FormatJSON
+	}
+	return FormatText
+}
+
+func runtimeLogFilename(prefix string, date string, format Format) string {
+	return fmt.Sprintf("%s.%s.%s.log", prefix, date, format)
+}
+
+func detectProjectSourcePrefix() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return ""
+	}
+	root := filepath.Dir(filepath.Dir(filepath.Dir(file)))
+	return filepath.ToSlash(root) + "/"
+}
+
+func detectGoRootSourcePrefix() string {
+	if runtime.GOROOT() == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Join(runtime.GOROOT(), "src")) + "/"
+}
+
+func isProjectFrame(file string) bool {
+	normalized := filepath.ToSlash(file)
+	switch {
+	case normalized == "":
+		return false
+	case projectSourcePrefix != "" && strings.HasPrefix(normalized, projectSourcePrefix):
+		return true
+	default:
+		return strings.Contains(normalized, "/"+projectSourceTag)
+	}
+}
+
+func isStdlibFrame(frame runtime.Frame) bool {
+	if goRootSourcePrefix == "" {
+		return false
+	}
+	return strings.HasPrefix(filepath.ToSlash(frame.File), goRootSourcePrefix)
+}
+
+func isStdlibBridgeFrame(file string, function string) bool {
+	if !strings.Contains(function, ".") {
+		return false
+	}
+	if strings.Contains(file, "/reflect/") {
+		switch function {
+		case "reflect.Value.Call", "reflect.Value.call", "reflect.makeFuncStub":
+			return true
+		}
+	}
+	switch function {
+	case "syscall.Syscall", "syscall.Syscall6", "syscall.Syscall9", "syscall.Syscall12", "syscall.Syscall15", "syscall.Syscall18", "syscall.SyscallN", "syscall.RawSyscall", "syscall.RawSyscall6":
+		return true
+	}
+	return false
+}
+
+func isRuntimeBoilerplateFrame(file string, function string) bool {
+	if !strings.Contains(file, "/runtime/") {
+		return false
+	}
+	base := filepath.Base(file)
+	if strings.HasPrefix(base, "asm_") || strings.HasPrefix(base, "signal_") {
+		return true
+	}
+	switch function {
+	case "runtime.goexit", "runtime.main", "runtime.sigpanic":
+		return true
+	}
+	switch base {
+	case "panic.go", "proc.go":
+		return true
+	}
+	return false
+}
+
+func normalizeSourcePath(file string) string {
+	normalized := filepath.ToSlash(file)
+	switch {
+	case projectSourcePrefix != "" && strings.HasPrefix(normalized, projectSourcePrefix):
+		return strings.TrimPrefix(normalized, projectSourcePrefix)
+	case goRootSourcePrefix != "" && strings.HasPrefix(normalized, goRootSourcePrefix):
+		return strings.TrimPrefix(normalized, goRootSourcePrefix)
+	}
+	if modulePath := trimModuleCacheSource(normalized); modulePath != "" {
+		return modulePath
+	}
+	if idx := strings.LastIndex(normalized, projectSourceTag); idx >= 0 {
+		return normalized[idx+len(projectSourceTag):]
+	}
+	return normalized
+}
+
+func trimModuleCacheSource(path string) string {
+	idx := strings.Index(path, moduleCacheTag)
+	if idx < 0 {
+		return ""
+	}
+	trimmed := path[idx+len(moduleCacheTag):]
+	if trimmed == "" {
+		return ""
+	}
+	parts := strings.Split(trimmed, "/")
+	for i, part := range parts {
+		if at := strings.Index(part, "@"); at >= 0 {
+			parts[i] = part[:at]
+		}
+	}
+	return strings.Join(parts, "/")
+}
+
+func normalizeSourceFunction(function string) string {
+	function = strings.TrimSpace(function)
+	if function == "" {
+		return ""
+	}
+	function = strings.TrimSuffix(function, "-fm")
+	if idx := strings.LastIndex(function, projectSourceTag); idx >= 0 {
+		return function[idx+len(projectSourceTag):]
+	}
+	return function
+}
+
+func shouldUseFunctionSource(file string) bool {
+	normalized := filepath.ToSlash(file)
+	if normalized == "" {
+		return true
+	}
+	if projectSourcePrefix != "" && strings.HasPrefix(normalized, projectSourcePrefix) {
+		return false
+	}
+	return goRootSourcePrefix != "" && strings.HasPrefix(normalized, goRootSourcePrefix)
 }
 
 func cleanupOldLogs(logDir string, now time.Time) error {
