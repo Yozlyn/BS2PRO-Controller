@@ -165,6 +165,14 @@ func (a *App) startup(ctx context.Context) {
 		// 启动时主动拉取一次配置，同步状态
 		cfg := a.GetConfig()
 		status := a.GetDeviceStatus()
+		logDebug("启动阶段状态快照",
+			"config_tray", cfg.TrayEnabled,
+			"config_notifications", cfg.NotificationsEnabled,
+			"config_hotkeys", hotkeysRequireMonitor(cfg),
+			"config_monitor_autostart", cfg.MonitorAutoStart,
+			"status_connected", status["connected"],
+			"status_model", status["model"],
+			"status_product_id", status["productId"])
 		cfg.WindowsAutoStart = a.autostartManager.CheckWindowsAutoStart()
 		a.syncMonitorAutoStartFromConfig("startup-connect")
 
@@ -334,6 +342,7 @@ func (a *App) syncMonitorAutoStartFromConfig(reason string) {
 
 func (a *App) syncMonitorAgentState() {
 	shouldRun := a.shouldMonitorBeRunning()
+	processRunning := a.isMonitorProcessRunning()
 	a.mutex.RLock()
 	wasDesired := a.monitorDesired
 	wasManaged := a.monitorManaged
@@ -349,13 +358,15 @@ func (a *App) syncMonitorAgentState() {
 		a.mutex.Unlock()
 		return
 	}
-	if !wasDesired && !wasManaged {
+	if !wasDesired && !wasManaged && !processRunning {
 		return
 	}
-	if err := a.stopProcessSwitchMonitor(); err != nil {
-		logError("停止 Monitor 失败", "error", err)
-	} else {
-		logInfo("已停止 Monitor 代理进程")
+	if processRunning {
+		if err := a.stopProcessSwitchMonitor(); err != nil {
+			logError("停止 Monitor 失败", "error", err)
+		} else {
+			logInfo("已停止 Monitor 代理进程")
+		}
 	}
 	a.mutex.Lock()
 	a.monitorDesired = false
@@ -444,6 +455,15 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 			time.Sleep(500 * time.Millisecond)
 			cfg := a.GetConfig()
 			status := a.GetDeviceStatus()
+			logDebug("服务重连后状态快照",
+				"config_tray", cfg.TrayEnabled,
+				"config_notifications", cfg.NotificationsEnabled,
+				"config_hotkeys", hotkeysRequireMonitor(cfg),
+				"config_monitor_autostart", cfg.MonitorAutoStart,
+				"status_connected", status["connected"],
+				"status_model", status["model"],
+				"status_product_id", status["productId"],
+				"status_paused", status["paused"])
 
 			a.mutex.Lock()
 			if connected, ok := status["connected"].(bool); ok {
@@ -538,26 +558,78 @@ func (a *App) DisconnectDevice() { a.sendRequest(ipc.ReqDisconnect, nil) }
 func (a *App) GetDeviceStatus() map[string]any {
 	resp, err := a.sendRequest(ipc.ReqGetDeviceStatus, nil)
 	if err != nil || resp == nil || !resp.Success {
+		logWarn("获取设备状态失败，回落为未连接",
+			"resp_nil", resp == nil,
+			"resp_success", resp != nil && resp.Success,
+			"error", err)
 		return map[string]any{"connected": false}
 	}
 	var status map[string]any
-	json.Unmarshal(resp.Data, &status)
+	if err := json.Unmarshal(resp.Data, &status); err != nil {
+		logWarn("解析设备状态失败，回落为未连接", "error", err)
+		return map[string]any{"connected": false}
+	}
+	logDebug("获取设备状态成功",
+		"connected", status["connected"],
+		"model", status["model"],
+		"product_id", status["productId"],
+		"paused", status["paused"])
 	return status
 }
 
 func (a *App) GetConfig() AppConfig {
 	resp, err := a.sendRequest(ipc.ReqGetConfig, nil)
 	if err != nil || resp == nil || !resp.Success {
+		logWarn("获取配置失败，回落默认配置",
+			"resp_nil", resp == nil,
+			"resp_success", resp != nil && resp.Success,
+			"error", err)
 		cfg := normalizeMonitorConfig(types.GetDefaultConfig(false))
 		cfg.WindowsAutoStart = a.CheckWindowsAutoStart()
-		cfg.MonitorAutoStart = a.CheckMonitorAutoStart()
+		logWarn("默认配置摘要",
+			"tray", cfg.TrayEnabled,
+			"notifications", cfg.NotificationsEnabled,
+			"hotkeys_enabled", cfg.Hotkeys != nil && cfg.Hotkeys.Enabled,
+			"global_hotkeys", func() int {
+				if cfg.Hotkeys == nil {
+					return 0
+				}
+				return len(cfg.Hotkeys.Global)
+			}(),
+			"inapp_hotkeys", func() int {
+				if cfg.Hotkeys == nil {
+					return 0
+				}
+				return len(cfg.Hotkeys.InApp)
+			}())
 		return cfg
 	}
 	var cfg AppConfig
-	json.Unmarshal(resp.Data, &cfg)
+	if err := json.Unmarshal(resp.Data, &cfg); err != nil {
+		logWarn("解析配置失败，回落默认配置", "error", err)
+		fallback := normalizeMonitorConfig(types.GetDefaultConfig(false))
+		fallback.WindowsAutoStart = a.CheckWindowsAutoStart()
+		return fallback
+	}
 	cfg = normalizeMonitorConfig(cfg)
 	cfg.WindowsAutoStart = a.CheckWindowsAutoStart()
-	cfg.MonitorAutoStart = a.CheckMonitorAutoStart()
+	logDebug("获取配置成功",
+		"tray", cfg.TrayEnabled,
+		"notifications", cfg.NotificationsEnabled,
+		"hotkeys_enabled", cfg.Hotkeys != nil && cfg.Hotkeys.Enabled,
+		"global_hotkeys", func() int {
+			if cfg.Hotkeys == nil {
+				return 0
+			}
+			return len(cfg.Hotkeys.Global)
+		}(),
+		"inapp_hotkeys", func() int {
+			if cfg.Hotkeys == nil {
+				return 0
+			}
+			return len(cfg.Hotkeys.InApp)
+		}(),
+		"monitor_autostart", cfg.MonitorAutoStart)
 	return cfg
 }
 
