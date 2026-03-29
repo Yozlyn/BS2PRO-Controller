@@ -807,10 +807,15 @@ func (a *CoreApp) SetProcessSwitchEnabled(enabled bool) error {
 
 func (a *CoreApp) SetFanCurve(curve []types.FanCurvePoint) error {
 	a.mutex.Lock()
-	defer a.mutex.Unlock()
 	cfg := a.configManager.Get()
 	cfg.FanCurve = curve
-	return a.configManager.Update(cfg)
+	err := a.configManager.Update(cfg)
+	a.mutex.Unlock()
+	if err != nil {
+		return err
+	}
+	a.fanOffsetCtrl.ResetForCurve(curve, "set_fan_curve")
+	return nil
 }
 
 // ApplyOffsetToCurve 将当前偏移量烘焙进基线 RPM，偏移归零，重置偏移控制器
@@ -835,7 +840,7 @@ func (a *CoreApp) ApplyOffsetToCurve() error {
 	if err != nil {
 		return err
 	}
-	a.fanOffsetCtrl.Reset()
+	a.fanOffsetCtrl.ResetForCurve(cfg.FanCurve, "apply_offset_to_curve")
 	if a.ipcServer != nil {
 		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
 	}
