@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -21,7 +22,13 @@ type CustomLogger struct {
 	levelVar   *slog.LevelVar
 	debugMode  bool
 	logDir     string
-	fileWriter *lumberjack.Logger
+	fileWriter managedFileWriter
+}
+
+type managedFileWriter interface {
+	io.Writer
+	Close() error
+	CleanOldLogs()
 }
 
 type Format string
@@ -35,6 +42,11 @@ type Options struct {
 	Format  Format
 	Console bool
 }
+
+const (
+	logMaxSizeMB     = 10
+	logRetentionDays = 7
+)
 
 // NewCustomLogger 创建新的日志记录器
 func NewCustomLogger(debugMode bool, installDir string, prefix string) (*CustomLogger, error) {
@@ -52,13 +64,9 @@ func NewCustomLoggerWithOptions(debugMode bool, installDir string, prefix string
 		prefix = "core"
 	}
 
-	logFilePath := filepath.Join(logDir, fmt.Sprintf("%s_%s.log", prefix, time.Now().Format("2006-01-02")))
-	fileWriter := &lumberjack.Logger{
-		Filename:   logFilePath,
-		MaxSize:    10, // MB
-		MaxBackups: 7,
-		MaxAge:     7, // 天
-		Compress:   true,
+	fileWriter, err := newDailyFileWriter(logDir, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("创建日志文件失败: %v", err)
 	}
 
 	levelVar := &slog.LevelVar{}
@@ -78,6 +86,89 @@ func NewCustomLoggerWithOptions(debugMode bool, installDir string, prefix string
 		logDir:     logDir,
 		fileWriter: fileWriter,
 	}, nil
+}
+
+type dailyFileWriter struct {
+	mu          sync.Mutex
+	logDir      string
+	prefix      string
+	currentDate string
+	logger      *lumberjack.Logger
+}
+
+func newDailyFileWriter(logDir string, prefix string) (*dailyFileWriter, error) {
+	writer := &dailyFileWriter{
+		logDir: logDir,
+		prefix: prefix,
+	}
+	if err := writer.rotateIfNeeded(time.Now()); err != nil {
+		return nil, err
+	}
+	return writer, nil
+}
+
+func (w *dailyFileWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if err := w.rotateIfNeededLocked(time.Now()); err != nil {
+		return 0, err
+	}
+	return w.logger.Write(p)
+}
+
+func (w *dailyFileWriter) Close() error {
+	if w == nil {
+		return nil
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.logger == nil {
+		return nil
+	}
+	err := w.logger.Close()
+	w.logger = nil
+	return err
+}
+
+func (w *dailyFileWriter) CleanOldLogs() {
+	if w == nil {
+		return
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_ = cleanupOldLogs(w.logDir, time.Now())
+}
+
+func (w *dailyFileWriter) rotateIfNeeded(now time.Time) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.rotateIfNeededLocked(now)
+}
+
+func (w *dailyFileWriter) rotateIfNeededLocked(now time.Time) error {
+	date := now.Format("2006-01-02")
+	if w.logger != nil && w.currentDate == date {
+		return nil
+	}
+
+	nextLogger := &lumberjack.Logger{
+		Filename:   filepath.Join(w.logDir, fmt.Sprintf("%s_%s.log", w.prefix, date)),
+		MaxSize:    logMaxSizeMB,
+		MaxBackups: 0,
+		MaxAge:     logRetentionDays,
+		Compress:   false,
+	}
+	prevLogger := w.logger
+	w.logger = nextLogger
+	w.currentDate = date
+	if prevLogger != nil {
+		_ = prevLogger.Close()
+	}
+	return cleanupOldLogs(w.logDir, now)
 }
 
 func newHandler(fileWriter io.Writer, levelVar *slog.LevelVar, prefix string, opts Options) slog.Handler {
@@ -175,22 +266,14 @@ func (l *CustomLogger) Close() {
 
 // CleanOldLogs 清理旧日志文件（保留7天）
 func (l *CustomLogger) CleanOldLogs() {
-	files, err := os.ReadDir(l.logDir)
-	if err != nil {
+	if l == nil {
 		return
 	}
-	cutoff := time.Now().AddDate(0, 0, -7)
-	for _, file := range files {
-		if strings.HasSuffix(file.Name(), ".log") || strings.HasSuffix(file.Name(), ".log.gz") {
-			info, err := file.Info()
-			if err != nil {
-				continue
-			}
-			if info.ModTime().Before(cutoff) {
-				os.Remove(filepath.Join(l.logDir, file.Name()))
-			}
-		}
+	if l.fileWriter != nil {
+		l.fileWriter.CleanOldLogs()
+		return
 	}
+	_ = cleanupOldLogs(l.logDir, time.Now())
 }
 
 // SetDebugMode 设置调试模式
@@ -302,4 +385,30 @@ func trimSource(file string, line int) string {
 		normalized = normalized[idx+len(marker):]
 	}
 	return fmt.Sprintf("%s:%d", normalized, line)
+}
+
+func cleanupOldLogs(logDir string, now time.Time) error {
+	files, err := os.ReadDir(logDir)
+	if err != nil {
+		return err
+	}
+
+	cutoff := now.AddDate(0, 0, -logRetentionDays)
+	for _, file := range files {
+		if !isManagedLogFile(file.Name()) {
+			continue
+		}
+		info, err := file.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(logDir, file.Name()))
+		}
+	}
+	return nil
+}
+
+func isManagedLogFile(name string) bool {
+	return strings.HasSuffix(name, ".log") || strings.HasSuffix(name, ".log.gz")
 }
