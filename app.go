@@ -34,6 +34,7 @@ type App struct {
 	ctx            context.Context
 	ipcClient      *ipc.Client
 	mutex          sync.RWMutex
+	monitorStateMu sync.Mutex
 	iconData       []byte
 	windowVisible  bool
 	monitorDesired bool
@@ -341,23 +342,32 @@ func (a *App) syncMonitorAutoStartFromConfig(reason string) {
 }
 
 func (a *App) syncMonitorAgentState() {
+	a.monitorStateMu.Lock()
+	defer a.monitorStateMu.Unlock()
+
 	shouldRun := a.shouldMonitorBeRunning()
-	processRunning := a.isMonitorProcessRunning()
 	a.mutex.RLock()
 	wasDesired := a.monitorDesired
 	wasManaged := a.monitorManaged
 	a.mutex.RUnlock()
 	if shouldRun {
-		if wasDesired && wasManaged {
+		if wasDesired && wasManaged && a.isMonitorProcessRunning() {
 			return
 		}
-		a.ensureMonitorAgentReady()
 		a.mutex.Lock()
 		a.monitorDesired = true
+		a.mutex.Unlock()
+		a.ensureMonitorAgentReady()
+		a.mutex.Lock()
 		a.monitorManaged = true
 		a.mutex.Unlock()
 		return
 	}
+	a.mutex.Lock()
+	a.monitorDesired = false
+	a.monitorManaged = false
+	a.mutex.Unlock()
+	processRunning := a.isMonitorProcessRunning()
 	if !wasDesired && !wasManaged && !processRunning {
 		return
 	}
@@ -368,17 +378,32 @@ func (a *App) syncMonitorAgentState() {
 			logInfo("已停止 Monitor 代理进程")
 		}
 	}
-	a.mutex.Lock()
-	a.monitorDesired = false
-	a.monitorManaged = false
-	a.mutex.Unlock()
 }
 
 func (a *App) ensureMonitorAgentRunningIfNeeded() {
+	a.monitorStateMu.Lock()
+	defer a.monitorStateMu.Unlock()
+
 	a.mutex.RLock()
 	desired := a.monitorDesired
 	a.mutex.RUnlock()
-	if !desired || a.isMonitorProcessRunning() {
+	running := a.isMonitorProcessRunning()
+	if !desired {
+		if !running {
+			return
+		}
+		logWarn("检测到 Monitor 不应运行，执行关闭")
+		if err := a.stopProcessSwitchMonitor(); err != nil {
+			logError("关闭残留 Monitor 失败", "error", err)
+		} else {
+			logInfo("已关闭残留 Monitor 代理进程")
+		}
+		a.mutex.Lock()
+		a.monitorManaged = false
+		a.mutex.Unlock()
+		return
+	}
+	if running {
 		return
 	}
 	logWarn("检测到 Monitor 未运行，按期望状态重新拉起")
