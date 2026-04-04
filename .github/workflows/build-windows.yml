@@ -217,14 +217,48 @@ jobs:
           git tag -f $tag
           git push origin refs/tags/$tag --force
 
-      - name: Create GitHub release
+      - name: Create or update GitHub release
         if: github.event_name == 'workflow_dispatch' && steps.meta.outputs.build_type != 'ci' && github.event.inputs.create_release == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.meta.outputs.release_tag }}
-          name: BS2PRO-Controller ${{ steps.meta.outputs.final_version }}
-          prerelease: ${{ steps.meta.outputs.build_type == 'prerelease' }}
-          body_path: ${{ steps.release_notes.outputs.notes_path }}
-          fail_on_unmatched_files: false
-          files: |
-            artifacts/${{ steps.meta.outputs.artifact_name }}/${{ steps.meta.outputs.installer_name }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ steps.meta.outputs.release_tag }}"
+          $name = "BS2PRO-Controller ${{ steps.meta.outputs.final_version }}"
+          $notesPath = "${{ steps.release_notes.outputs.notes_path }}"
+          $assetPath = "artifacts/${{ steps.meta.outputs.artifact_name }}/${{ steps.meta.outputs.installer_name }}"
+          $repository = "${{ github.repository }}"
+          $isPrerelease = "${{ steps.meta.outputs.build_type == 'prerelease' }}" -eq "true"
+
+          if (-not (Test-Path $assetPath)) {
+            throw "Release asset not found: $assetPath"
+          }
+
+          $body = Get-Content -Raw -Encoding UTF8 $notesPath
+          $releaseLookup = gh api "repos/$repository/releases/tags/$tag" 2>$null
+          $releaseExists = $LASTEXITCODE -eq 0
+
+          $payload = @{
+            tag_name = $tag
+            name = $name
+            body = $body
+            prerelease = $isPrerelease
+          } | ConvertTo-Json -Compress
+
+          if ($releaseExists) {
+            $releaseId = ($releaseLookup | ConvertFrom-Json).id
+            $null = $payload | gh api --method PATCH "repos/$repository/releases/$releaseId" --input -
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to update GitHub release $tag"
+            }
+          } else {
+            $null = $payload | gh api --method POST "repos/$repository/releases" --input -
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to create GitHub release $tag"
+            }
+          }
+
+          gh release upload $tag $assetPath --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload assets to GitHub release $tag"
+          }
