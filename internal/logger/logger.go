@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -481,13 +480,6 @@ func detectProjectSourcePrefix() string {
 
 func detectGoRootSourcePrefix() string {
 	goRoot := strings.TrimSpace(os.Getenv("GOROOT"))
-	if goRoot == "" {
-		out, err := exec.Command("go", "env", "GOROOT").Output()
-		if err != nil {
-			return ""
-		}
-		goRoot = strings.TrimSpace(string(out))
-	}
 	if goRoot == "" {
 		return ""
 	}
