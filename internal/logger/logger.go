@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -205,10 +206,7 @@ func newHandler(fileWriter io.Writer, levelVar *slog.LevelVar, prefix string, op
 	if format == "" {
 		format = FormatText
 	}
-	console := true
-	if !opts.Console {
-		console = false
-	}
+	console := opts.Console
 
 	writers := []io.Writer{fileWriter}
 	if console {
@@ -482,10 +480,18 @@ func detectProjectSourcePrefix() string {
 }
 
 func detectGoRootSourcePrefix() string {
-	if runtime.GOROOT() == "" {
+	goRoot := strings.TrimSpace(os.Getenv("GOROOT"))
+	if goRoot == "" {
+		out, err := exec.Command("go", "env", "GOROOT").Output()
+		if err != nil {
+			return ""
+		}
+		goRoot = strings.TrimSpace(string(out))
+	}
+	if goRoot == "" {
 		return ""
 	}
-	return filepath.ToSlash(filepath.Join(runtime.GOROOT(), "src")) + "/"
+	return filepath.ToSlash(filepath.Join(goRoot, "src")) + "/"
 }
 
 func isProjectFrame(file string) bool {

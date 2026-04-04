@@ -158,7 +158,7 @@ func (s *Server) dropClient(conn net.Conn) bool {
 	}
 	s.mutex.Unlock()
 	if exists {
-		conn.Close()
+		_ = conn.Close()
 	}
 	return exists
 }
@@ -244,7 +244,7 @@ func (s *Server) handleClient(conn net.Conn) {
 		s.mutex.Lock()
 		delete(s.clients, conn)
 		s.mutex.Unlock()
-		conn.Close()
+		_ = conn.Close()
 		s.logDebug("IPC 客户端已断开")
 	}()
 
@@ -253,7 +253,7 @@ func (s *Server) handleClient(conn net.Conn) {
 	for s.running.Load() {
 		// 设置读取deadline若客户端 30 秒内无任何数据（包括心跳），
 		// 视为僵尸连接，主动断开以释放 goroutine 和连接槽位。
-		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
 			if s.running.Load() {
@@ -268,7 +268,7 @@ func (s *Server) handleClient(conn net.Conn) {
 			return
 		}
 		// 读到数据后清除deadline，避免影响后续正常处理耗时
-		conn.SetReadDeadline(time.Time{})
+		_ = conn.SetReadDeadline(time.Time{})
 
 		// 解析请求
 		var req Request
@@ -334,11 +334,11 @@ func (s *Server) BroadcastEvent(eventType string, data any) {
 			role = meta.Role
 		}
 		go func(c net.Conn, clientRole string) {
-			defer func() { recover() }()
+			defer func() { _ = recover() }()
 			// 设置写超时：若客户端 Pipe 缓冲区满（GUI 卡死），2 秒后放弃写入，避免 goroutine 永久泄漏。
-			c.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			_ = c.SetWriteDeadline(time.Now().Add(2 * time.Second))
 			_, err := c.Write(append(eventBytes, '\n'))
-			c.SetWriteDeadline(time.Time{}) // 写完后清除，不影响后续读 deadline
+			_ = c.SetWriteDeadline(time.Time{}) // 写完后清除，不影响后续读 deadline
 			if err != nil {
 				if s.dropClient(c) {
 					s.logWarn("发送 IPC 事件失败，已移除客户端", "role", clientRole, "event", eventType, "error", err)
@@ -370,10 +370,10 @@ func (s *Server) BroadcastEventToRole(role, eventType string, data any) {
 			continue
 		}
 		go func(c net.Conn, clientRole string) {
-			defer func() { recover() }()
-			c.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			defer func() { _ = recover() }()
+			_ = c.SetWriteDeadline(time.Now().Add(2 * time.Second))
 			_, err := c.Write(append(eventBytes, '\n'))
-			c.SetWriteDeadline(time.Time{})
+			_ = c.SetWriteDeadline(time.Time{})
 			if err != nil {
 				if s.dropClient(c) {
 					s.logWarn("发送定向 IPC 事件失败，已移除客户端", "role", clientRole, "event", eventType, "error", err)
@@ -398,12 +398,12 @@ func (s *Server) HasRoleClient(role string) bool {
 func (s *Server) Stop() {
 	s.running.Store(false)
 	if s.listener != nil {
-		s.listener.Close()
+		_ = s.listener.Close()
 	}
 
 	s.mutex.Lock()
 	for conn := range s.clients {
-		conn.Close()
+		_ = conn.Close()
 	}
 	s.clients = make(map[net.Conn]*ClientMeta)
 	s.mutex.Unlock()
@@ -472,7 +472,7 @@ func (c *Client) Connect() error {
 
 	// 如果已有连接，先关闭旧连接
 	if c.connected && c.conn != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 		c.conn = nil
 		c.reader = nil
 		c.connected = false
@@ -539,7 +539,7 @@ func (c *Client) readLoop(gen int64) {
 			c.connMutex.Lock()
 			c.connected = false
 			if c.conn != nil {
-				c.conn.Close()
+				_ = c.conn.Close()
 				c.conn = nil
 			}
 			c.reader = nil
@@ -676,7 +676,7 @@ func (c *Client) SendRequest(reqType RequestType, data any) (*Response, error) {
 			c.connMutex.Lock()
 			c.connected = false
 			if c.conn != nil {
-				c.conn.Close()
+				_ = c.conn.Close()
 				c.conn = nil
 			}
 			c.reader = nil
@@ -707,7 +707,7 @@ func (c *Client) Close() {
 
 	c.connected = false
 	if c.conn != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 		c.conn = nil
 	}
 	c.reader = nil

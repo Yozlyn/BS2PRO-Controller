@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	toast "github.com/go-toast/toast"
 	"github.com/TIANLI0/BS2PRO-Controller/internal/config"
+	toast "github.com/go-toast/toast"
 )
 
 const defaultAppID = "BS2PRO-Controller"

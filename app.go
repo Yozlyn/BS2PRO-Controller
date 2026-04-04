@@ -114,6 +114,15 @@ func logDebug(msg any, args ...any) {
 	}
 }
 
+func closeWithLog(name string, closer io.Closer) {
+	if closer == nil {
+		return
+	}
+	if err := closer.Close(); err != nil {
+		logWarn("关闭资源失败", "resource", name, "error", err)
+	}
+}
+
 // NewApp 创建 GUI 应用实例
 func NewApp(icon []byte) *App {
 	return &App{
@@ -454,7 +463,9 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 
 	case ipc.EventDeviceConnected:
 		var deviceInfo map[string]string
-		json.Unmarshal(event.Data, &deviceInfo)
+		if err := json.Unmarshal(event.Data, &deviceInfo); err != nil {
+			logWarn("解析设备连接事件失败", "error", err)
+		}
 		a.mutex.Lock()
 		a.isConnected = true
 		a.mutex.Unlock()
@@ -468,7 +479,10 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 
 	case ipc.EventDeviceError:
 		var errMsg string
-		json.Unmarshal(event.Data, &errMsg)
+		if err := json.Unmarshal(event.Data, &errMsg); err != nil {
+			logWarn("解析设备错误事件失败", "error", err)
+			errMsg = string(event.Data)
+		}
 		runtime.EventsEmit(a.ctx, "device-error", errMsg)
 
 	case ipc.EventServiceConnected:
@@ -574,11 +588,18 @@ func (a *App) ConnectDevice() bool {
 		return false
 	}
 	var success bool
-	json.Unmarshal(resp.Data, &success)
+	if err := json.Unmarshal(resp.Data, &success); err != nil {
+		logWarn("解析连接设备响应失败", "error", err)
+		return false
+	}
 	return success
 }
 
-func (a *App) DisconnectDevice() { a.sendRequest(ipc.ReqDisconnect, nil) }
+func (a *App) DisconnectDevice() {
+	if _, err := a.sendRequest(ipc.ReqDisconnect, nil); err != nil {
+		logWarn("断开设备请求失败", "error", err)
+	}
+}
 
 func (a *App) GetDeviceStatus() map[string]any {
 	resp, err := a.sendRequest(ipc.ReqGetDeviceStatus, nil)
@@ -688,7 +709,7 @@ func (a *App) syncProcessSwitchMonitor(_ bool) {
 func (a *App) startProcessSwitchMonitor() error {
 	monitorPath := filepath.Join(config.GetInstallDir(), "BS2PRO-Monitor.exe")
 	if _, err := os.Stat(monitorPath); err != nil {
-		return fmt.Errorf("Monitor程序不存在: %s", monitorPath)
+		return fmt.Errorf("monitor程序不存在: %s", monitorPath)
 	}
 	checkCmd := exec.Command("tasklist", "/FI", "IMAGENAME eq BS2PRO-Monitor.exe")
 	platformutil.HideCommandWindow(checkCmd)
@@ -756,7 +777,10 @@ func (a *App) GetFanCurve() []FanCurvePoint {
 		return types.GetDefaultFanCurve()
 	}
 	var curve []FanCurvePoint
-	json.Unmarshal(resp.Data, &curve)
+	if err := json.Unmarshal(resp.Data, &curve); err != nil {
+		logWarn("解析风扇曲线失败", "error", err)
+		return types.GetDefaultFanCurve()
+	}
 	return curve
 }
 
@@ -948,16 +972,16 @@ func (a *App) ExportFanCurveProfilesZip() error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer closeWithLog("风扇配置导出文件", f)
 
 	zw := zip.NewWriter(f)
 	w, err := zw.Create("fan-profiles.json")
 	if err != nil {
-		zw.Close()
+		closeWithLog("风扇配置导出压缩流", zw)
 		return err
 	}
 	if _, err := w.Write(data); err != nil {
-		zw.Close()
+		closeWithLog("风扇配置导出压缩流", zw)
 		return err
 	}
 	if err := zw.Close(); err != nil {
@@ -1046,10 +1070,14 @@ func (a *App) ExportRecentLogsZip() error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer closeWithLog("日志导出文件", f)
 
 	zw := zip.NewWriter(f)
-	defer zw.Close()
+	defer func() {
+		if zw != nil {
+			closeWithLog("日志导出压缩流", zw)
+		}
+	}()
 
 	count := 0
 	diag, diagErr := a.buildFeedbackDiagnostics()
@@ -1091,7 +1119,11 @@ func (a *App) ExportRecentLogsZip() error {
 	if count == 0 {
 		return fmt.Errorf("最近7天没有可导出的日志")
 	}
-	return zw.Close()
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	zw = nil
+	return nil
 }
 
 func (a *App) buildFeedbackDiagnostics() ([]byte, error) {
@@ -1162,7 +1194,7 @@ func readFanProfilesBundleZip(path string) (*fanCurveProfilesBundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer r.Close()
+	defer closeWithLog("风扇配置导入压缩包", r)
 
 	var target *zip.File
 	for _, f := range r.File {
@@ -1179,7 +1211,7 @@ func readFanProfilesBundleZip(path string) (*fanCurveProfilesBundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rc.Close()
+	defer closeWithLog("风扇配置导入文件流", rc)
 
 	data, err := io.ReadAll(rc)
 	if err != nil {
@@ -1220,7 +1252,10 @@ func (a *App) CheckProcessSwitchNow() bool {
 		return false
 	}
 	var success bool
-	json.Unmarshal(resp.Data, &success)
+	if err := json.Unmarshal(resp.Data, &success); err != nil {
+		logWarn("解析进程切换立即检查结果失败", "error", err)
+		return false
+	}
 	return success
 }
 
@@ -1280,7 +1315,10 @@ func (a *App) SetManualGear(gear, level string) bool {
 		return false
 	}
 	var success bool
-	json.Unmarshal(resp.Data, &success)
+	if err := json.Unmarshal(resp.Data, &success); err != nil {
+		logWarn("解析手动档位设置结果失败", "error", err)
+		return false
+	}
 	return success
 }
 
@@ -1290,7 +1328,10 @@ func (a *App) GetAvailableGears() map[string][]GearCommand {
 		return types.GearCommands
 	}
 	var gears map[string][]GearCommand
-	json.Unmarshal(resp.Data, &gears)
+	if err := json.Unmarshal(resp.Data, &gears); err != nil {
+		logWarn("解析可用档位失败", "error", err)
+		return types.GearCommands
+	}
 	return gears
 }
 
@@ -1314,7 +1355,10 @@ func (a *App) SetGearLight(enabled bool) bool {
 		return false
 	}
 	var success bool
-	json.Unmarshal(resp.Data, &success)
+	if err := json.Unmarshal(resp.Data, &success); err != nil {
+		logWarn("解析档位灯设置结果失败", "error", err)
+		return false
+	}
 	return success
 }
 
@@ -1324,7 +1368,10 @@ func (a *App) SetPowerOnStart(enabled bool) bool {
 		return false
 	}
 	var success bool
-	json.Unmarshal(resp.Data, &success)
+	if err := json.Unmarshal(resp.Data, &success); err != nil {
+		logWarn("解析上电启动设置结果失败", "error", err)
+		return false
+	}
 	return success
 }
 
@@ -1334,7 +1381,10 @@ func (a *App) SetSmartStartStop(mode string) bool {
 		return false
 	}
 	var success bool
-	json.Unmarshal(resp.Data, &success)
+	if err := json.Unmarshal(resp.Data, &success); err != nil {
+		logWarn("解析智能启停设置结果失败", "error", err)
+		return false
+	}
 	return success
 }
 
@@ -1344,7 +1394,10 @@ func (a *App) SetBrightness(percentage int) bool {
 		return false
 	}
 	var success bool
-	json.Unmarshal(resp.Data, &success)
+	if err := json.Unmarshal(resp.Data, &success); err != nil {
+		logWarn("解析亮度设置结果失败", "error", err)
+		return false
+	}
 	return success
 }
 
@@ -1354,7 +1407,10 @@ func (a *App) SetRGBMode(params ipc.SetRGBModeParams) bool {
 		return false
 	}
 	var success bool
-	json.Unmarshal(resp.Data, &success)
+	if err := json.Unmarshal(resp.Data, &success); err != nil {
+		logWarn("解析 RGB 模式设置结果失败", "error", err)
+		return false
+	}
 	return success
 }
 
@@ -1366,7 +1422,12 @@ func (a *App) GetTemperature() TemperatureData {
 		return a.currentTemp
 	}
 	var temp TemperatureData
-	json.Unmarshal(resp.Data, &temp)
+	if err := json.Unmarshal(resp.Data, &temp); err != nil {
+		logWarn("解析温度数据失败", "error", err)
+		a.mutex.RLock()
+		defer a.mutex.RUnlock()
+		return a.currentTemp
+	}
 	return temp
 }
 
@@ -1548,7 +1609,10 @@ func (a *App) TestTemperatureReading() TemperatureData {
 		return TemperatureData{}
 	}
 	var temp TemperatureData
-	json.Unmarshal(resp.Data, &temp)
+	if err := json.Unmarshal(resp.Data, &temp); err != nil {
+		logWarn("解析测试温度结果失败", "error", err)
+		return TemperatureData{}
+	}
 	return temp
 }
 
@@ -1562,7 +1626,10 @@ func (a *App) TestBridgeProgram() BridgeTemperatureData {
 		return BridgeTemperatureData{Success: false, Error: errMsg}
 	}
 	var data BridgeTemperatureData
-	json.Unmarshal(resp.Data, &data)
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		logWarn("解析桥接程序测试结果失败", "error", err)
+		return BridgeTemperatureData{Success: false, Error: err.Error()}
+	}
 	return data
 }
 
@@ -1576,7 +1643,10 @@ func (a *App) GetBridgeProgramStatus() map[string]any {
 		return map[string]any{"error": errMsg}
 	}
 	var status map[string]any
-	json.Unmarshal(resp.Data, &status)
+	if err := json.Unmarshal(resp.Data, &status); err != nil {
+		logWarn("解析桥接程序状态失败", "error", err)
+		return map[string]any{"error": err.Error()}
+	}
 	return status
 }
 
@@ -1596,7 +1666,10 @@ func (a *App) GetDebugInfo() map[string]any {
 		return map[string]any{"error": errMsg}
 	}
 	var info map[string]any
-	json.Unmarshal(resp.Data, &info)
+	if err := json.Unmarshal(resp.Data, &info); err != nil {
+		logWarn("解析调试信息失败", "error", err)
+		return map[string]any{"error": err.Error()}
+	}
 	return info
 }
 

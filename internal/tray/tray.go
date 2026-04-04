@@ -14,26 +14,26 @@ import (
 
 // Manager 系统托盘管理器
 type Manager struct {
-	logger       types.Logger
-	initialized  int32 // atomic: 0=未初始化, 1=已初始化
-	readyState   int32 // atomic: 0=未就绪, 1=就绪
-	mutex        sync.Mutex
-	uiMutex      sync.Mutex
-	done         chan struct{} // 关闭此通道以通知所有 goroutine 退出
-	iconData     []byte
-	menuItems    *MenuItems
-	onShowWindow func()
-	onQuit       func()
-	onQuitAll    func()
-	onToggleCore func() bool
-	onToggleAuto func() bool
-	getStatus    func() Status
-	menuQuitGUI  *systray.MenuItem
-	menuStopCore *systray.MenuItem
-	menuQuitAll  *systray.MenuItem
-	lastStatus          Status
-	lastTooltip         string
-	showWindowInFlight  int32 // atomic: 0=空闲, 1=正在派发显示窗口
+	logger             types.Logger
+	initialized        int32 // atomic: 0=未初始化, 1=已初始化
+	readyState         int32 // atomic: 0=未就绪, 1=就绪
+	mutex              sync.Mutex
+	uiMutex            sync.Mutex
+	done               chan struct{} // 关闭此通道以通知所有 goroutine 退出
+	iconData           []byte
+	menuItems          *MenuItems
+	onShowWindow       func()
+	onQuit             func()
+	onQuitAll          func()
+	onToggleCore       func() bool
+	onToggleAuto       func() bool
+	getStatus          func() Status
+	menuQuitGUI        *systray.MenuItem
+	menuStopCore       *systray.MenuItem
+	menuQuitAll        *systray.MenuItem
+	lastStatus         Status
+	lastTooltip        string
+	showWindowInFlight int32 // atomic: 0=空闲, 1=正在派发显示窗口
 
 	// 监控托盘健康状态
 	lastIconRefresh  int64
@@ -538,9 +538,9 @@ func (m *Manager) logError(msg any, args ...any) {
 	}
 }
 
-func (m *Manager) logDebug(msg any, args ...any) {
+func (m *Manager) logDebug(msg any) {
 	if m.logger != nil {
-		m.logger.Debug(msg, args...)
+		m.logger.Debug(msg)
 	}
 }
 

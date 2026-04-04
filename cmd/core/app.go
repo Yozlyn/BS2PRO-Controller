@@ -200,7 +200,7 @@ func (a *CoreApp) onQuitRequest() {
 	}
 
 	go func() {
-		defer func() { recover() }()
+		defer func() { _ = recover() }()
 		time.Sleep(1 * time.Second)
 		a.Stop() // 释放硬件句柄
 		a.logInfo("核心服务进程自我终止")
@@ -452,11 +452,11 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 		}
 		return a.successResponse(true)
 	case ipc.ReqRestartService:
-		success := a.RestartService()
-		return a.successResponse(success)
+		a.RestartService()
+		return a.successResponse(true)
 	case ipc.ReqStopService:
-		success := a.StopService()
-		return a.successResponse(success)
+		a.StopService()
+		return a.successResponse(true)
 	case ipc.ReqUnsubscribeEvents:
 		return a.successResponse(true)
 	default:
@@ -1612,14 +1612,14 @@ func (a *CoreApp) startTemperatureMonitoring() {
 
 				if a.ipcServer != nil {
 					go func(t types.TemperatureData) {
-						defer func() { recover() }()
+						defer func() { _ = recover() }()
 						a.ipcServer.BroadcastEvent(ipc.EventTemperatureUpdate, t)
 					}(temp)
 				}
 
 				// 分离式 RGB 智能温控判定
 				if cfg.RGBConfig.Mode == "smart" && temp.MaxTemp > 0 {
-					var level byte = 1
+					var level byte
 					if temp.MaxTemp < 60 {
 						level = 1
 					} else if temp.MaxTemp < 85 {
@@ -1705,7 +1705,7 @@ func (a *CoreApp) startTemperatureMonitoring() {
 							}
 							if a.ipcServer != nil {
 								go func(c types.AppConfig) {
-									defer func() { recover() }()
+									defer func() { _ = recover() }()
 									a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, c)
 								}(cfg)
 							}
@@ -1913,31 +1913,30 @@ func (a *CoreApp) restoreSmartRGBForAutoControl() {
 	a.mutex.Unlock()
 }
 
-func (a *CoreApp) RestartService() bool {
+func (a *CoreApp) RestartService() {
 	a.mutex.Lock()
 	wasPaused := a.corePaused
 	a.corePaused = false
 	a.mutex.Unlock()
 	if !wasPaused {
 		a.logInfo("核心恢复请求已忽略：当前未暂停")
-		return true
+		return
 	}
 	if a.ConnectDevice() {
 		a.logInfo("核心已恢复并重新连接设备")
-		return true
+		return
 	}
 	gen := atomic.AddInt32(&a.reconnectGen, 1)
 	go a.scheduleReconnect(gen)
 	a.logInfo("核心已恢复，设备连接延后重试")
-	return true
 }
 
-func (a *CoreApp) StopService() bool {
+func (a *CoreApp) StopService() {
 	a.mutex.Lock()
 	if a.corePaused {
 		a.mutex.Unlock()
 		a.logInfo("核心暂停请求已忽略：当前已处于暂停状态")
-		return true
+		return
 	}
 	a.corePaused = true
 	if a.monitoringTemp {
@@ -1951,7 +1950,6 @@ func (a *CoreApp) StopService() bool {
 	atomic.AddInt32(&a.reconnectGen, 1)
 	a.DisconnectDevice()
 	a.logInfo("核心已进入暂停态，当前仅保留 IPC 与恢复入口")
-	return true
 }
 
 // safeGo 安全地启动一个goroutine，自动捕获并报告panic

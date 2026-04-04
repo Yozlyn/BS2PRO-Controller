@@ -34,10 +34,10 @@ func guiCapturePanic(recovered any) {
 
 	var b strings.Builder
 	b.WriteString("=== BS2PRO 图形界面崩溃报告 ===\n")
-	b.WriteString(fmt.Sprintf("时间:      %s\n", time.Now().Format(time.RFC3339Nano)))
-	b.WriteString(fmt.Sprintf("异常:      %v\n", recovered))
-	b.WriteString(fmt.Sprintf("进程ID:    %d\n", os.Getpid()))
-	b.WriteString(fmt.Sprintf("启动参数:  %v\n", os.Args))
+	fmt.Fprintf(&b, "时间:      %s\n", time.Now().Format(time.RFC3339Nano))
+	fmt.Fprintf(&b, "异常:      %v\n", recovered)
+	fmt.Fprintf(&b, "进程ID:    %d\n", os.Getpid())
+	fmt.Fprintf(&b, "启动参数:  %v\n", os.Args)
 	b.WriteString("\n--- 调用栈 ---\n")
 	b.Write(stack)
 	b.WriteString("\n")
@@ -174,7 +174,7 @@ func prefersLightTheme() bool {
 	if err != nil {
 		return false
 	}
-	defer key.Close()
+	defer func() { _ = key.Close() }()
 
 	value, _, err := key.GetIntegerValue("AppsUseLightTheme")
 	if err != nil {

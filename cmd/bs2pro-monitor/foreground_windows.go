@@ -40,7 +40,7 @@ func getForegroundProcessName() string {
 		return ""
 	}
 	var pid uint32
-	procGetWindowThreadProcID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	_, _, _ = procGetWindowThreadProcID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
 	if pid == 0 {
 		return ""
 	}
@@ -48,7 +48,7 @@ func getForegroundProcessName() string {
 	if handle == 0 || handle == ^uintptr(0) {
 		return ""
 	}
-	defer procCloseHandle.Call(handle)
+	defer func() { _, _, _ = procCloseHandle.Call(handle) }()
 	var entry processEntry32W
 	entry.DwSize = uint32(unsafe.Sizeof(entry))
 	ret, _, _ := procProcess32FirstW.Call(handle, uintptr(unsafe.Pointer(&entry)))

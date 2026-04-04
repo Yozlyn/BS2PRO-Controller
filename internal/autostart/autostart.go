@@ -30,7 +30,7 @@ func (m *Manager) SetWindowsAutoStart(enable bool) error {
 	if err != nil {
 		return fmt.Errorf("打开注册表失败: %v", err)
 	}
-	defer key.Close()
+	defer func() { _ = key.Close() }()
 
 	if enable {
 		// 使用安装目录来构建控制台路径
@@ -68,7 +68,7 @@ func (m *Manager) CheckWindowsAutoStart() bool {
 	if err != nil {
 		return false
 	}
-	defer key.Close()
+	defer func() { _ = key.Close() }()
 
 	_, _, err = key.GetStringValue("BS2PRO-Controller")
 	return err == nil
@@ -79,7 +79,7 @@ func (m *Manager) SetMonitorAutoStart(enable bool) error {
 	if err != nil {
 		return fmt.Errorf("打开注册表失败: %v", err)
 	}
-	defer key.Close()
+	defer func() { _ = key.Close() }()
 
 	const valueName = "BS2PRO-Monitor"
 	if enable {
@@ -88,7 +88,7 @@ func (m *Manager) SetMonitorAutoStart(enable bool) error {
 		}
 		monitorPath := filepath.Join(m.installDir, "BS2PRO-Monitor.exe")
 		if _, err := os.Stat(monitorPath); os.IsNotExist(err) {
-			return fmt.Errorf("Monitor程序不存在: %s", monitorPath)
+			return fmt.Errorf("monitor程序不存在: %s", monitorPath)
 		}
 		val := fmt.Sprintf(`powershell -WindowStyle Hidden -NoProfile -NonInteractive -Command "Start-Process -WindowStyle Hidden -FilePath '%s'"`, monitorPath)
 		if err := key.SetStringValue(valueName, val); err != nil {
@@ -111,7 +111,7 @@ func (m *Manager) CheckMonitorAutoStart() bool {
 	if err != nil {
 		return false
 	}
-	defer key.Close()
+	defer func() { _ = key.Close() }()
 
 	_, _, err = key.GetStringValue("BS2PRO-Monitor")
 	return err == nil

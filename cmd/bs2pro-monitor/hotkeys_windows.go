@@ -112,7 +112,7 @@ func registerGlobalHotkeys(bindings []types.HotkeyBinding, onAction func(string)
 		go func() {
 			<-stopCh
 			monitorDebug("hotkey worker stop requested", "thread", threadID)
-			procPostThreadMsg.Call(uintptr(threadID), wmQuit, 0, 0)
+			_, _, _ = procPostThreadMsg.Call(uintptr(threadID), wmQuit, 0, 0)
 		}()
 		monitorDebug("global hotkey loop started", "thread", threadID, "active", len(active))
 
@@ -151,7 +151,7 @@ func registerGlobalHotkeys(bindings []types.HotkeyBinding, onAction func(string)
 
 func unregisterIDs(ids []int) {
 	for _, id := range ids {
-		procUnregister.Call(0, uintptr(id))
+		_, _, _ = procUnregister.Call(0, uintptr(id))
 	}
 }
 

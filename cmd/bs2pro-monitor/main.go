@@ -159,7 +159,7 @@ func hideConsoleWindow() {
 	if hwnd == 0 {
 		return
 	}
-	procMonitorShowWindow.Call(hwnd, hideWindowCmd)
+	_, _, _ = procMonitorShowWindow.Call(hwnd, hideWindowCmd)
 }
 
 type monitorTrayStateStore struct {
@@ -471,7 +471,7 @@ func (g *singleInstanceGuard) Acquire() bool {
 	if err != nil {
 		if err == windows.ERROR_ALREADY_EXISTS {
 			if handle != 0 {
-				windows.CloseHandle(handle)
+				_ = windows.CloseHandle(handle)
 			}
 			return false
 		}
