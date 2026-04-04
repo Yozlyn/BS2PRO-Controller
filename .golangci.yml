@@ -1,0 +1,16 @@
+version: "2"
+
+linters:
+  disable-all: false
+  enable:
+    - unused
+    - unparam
+    - dupl
+    - ineffassign
+    - errcheck
+    - govet
+    - misspell
+    - errcheck
+    - govet
+    - staticcheck
+    - misspell
