@@ -46,12 +46,24 @@ if (Test-Path $winresPath) {
     Write-Host "Updated $winresPath"
 }
 
+# 更新 Monitor 探针配置
+$monitorWinresPath = 'cmd/bs2pro-monitor/winres/winres.json'
+if (Test-Path $monitorWinresPath) {
+    $monitorWinres = Get-Content -Raw -Encoding UTF8 $monitorWinresPath
+    $monitorWinres = $monitorWinres -replace '"file_version"\s*:\s*".*?"', "`"file_version`": `"$numericVer`""
+    $monitorWinres = $monitorWinres -replace '"product_version"\s*:\s*".*?"', "`"product_version`": `"$numericVer`""
+    $monitorWinres = $monitorWinres -replace '"FileVersion"\s*:\s*".*?"', "`"FileVersion`": `"$displayVer`""
+    $monitorWinres = $monitorWinres -replace '"ProductVersion"\s*:\s*".*?"', "`"ProductVersion`": `"$displayVer`""
+    [IO.File]::WriteAllText((Get-Item $monitorWinresPath).FullName, $monitorWinres, $Utf8NoBom)
+    Write-Host "Updated $monitorWinresPath"
+}
+
 # 更新安装包配置文件
-$nsiPath = 'build/windows/installer/project.nsi'
-if (Test-Path $nsiPath) {
-    $nsi = Get-Content -Raw -Encoding UTF8 $nsiPath
+$installerNsiPath = 'build/windows/installer/project.nsi'
+if (Test-Path -LiteralPath 'build/windows/installer/project.nsi') {
+    $nsi = Get-Content -Raw -Encoding UTF8 -LiteralPath 'build/windows/installer/project.nsi'
     $nsi = $nsi -replace '(?m)^VIProductVersion\s+".*?"', "VIProductVersion `"$numericVer`""
     $nsi = $nsi -replace '(?m)^VIFileVersion\s+".*?"', "VIFileVersion `"$numericVer`""
-    [IO.File]::WriteAllText((Get-Item $nsiPath).FullName, $nsi, $Utf8Bom)
-    Write-Host "Updated $nsiPath"
+    [IO.File]::WriteAllText((Get-Item -LiteralPath 'build/windows/installer/project.nsi').FullName, $nsi, $Utf8Bom)
+    Write-Host ("Updated {0}" -f $installerNsiPath)
 }

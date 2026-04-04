@@ -7,8 +7,8 @@
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
 
-VIProductVersion "2.7.0.1"
-VIFileVersion "2.7.0.1"
+VIProductVersion "2.8.0.1"
+VIFileVersion "2.8.0.1"
 
 VIAddVersionKey "CompanyName"     "${INFO_COMPANYNAME}"
 VIAddVersionKey "FileDescription" "${INFO_PRODUCTNAME} Installer"

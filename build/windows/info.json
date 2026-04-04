@@ -4,7 +4,7 @@
 	},
 	"info": {
 		"0000": {
-			"productVersion": "2.7.0-r1",
+			"productVersion": "2.8.0-r1",
 			"CompanyName": "{{.Info.CompanyName}}",
 			"FileDescription": "{{.Info.ProductName}}",
 			"LegalCopyright": "{{.Info.Copyright}}",
