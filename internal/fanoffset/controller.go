@@ -1362,7 +1362,7 @@ func (c *Controller) getRequiredTrendConfirm(currentTemp, trend int) int {
 	}
 	confirm := float64(max(1, c.config.HighTempTrendConfirm))
 	trendStrength := math.Abs(float64(trend)) / float64(max(1, c.config.StableDelta))
-	tempFactor := 1.0
+	var tempFactor float64
 	switch {
 	case currentTemp >= c.config.HighTempBoostThreshold:
 		rangeSpan := float64(max(1, c.config.CriticalTemp-c.config.HighTempBoostThreshold))
@@ -1377,7 +1377,7 @@ func (c *Controller) getRequiredTrendConfirm(currentTemp, trend int) int {
 		progress := clampFloat(float64(currentTemp-c.config.SafeTemp)/rangeSpan, 0, 1)
 		tempFactor = 4.8 - 2.4*progress
 	}
-	trendFactor := 1.0
+	var trendFactor float64
 	switch {
 	case trendStrength >= 3:
 		trendFactor = 0.75

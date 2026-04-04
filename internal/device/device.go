@@ -159,7 +159,7 @@ func (m *Manager) Disconnect() {
 
 	// 关闭设备
 	if m.device != nil {
-		m.device.Close()
+		_ = m.device.Close()
 		m.device = nil
 	}
 
@@ -359,10 +359,9 @@ func (m *Manager) handleDeviceDisconnected() {
 	if m.device != nil {
 		func() {
 			defer func() {
-				if r := recover(); r != nil {
-				}
+				_ = recover()
 			}()
-			m.device.Close()
+			_ = m.device.Close()
 		}()
 		m.device = nil
 	}

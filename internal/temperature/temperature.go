@@ -141,7 +141,7 @@ func (r *Reader) initNVMLWindows() {
 			kernel32 := syscall.NewLazyDLL("kernel32.dll")
 			setWorkingSet := kernel32.NewProc("SetProcessWorkingSetSize")
 			proc, _ := syscall.GetCurrentProcess()
-			setWorkingSet.Call(uintptr(proc), ^uintptr(0), ^uintptr(0))
+			_, _, _ = setWorkingSet.Call(uintptr(proc), ^uintptr(0), ^uintptr(0))
 		} else {
 			r.logger.Warn("NVML 无法获取主显卡句柄", "source", "nvml", "state", ret)
 		}

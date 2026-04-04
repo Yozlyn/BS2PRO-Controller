@@ -126,7 +126,7 @@ func (c *Client) GetCPUTemperature() (int, error) {
 // Close 关闭设备句柄
 func (c *Client) Close() {
 	if c != nil && c.handle != 0 && c.handle != syscall.InvalidHandle {
-		syscall.CloseHandle(c.handle)
+		_ = syscall.CloseHandle(c.handle)
 		c.handle = 0
 	}
 }
