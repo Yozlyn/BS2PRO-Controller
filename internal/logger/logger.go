@@ -338,9 +338,17 @@ func (l *CustomLogger) emitf(level slog.Level, format string, args ...any) {
 }
 
 func (l *CustomLogger) writeRecord(level slog.Level, msg string, args ...any) {
+	handler := l.logger.Handler()
+	if handler == nil {
+		return
+	}
+	ctx := context.Background()
+	if !handler.Enabled(ctx, level) {
+		return
+	}
 	record := slog.NewRecord(time.Now(), level, msg, callerPC())
 	record.Add(args...)
-	_ = l.logger.Handler().Handle(context.Background(), record)
+	_ = handler.Handle(ctx, record)
 }
 
 func callerPC() uintptr {

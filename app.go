@@ -114,6 +114,12 @@ func logDebug(msg any, args ...any) {
 	}
 }
 
+func setGUIDebugMode(enabled bool) {
+	if guiLogger != nil {
+		guiLogger.SetDebugMode(enabled)
+	}
+}
+
 func closeWithLog(name string, closer io.Closer) {
 	if closer == nil {
 		return
@@ -174,6 +180,7 @@ func (a *App) startup(ctx context.Context) {
 
 		// 启动时主动拉取一次配置，同步状态
 		cfg := a.GetConfig()
+		setGUIDebugMode(cfg.DebugMode)
 		status := a.GetDeviceStatus()
 		logDebug("启动阶段状态快照",
 			"config_tray", cfg.TrayEnabled,
@@ -493,6 +500,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 		go func() {
 			time.Sleep(500 * time.Millisecond)
 			cfg := a.GetConfig()
+			setGUIDebugMode(cfg.DebugMode)
 			status := a.GetDeviceStatus()
 			logDebug("服务重连后状态快照",
 				"config_tray", cfg.TrayEnabled,
@@ -544,6 +552,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 		var cfg types.AppConfig
 		if err := json.Unmarshal(event.Data, &cfg); err == nil {
 			cfg = normalizeMonitorConfig(cfg)
+			setGUIDebugMode(cfg.DebugMode)
 			cfg.WindowsAutoStart = a.CheckWindowsAutoStart()
 			a.syncMonitorAutoStartFromConfig("event-config-update")
 			a.mutex.Lock()
@@ -1684,6 +1693,7 @@ func (a *App) SetDebugMode(enabled bool) error {
 		}
 		return fmt.Errorf("服务响应为空")
 	}
+	setGUIDebugMode(enabled)
 	return nil
 }
 
