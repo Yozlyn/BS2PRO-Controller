@@ -21,7 +21,7 @@ type Controller struct {
 	windowSize int
 
 	zones              []zoneState
-	learnedByTemp      map[int]learnedState
+	learnedMemory      *learnedMemoryStore
 	lastCurveTemps     []int
 	lastCurveSignature string
 	lastTemp           int
@@ -45,12 +45,16 @@ type tempSample struct {
 }
 
 type learnedState struct {
-	offset         float64
-	confidence     float64
-	successes      int
-	failures       int
-	hasSeed        bool
+	offset     float64
+	confidence float64
+	successes  int
+	failures   int
+	hasSeed    bool
+}
+
+type learnedMemoryKey struct {
 	curveSignature string
+	zoneTemp       int
 }
 
 type rpmFeedback struct {
@@ -259,7 +263,7 @@ func New(cfg Config, logger types.Logger) *Controller {
 		config:            cfg,
 		windowSize:        cfg.WindowSize,
 		tempRing:          make([]tempSample, cfg.WindowSize),
-		learnedByTemp:     make(map[int]learnedState),
+		learnedMemory:     newLearnedMemoryStore(),
 		ringHead:          0,
 		ringCount:         0,
 		lastTemp:          -1,
@@ -583,8 +587,7 @@ NORMAL_LOGIC:
 					break NORMAL_LOGIC
 				}
 
-				if currentTemp >= c.config.HighTempBoostThreshold {
-					c.startVerifying(zone, currentTemp, now)
+				if c.handleHighTempProtectionSettle(zone, point, currentTemp, minSafeOffset, minRPM, maxRPM) {
 					break NORMAL_LOGIC
 				}
 
@@ -625,6 +628,9 @@ NORMAL_LOGIC:
 				zone.probeUp = false
 				if point.Offset <= minSafeOffset {
 					c.startVerifying(zone, currentTemp, now)
+					break NORMAL_LOGIC
+				}
+				if c.handleHighTempProtectionSettle(zone, point, currentTemp, minSafeOffset, minRPM, maxRPM) {
 					break NORMAL_LOGIC
 				}
 				probeDrop := c.calculateProbeDrop(zone, point, currentTemp, stabilityCount, minSafeOffset, now)
@@ -763,9 +769,74 @@ func (c *Controller) setZoneEffectiveRPM(point *types.FanCurvePoint, targetRPM, 
 	c.adjustZoneOffset(point, targetRPM-(point.RPM+point.Offset), minRPM, maxRPM)
 }
 
+func (c *Controller) enterHighTempProtectionState(zone *zoneState, currentTemp int) {
+	zone.verifying = false
+	zone.probeActive = false
+	zone.probeUp = false
+	zone.converged = true
+	zone.convergeTmp = currentTemp
+	zone.stableCount = 0
+	zone.driftCount = 0
+	zone.verifyScoreSum = 0
+	zone.verifySamples = 0
+}
+
+func (c *Controller) reboundToHighTempProtection(point *types.FanCurvePoint, currentTemp, minSafeOffset, minRPM, maxRPM int) bool {
+	protectionFloor := max(minSafeOffset, 0)
+	if point.Offset >= protectionFloor {
+		return false
+	}
+	rebound := c.config.Step * 3
+	if point.Offset+rebound > protectionFloor {
+		rebound = protectionFloor - point.Offset
+	}
+	if rebound <= 0 {
+		return false
+	}
+	c.adjustZoneOffset(point, rebound, minRPM, maxRPM)
+	if c.logger != nil {
+		c.logger.Debug("风扇偏移高温保护区回弹",
+			"zone_temp", point.Temperature,
+			"offset", point.Offset,
+			"protection_floor", protectionFloor,
+			"raw_temp", currentTemp)
+	}
+	return true
+}
+
+func (c *Controller) handleHighTempProtectionSettle(zone *zoneState, point *types.FanCurvePoint, currentTemp, minSafeOffset, minRPM, maxRPM int) bool {
+	if currentTemp < c.config.HighTempBoostThreshold {
+		return false
+	}
+	c.reboundToHighTempProtection(point, currentTemp, minSafeOffset, minRPM, maxRPM)
+	c.enterHighTempProtectionState(zone, currentTemp)
+	return true
+}
+
+func (c *Controller) clearLearnState(zone *zoneState, temp int) {
+	if c.learnedMemory != nil {
+		c.learnedMemory.Delete(c.lastCurveSignature, temp)
+	}
+	zone.learnedOffset = 0
+	zone.learnedConfidence = 0
+	zone.learnSuccesses = 0
+	zone.learnFailures = 0
+}
+
+func (c *Controller) applyLearnedStateToZone(zone *zoneState, state learnedState) {
+	zone.learnedOffset = state.offset
+	zone.learnedConfidence = state.confidence
+	zone.learnSuccesses = state.successes
+	zone.learnFailures = state.failures
+}
+
 func (c *Controller) handleVerifying(zoneIdx int, fanCurve []types.FanCurvePoint, currentTemp, trend int, now time.Time, minRPM, maxRPM int) {
 	zone := &c.zones[zoneIdx]
 	point := &fanCurve[zoneIdx]
+	if currentTemp >= c.config.HighTempBoostThreshold {
+		c.enterHighTempProtectionState(zone, currentTemp)
+		return
+	}
 
 	if currentTemp > zone.verifyTempHigh {
 		zone.verifyTempHigh = currentTemp
@@ -777,8 +848,6 @@ func (c *Controller) handleVerifying(zoneIdx int, fanCurve []types.FanCurvePoint
 	breakThreshold := c.config.StableDelta * 2
 	if currentTemp >= c.config.CriticalTemp {
 		breakThreshold = 1
-	} else if currentTemp >= c.config.HighTempBoostThreshold {
-		breakThreshold = 3
 	}
 
 	if trend >= breakThreshold {
@@ -787,9 +856,6 @@ func (c *Controller) handleVerifying(zoneIdx int, fanCurve []types.FanCurvePoint
 		zone.stableCount = 0
 		oldOffset := point.Offset
 		step := c.config.Step
-		if currentTemp >= c.config.HighTempBoostThreshold {
-			step = c.config.Step * 2
-		}
 		c.adjustZoneOffset(point, step, minRPM, maxRPM)
 		zone.lastAdjustAt = now
 		if c.logger != nil {
@@ -1203,6 +1269,9 @@ func (c *Controller) describeUpReason(currentTemp, trend, requiredConfirm int) s
 }
 
 func (c *Controller) applyLearnedOffsetMemory(zone *zoneState, point *types.FanCurvePoint, currentTemp, trend, minSafeOffset int, now time.Time, minRPM, maxRPM int) bool {
+	if currentTemp >= c.config.HighTempBoostThreshold || point.Temperature >= c.config.HighTempBoostThreshold {
+		return false
+	}
 	if zone.learnedConfidence < 0.35 {
 		return false
 	}
@@ -1255,6 +1324,9 @@ func (c *Controller) applyLearnedOffsetMemory(zone *zoneState, point *types.FanC
 }
 
 func (c *Controller) shouldProbeUp(zone *zoneState, point *types.FanCurvePoint, currentTemp int, now time.Time) bool {
+	if currentTemp >= c.config.HighTempBoostThreshold || point.Temperature >= c.config.HighTempBoostThreshold {
+		return false
+	}
 	if currentTemp >= c.config.CriticalTemp {
 		return false
 	}
@@ -1281,14 +1353,15 @@ func (c *Controller) shouldProbeUp(zone *zoneState, point *types.FanCurvePoint, 
 }
 
 func (c *Controller) noteLearnSuccess(temp int, zone *zoneState, offset int) {
-	if c.learnedByTemp == nil {
-		c.learnedByTemp = make(map[int]learnedState)
+	if temp >= c.config.HighTempBoostThreshold {
+		c.clearLearnState(zone, temp)
+		return
 	}
-	state := c.learnedByTemp[temp]
-	curveSignature := c.lastCurveSignature
-	if state.curveSignature != "" && curveSignature != "" && state.curveSignature != curveSignature {
-		state = learnedState{}
+	if c.learnedMemory == nil {
+		c.learnedMemory = newLearnedMemoryStore()
 	}
+	key := learnedMemoryKey{curveSignature: c.lastCurveSignature, zoneTemp: temp}
+	state, _ := c.learnedMemory.Get(key.curveSignature, key.zoneTemp)
 	hadSeed := state.hasSeed
 	if !hadSeed {
 		state.offset = float64(offset)
@@ -1297,19 +1370,15 @@ func (c *Controller) noteLearnSuccess(temp int, zone *zoneState, offset int) {
 		state.offset = (1-rate)*state.offset + rate*float64(offset)
 	}
 	state.hasSeed = true
-	state.curveSignature = curveSignature
 	state.confidence = clampFloat(state.confidence+c.config.LearnConfidenceGain, 0, 1)
 	state.successes++
-	c.learnedByTemp[temp] = state
-	zone.learnedOffset = state.offset
-	zone.learnedConfidence = state.confidence
-	zone.learnSuccesses = state.successes
-	zone.learnFailures = state.failures
+	c.learnedMemory.Set(key.curveSignature, key.zoneTemp, state)
+	c.applyLearnedStateToZone(zone, state)
 	if c.logger != nil {
 		c.logger.Debug("风扇偏移长期记忆学习成功",
 			"zone_temp", temp,
 			"has_seed", hadSeed,
-			"curve_signature", state.curveSignature,
+			"curve_signature", key.curveSignature,
 			"offset", offset,
 			"learned_offset", state.offset,
 			"confidence", state.confidence,
@@ -1319,27 +1388,24 @@ func (c *Controller) noteLearnSuccess(temp int, zone *zoneState, offset int) {
 }
 
 func (c *Controller) noteLearnFailure(temp int, zone *zoneState) {
-	if c.learnedByTemp == nil {
-		c.learnedByTemp = make(map[int]learnedState)
+	if temp >= c.config.HighTempBoostThreshold {
+		c.clearLearnState(zone, temp)
+		return
 	}
-	state := c.learnedByTemp[temp]
-	curveSignature := c.lastCurveSignature
-	if state.curveSignature != "" && curveSignature != "" && state.curveSignature != curveSignature {
-		state = learnedState{}
+	if c.learnedMemory == nil {
+		c.learnedMemory = newLearnedMemoryStore()
 	}
-	state.curveSignature = curveSignature
+	key := learnedMemoryKey{curveSignature: c.lastCurveSignature, zoneTemp: temp}
+	state, _ := c.learnedMemory.Get(key.curveSignature, key.zoneTemp)
 	state.confidence = clampFloat(state.confidence-c.config.LearnConfidenceDecay, 0, 1)
 	state.failures++
-	c.learnedByTemp[temp] = state
-	zone.learnedOffset = state.offset
-	zone.learnedConfidence = state.confidence
-	zone.learnSuccesses = state.successes
-	zone.learnFailures = state.failures
+	c.learnedMemory.Set(key.curveSignature, key.zoneTemp, state)
+	c.applyLearnedStateToZone(zone, state)
 	if c.logger != nil {
 		c.logger.Debug("风扇偏移长期记忆学习失败",
 			"zone_temp", temp,
 			"has_seed", state.hasSeed,
-			"curve_signature", state.curveSignature,
+			"curve_signature", key.curveSignature,
 			"learned_offset", state.offset,
 			"confidence", state.confidence,
 			"successes", state.successes,
@@ -1552,8 +1618,8 @@ func (c *Controller) resetForCurveLocked(fanCurve []types.FanCurvePoint, reason 
 	hadSeed := c.hasLearnedSeedLocked()
 	cleared := 0
 	if previousSignature != "" && previousSignature != curveSignature {
-		cleared = len(c.learnedByTemp)
-		c.learnedByTemp = make(map[int]learnedState)
+		cleared = c.learnedMemory.Len()
+		c.learnedMemory = newLearnedMemoryStore()
 	}
 	c.resetRuntimeStateLocked()
 	if previousSignature != "" && previousSignature != curveSignature && c.logger != nil {
@@ -1570,21 +1636,14 @@ func (c *Controller) storedCurveSignatureLocked() string {
 	if c.lastCurveSignature != "" {
 		return c.lastCurveSignature
 	}
-	for _, state := range c.learnedByTemp {
-		if state.curveSignature != "" {
-			return state.curveSignature
-		}
+	if c.learnedMemory == nil {
+		return ""
 	}
 	return ""
 }
 
 func (c *Controller) hasLearnedSeedLocked() bool {
-	for _, state := range c.learnedByTemp {
-		if state.hasSeed {
-			return true
-		}
-	}
-	return false
+	return c.learnedMemory.HasSeedForCurve(c.storedCurveSignatureLocked())
 }
 
 func (c *Controller) curveSignature(fanCurve []types.FanCurvePoint) string {
@@ -1611,10 +1670,10 @@ func (c *Controller) ensureZones(fanCurve []types.FanCurvePoint) {
 	previousSignature := c.storedCurveSignatureLocked()
 	if previousSignature != "" && previousSignature != curveSignature {
 		hadSeed := c.hasLearnedSeedLocked()
-		cleared := len(c.learnedByTemp)
+		cleared := c.learnedMemory.CountForCurve(previousSignature)
 		c.resetRuntimeStateLocked()
 		if cleared > 0 {
-			c.learnedByTemp = make(map[int]learnedState)
+			c.learnedMemory = newLearnedMemoryStore()
 		}
 		if c.logger != nil {
 			c.logger.Info("风扇偏移检测到曲线基线变化",
@@ -1659,11 +1718,10 @@ func (c *Controller) ensureZones(fanCurve []types.FanCurvePoint) {
 		newZones[i].learnedConfidence = 0
 		newZones[i].learnSuccesses = 0
 		newZones[i].learnFailures = 0
-		if learned, ok := c.learnedByTemp[p.Temperature]; ok && learned.curveSignature == curveSignature {
-			newZones[i].learnedOffset = learned.offset
-			newZones[i].learnedConfidence = learned.confidence
-			newZones[i].learnSuccesses = learned.successes
-			newZones[i].learnFailures = learned.failures
+		if p.Temperature < c.config.HighTempBoostThreshold {
+			if learned, ok := c.learnedMemory.Get(curveSignature, p.Temperature); ok {
+				c.applyLearnedStateToZone(&newZones[i], learned)
+			}
 		}
 	}
 
