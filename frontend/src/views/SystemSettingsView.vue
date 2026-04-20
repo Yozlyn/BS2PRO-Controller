@@ -26,6 +26,12 @@
         <div class="h-px bg-slate-50 dark:bg-white/6 mx-6" />
         <SettingItem title="跟随系统主题" desc="启用后界面亮暗外观将自动跟随 Windows 系统主题切换"
                      :active="followSystemTheme" @toggle="handleFollowSystemTheme" />
+      </div>
+
+      <!-- 连接设置 -->
+      <div class="p-1 rounded-[2.5rem] border surface-card">
+        <SettingItem title="断连保持配置" desc="当设备意外断开并重连后，继续沿用当前 APP 设置的参数"
+                     :active="config.ignoreDeviceOnReconnect ?? true" @toggle="handleIgnoreReconnect" />
         <div class="h-px bg-slate-50 dark:bg-white/6 mx-6" />
         <SettingItem title="挡位指示灯" desc="控制硬件设备上的挡位物理指示灯开关"
                      :active="config.gearLight" @toggle="handleGearLight"
@@ -34,12 +40,6 @@
         <SettingItem title="通电自启动" desc="硬件设备上电后自动进入工作状态"
                      :active="config.powerOnStart" @toggle="handlePowerOnStart"
                      :disabled="!isConnected" :loading="loading.powerOnStart" />
-      </div>
-
-      <!-- 连接设置 -->
-      <div class="p-1 rounded-[2.5rem] border surface-card">
-        <SettingItem title="断连保持配置" desc="当设备意外断开并重连后，继续沿用当前 APP 设置的参数"
-                     :active="config.ignoreDeviceOnReconnect ?? true" @toggle="handleIgnoreReconnect" />
         <div class="h-px bg-slate-50 dark:bg-white/6 mx-6" />
         <div class="p-6 flex items-center justify-between">
           <div class="space-y-1">
