@@ -375,12 +375,14 @@ func (c *Controller) Update(currentTemp int, fanCurve []types.FanCurvePoint, min
 
 		c.lastTempChangedAt = now // 重置滞留计时，避免连续触发
 		c.adjustZoneOffset(point, c.config.Step, minRPM, maxRPM)
-		zone.stableCount = 0
-		zone.trendUpCount = 0
-		zone.trendDownCount = 0
-		zone.lastAdjustAt = now
-		stagnationHandled = true
-		if c.logger != nil {
+		if point.Offset != oldOffset {
+			zone.stableCount = 0
+			zone.trendUpCount = 0
+			zone.trendDownCount = 0
+			zone.lastAdjustAt = now
+			stagnationHandled = true
+		}
+		if c.logger != nil && point.Offset != oldOffset {
 			c.logger.Info("风扇偏移高温滞留主动升速",
 				"zone_temp", point.Temperature,
 				"stagnation", c.config.StagnationDuration,

@@ -59,6 +59,10 @@ type CoreApp struct {
 
 	// 自动偏移控制器
 	fanOffsetCtrl *fanoffset.Controller
+	// 风扇命令整形器
+	fanCommandShaper *fanCommandShaper
+	// 运行时风扇曲线（含自动偏移学习结果，不直接落盘）
+	runtimeFanCurve []types.FanCurvePoint
 
 	// 进程联动风扇配置
 	processSwitcher               *procswitch.Switcher
@@ -103,6 +107,7 @@ func NewCoreApp(debugMode bool) *CoreApp {
 	procSwitcher := procswitch.New(configMgr.GetDefaultConfigDir(), customLogger)
 
 	fanOffsetCtrl := fanoffset.New(fanoffset.DefaultConfig(), customLogger)
+	commandShaper := newFanCommandShaper()
 
 	app := &CoreApp{
 		ctx:                context.Background(),
@@ -121,6 +126,7 @@ func NewCoreApp(debugMode bool) *CoreApp {
 		userSetAutoControl: false,
 		debugMode:          debugMode,
 		fanOffsetCtrl:      fanOffsetCtrl,
+		fanCommandShaper:   commandShaper,
 		processSwitcher:    procSwitcher,
 		processSwitchStop:  make(chan struct{}),
 		cleanupChan:        make(chan bool, 1),
@@ -230,7 +236,7 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 		data := a.deviceManager.GetCurrentFanData()
 		return a.dataResponse(data)
 	case ipc.ReqGetConfig:
-		cfg := a.configManager.Get()
+		cfg := a.configWithRuntimeCurve(a.configManager.Get())
 		return a.dataResponse(cfg)
 	case ipc.ReqRegisterClient:
 		return a.successResponse(true)
@@ -263,7 +269,7 @@ func (a *CoreApp) handleIPCRequest(req ipc.Request) (res ipc.Response) {
 		}
 		return a.successResponse(true)
 	case ipc.ReqGetFanCurve:
-		curve := a.configManager.Get().FanCurve
+		curve := a.visibleFanCurve(a.configManager.Get().FanCurve)
 		return a.dataResponse(curve)
 	case ipc.ReqCheckProcessSwitchNow:
 		switched := a.CheckProcessSwitchNow()
@@ -507,8 +513,8 @@ func (a *CoreApp) onFanDataUpdate(fanData *types.FanData) {
 	a.mutex.Unlock()
 
 	// 在锁外进行广播，避免持锁期间阻塞
-	if shouldBroadcastConfig && a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, broadcastCfg)
+	if shouldBroadcastConfig {
+		a.broadcastConfigUpdate(broadcastCfg)
 	}
 	if a.ipcServer != nil {
 		a.ipcServer.BroadcastEvent(ipc.EventFanDataUpdate, fanData)
@@ -696,8 +702,8 @@ func (a *CoreApp) ConnectDevice() bool {
 		}
 		a.mutex.Unlock()
 
-		// 重置自动偏移控制器
-		a.fanOffsetCtrl.Reset()
+		// 重置风扇运行态控制器
+		a.resetFanRuntimeState()
 
 		if deviceInfo != nil && a.ipcServer != nil {
 			a.ipcServer.BroadcastEvent(ipc.EventDeviceConnected, deviceInfo)
@@ -733,8 +739,8 @@ func (a *CoreApp) DisconnectDevice() {
 	a.lastDeviceMode = ""
 	a.mutex.Unlock()
 
-	// 重置自动偏移控制器
-	a.fanOffsetCtrl.Reset()
+	// 重置风扇运行态控制器
+	a.resetFanRuntimeState()
 	if fd := a.deviceManager.GetCurrentFanData(); fd != nil {
 		a.logInfo("DisconnectDevice 前设备状态", "mode", fd.WorkMode, "current_rpm", fd.CurrentRPM, "target_rpm", fd.TargetRPM)
 	} else {
@@ -767,15 +773,25 @@ func (a *CoreApp) GetDeviceStatus() map[string]any {
 func (a *CoreApp) UpdateConfig(cfg types.AppConfig) error {
 	a.mutex.Lock()
 	oldCfg := a.configManager.Get()
+	if len(a.runtimeFanCurve) > 0 && fanCurvesEqual(cfg.FanCurve, a.runtimeFanCurve) {
+		cfg.FanCurve = cloneFanCurvePoints(oldCfg.FanCurve)
+	}
 	shouldStartMonitor := !a.monitoringTemp && a.isConnected && cfg.AutoControl
+	curveChanged := !fanCurvesEqual(oldCfg.FanCurve, cfg.FanCurve)
+	offsetChanged := oldCfg.FanCurveOffsetEnabled != cfg.FanCurveOffsetEnabled
 	cfg.ConfigPath = oldCfg.ConfigPath
 	cfg.HotkeyConflicts = append([]types.HotkeyConflict{}, a.systemHotkeyConflicts...)
 	err := a.configManager.Update(cfg)
 	a.mutex.Unlock()
-	a.setSystemHotkeyConflicts(nil)
-	if a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
+	if curveChanged {
+		a.clearRuntimeFanCurve()
+		a.fanOffsetCtrl.ResetForCurve(cfg.FanCurve, "update_config")
+		a.resetFanCommandShaper()
+	} else if offsetChanged {
+		a.resetFanRuntimeState()
 	}
+	a.setSystemHotkeyConflicts(nil)
+	a.broadcastConfigUpdate(cfg)
 	if shouldStartMonitor {
 		go a.startTemperatureMonitoring()
 	}
@@ -799,9 +815,7 @@ func (a *CoreApp) SetProcessSwitchEnabled(enabled bool) error {
 	if a.notificationManager != nil {
 		a.notificationManager.OnProcessSwitchChanged(enabled)
 	}
-	if a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-	}
+	a.broadcastConfigUpdate(cfg)
 	return nil
 }
 
@@ -814,7 +828,9 @@ func (a *CoreApp) SetFanCurve(curve []types.FanCurvePoint) error {
 	if err != nil {
 		return err
 	}
+	a.clearRuntimeFanCurve()
 	a.fanOffsetCtrl.ResetForCurve(curve, "set_fan_curve")
+	a.resetFanCommandShaper()
 	return nil
 }
 
@@ -822,6 +838,11 @@ func (a *CoreApp) SetFanCurve(curve []types.FanCurvePoint) error {
 func (a *CoreApp) ApplyOffsetToCurve() error {
 	a.mutex.Lock()
 	cfg := a.configManager.Get()
+	if len(a.runtimeFanCurve) > 0 {
+		cfg.FanCurve = cloneFanCurvePoints(a.runtimeFanCurve)
+	} else {
+		cfg.FanCurve = cloneFanCurvePoints(cfg.FanCurve)
+	}
 	const minRPM, maxRPM = 500, 4000
 	for i := range cfg.FanCurve {
 		p := &cfg.FanCurve[i]
@@ -840,10 +861,10 @@ func (a *CoreApp) ApplyOffsetToCurve() error {
 	if err != nil {
 		return err
 	}
+	a.clearRuntimeFanCurve()
 	a.fanOffsetCtrl.ResetForCurve(cfg.FanCurve, "apply_offset_to_curve")
-	if a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-	}
+	a.resetFanCommandShaper()
+	a.broadcastConfigUpdate(cfg)
 	return nil
 }
 
@@ -957,19 +978,19 @@ func (a *CoreApp) applyProcessCurve(curve []types.FanCurvePoint, profilePath str
 	if err != nil {
 		return err
 	}
+	a.resetFanRuntimeState()
 
 	if isConnected && cfg.AutoControl && currentTemp > 0 {
-		targetRPM := temperature.CalculateTargetRPM(currentTemp, cfg.FanCurve)
-		if targetRPM > 0 {
-			if !a.deviceManager.SetFanSpeed(targetRPM) {
-				a.logError("进程联动应用目标转速失败", "target_rpm", targetRPM, "temp", currentTemp, "profile", profilePath)
+		thermalTargetRPM := temperature.CalculateTargetRPM(currentTemp, cfg.FanCurve)
+		plan := a.planFanCommandTarget(time.Now(), thermalTargetRPM, currentTemp, a.deviceManager.GetCurrentFanData())
+		if plan.ShouldSend && plan.CommandTargetRPM > 0 {
+			if !a.deviceManager.SetFanSpeed(plan.CommandTargetRPM) {
+				a.logError("进程联动应用目标转速失败", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "temp", currentTemp, "profile", profilePath)
 			}
 		}
 	}
 
-	if a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-	}
+	a.broadcastConfigUpdate(cfg)
 	return nil
 }
 
@@ -996,9 +1017,8 @@ func (a *CoreApp) restoreBaseFanCurveAfterProcessSwitch() {
 		a.logError("恢复原始风扇曲线失败", "error", err)
 		return
 	}
-	if a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-	}
+	a.resetFanRuntimeState()
+	a.broadcastConfigUpdate(cfg)
 }
 
 func cloneFanCurvePoints(src []types.FanCurvePoint) []types.FanCurvePoint {
@@ -1034,6 +1054,10 @@ func (a *CoreApp) SetAutoControl(enabled bool) error {
 	isConnected := a.isConnected
 	err := a.configManager.Update(cfg)
 	a.mutex.Unlock()
+	if err != nil {
+		return err
+	}
+	a.resetFanRuntimeState()
 
 	// 修复: 在锁外启动 goroutine，避免 startTemperatureMonitoring 锁竞态
 	if shouldStartMonitor {
@@ -1059,13 +1083,11 @@ func (a *CoreApp) SetAutoControl(enabled bool) error {
 		})
 	}
 
-	if a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-	}
+	a.broadcastConfigUpdate(cfg)
 	if a.notificationManager != nil {
 		a.notificationManager.OnAutoControlChanged(enabled)
 	}
-	return err
+	return nil
 }
 
 func (a *CoreApp) applyCurrentGearSetting() {
@@ -1140,9 +1162,7 @@ func (a *CoreApp) SetCustomSpeed(enabled bool, rpm int) error {
 		})
 	}
 
-	if a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-	}
+	a.broadcastConfigUpdate(cfg)
 
 	if isConnected {
 		a.safeGo("restoreCurrentRGB-customSpeed", func() {
@@ -1166,9 +1186,7 @@ func (a *CoreApp) applyDeviceFlag(action string, deviceCall func() bool, updateC
 		logArgs := append(append([]any{"action", action}, args...), "error", err)
 		a.logError("保存设备设置配置失败", logArgs...)
 	}
-	if a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-	}
+	a.broadcastConfigUpdate(cfg)
 	return true
 }
 
@@ -1309,9 +1327,7 @@ func (a *CoreApp) applyRGBMode(params ipc.SetRGBModeParams, notify bool) bool {
 		if err := a.configManager.Update(cfg); err != nil {
 			a.logError("保存 RGB 配置失败", "mode", params.Mode, "error", err)
 		}
-		if a.ipcServer != nil {
-			a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-		}
+		a.broadcastConfigUpdate(cfg)
 		if notify && a.notificationManager != nil {
 			a.notificationManager.OnRGBModeChanged(describeRGBMode(params.Mode))
 		}
@@ -1329,9 +1345,7 @@ func (a *CoreApp) setSystemHotkeyConflicts(conflicts []types.HotkeyConflict) {
 	cfg := a.configManager.Get()
 	cfg.HotkeyConflicts = append([]types.HotkeyConflict{}, a.systemHotkeyConflicts...)
 	a.mutex.Unlock()
-	if a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-	}
+	a.broadcastConfigUpdate(cfg)
 }
 
 func (a *CoreApp) CycleRGBMode() bool {
@@ -1403,9 +1417,7 @@ func (a *CoreApp) SetDebugMode(enabled bool) error {
 	if err != nil {
 		return err
 	}
-	if a.ipcServer != nil {
-		a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
-	}
+	a.broadcastConfigUpdate(cfg)
 	return nil
 }
 
@@ -1606,8 +1618,9 @@ func (a *CoreApp) startTemperatureMonitoring() {
 
 				// 将自动偏移量附加到温度数据中，供 GUI 展示
 				if cfg.FanCurveOffsetEnabled && !processSwitchActive {
-					temp.AutoOffset = temperature.CalculateOffset(temp.MaxTemp, cfg.FanCurve)
-					temp.EngineState = a.fanOffsetCtrl.GetCurrentZoneState(temp.MaxTemp, cfg.FanCurve)
+					displayCurve := a.visibleFanCurve(cfg.FanCurve)
+					temp.AutoOffset = temperature.CalculateOffset(temp.MaxTemp, displayCurve)
+					temp.EngineState = a.fanOffsetCtrl.GetCurrentZoneState(temp.MaxTemp, displayCurve)
 				}
 
 				if a.ipcServer != nil {
@@ -1676,8 +1689,14 @@ func (a *CoreApp) startTemperatureMonitoring() {
 					}
 					avgTemp = avgTemp / len(tempSamples)
 
-					targetRPM := temperature.CalculateTargetRPM(avgTemp, cfg.FanCurve)
+					var effectiveCurve []types.FanCurvePoint
 					var latestFanData *types.FanData
+					if cfg.FanCurveOffsetEnabled && !processSwitchActive {
+						effectiveCurve = make([]types.FanCurvePoint, len(cfg.FanCurve))
+						copy(effectiveCurve, cfg.FanCurve)
+					} else {
+						effectiveCurve = cfg.FanCurve
+					}
 					if cfg.FanCurveOffsetEnabled && !processSwitchActive {
 						// 计算设备最大RPM (根据挡位)
 						deviceMaxRPM := 4000
@@ -1694,52 +1713,58 @@ func (a *CoreApp) startTemperatureMonitoring() {
 								deviceMaxRPM = 4000
 							}
 						}
-						// Deep-copy 防止 Update 原地修改 Offset 时与 configManager 内部切片产生数据竞争
-						fanCurveCopy := make([]types.FanCurvePoint, len(cfg.FanCurve))
-						copy(fanCurveCopy, cfg.FanCurve)
-						changed := a.fanOffsetCtrl.Update(avgTemp, fanCurveCopy, 500, deviceMaxRPM)
+						changed := a.fanOffsetCtrl.Update(avgTemp, effectiveCurve, 500, deviceMaxRPM)
 						if changed {
-							cfg.FanCurve = fanCurveCopy
-							if err := a.configManager.Update(cfg); err != nil {
-								a.logError("智能变频偏移学习结果保存失败", "avg_temp", avgTemp, "curve_points", len(fanCurveCopy), "error", err)
-							}
-							if a.ipcServer != nil {
+							if a.setRuntimeFanCurve(effectiveCurve) && a.ipcServer != nil {
 								go func(c types.AppConfig) {
 									defer func() { _ = recover() }()
-									a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, c)
+									a.broadcastConfigUpdate(c)
 								}(cfg)
 							}
 						}
-						autoOffset := temperature.CalculateOffset(avgTemp, fanCurveCopy)
-						targetRPM = temperature.ApplyOffset(targetRPM, autoOffset)
+					}
+					avgBasedTargetRPM := temperature.CalculateTargetRPM(avgTemp, effectiveCurve)
+					instantTargetRPM := temperature.CalculateTargetRPM(temp.MaxTemp, effectiveCurve)
+					if cfg.FanCurveOffsetEnabled && !processSwitchActive {
+						avgBasedTargetRPM = temperature.ApplyOffset(avgBasedTargetRPM, temperature.CalculateOffset(avgTemp, effectiveCurve))
+						instantTargetRPM = temperature.ApplyOffset(instantTargetRPM, temperature.CalculateOffset(temp.MaxTemp, effectiveCurve))
+					}
+					thermalTargetRPM := avgBasedTargetRPM
+					if instantTargetRPM > thermalTargetRPM {
+						thermalTargetRPM = instantTargetRPM
 					}
 					if latestFanData == nil {
 						latestFanData = a.deviceManager.GetCurrentFanData()
 					}
+					plan := a.planFanCommandTarget(time.Now(), thermalTargetRPM, temp.MaxTemp, latestFanData)
 					if latestFanData != nil {
-						rpmError := targetRPM - int(latestFanData.CurrentRPM)
+						rpmError := plan.CommandTargetRPM - int(latestFanData.CurrentRPM)
 						targetGap := int(latestFanData.TargetRPM) - int(latestFanData.CurrentRPM)
-						a.fanOffsetCtrl.ObserveFanResponse(avgTemp, targetRPM, int(latestFanData.CurrentRPM), int(latestFanData.TargetRPM))
-						a.logDebug("智能变频监控计算结果", "target_rpm", targetRPM, "avg_temp", avgTemp, "curve_points", len(cfg.FanCurve), "current_rpm", latestFanData.CurrentRPM, "device_target_rpm", latestFanData.TargetRPM, "rpm_error", rpmError, "target_gap", targetGap, "mode", latestFanData.WorkMode, "gear", latestFanData.SetGear)
+						a.fanOffsetCtrl.ObserveFanResponse(avgTemp, plan.CommandTargetRPM, int(latestFanData.CurrentRPM), int(latestFanData.TargetRPM))
+						if plan.ShouldSend || plan.StateChanged || plan.ShapeReason != "steady" {
+							a.logDebug("智能变频监控计算结果", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "avg_temp", avgTemp, "raw_temp", temp.MaxTemp, "curve_points", len(cfg.FanCurve), "current_rpm", latestFanData.CurrentRPM, "device_target_rpm", latestFanData.TargetRPM, "rpm_error", rpmError, "target_gap", targetGap, "mode", latestFanData.WorkMode, "gear", latestFanData.SetGear)
+						}
 					} else {
 						a.fanOffsetCtrl.ObserveFanResponse(avgTemp, 0, 0, 0)
-						a.logDebug("智能变频监控计算结果", "target_rpm", targetRPM, "avg_temp", avgTemp, "curve_points", len(cfg.FanCurve), "current_rpm", "unknown")
+						if plan.ShouldSend || plan.StateChanged || plan.ShapeReason != "steady" {
+							a.logDebug("智能变频监控计算结果", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "avg_temp", avgTemp, "raw_temp", temp.MaxTemp, "curve_points", len(cfg.FanCurve), "current_rpm", "unknown")
+						}
 					}
-					if targetRPM > 0 {
+					if plan.ShouldSend && plan.CommandTargetRPM > 0 {
 						if latestFanData != nil && latestFanData.WorkMode == "挡位工作模式" {
 							a.logDebug("智能变频监控：设备进入手动模式，重新进入自动模式")
 							if err := a.deviceManager.EnterAutoMode(); err == nil {
 								time.Sleep(100 * time.Millisecond)
 							} else {
-								a.logError("智能变频监控恢复自动模式失败", "target_rpm", targetRPM, "avg_temp", avgTemp, "error", err)
+								a.logError("智能变频监控恢复自动模式失败", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "avg_temp", avgTemp, "error", err)
 							}
 						}
-						a.logDebug("智能变频监控下发新风扇转速", "target_rpm", targetRPM)
-						if !a.deviceManager.SetFanSpeed(targetRPM) {
+						a.logDebug("智能变频监控下发新风扇转速", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason)
+						if !a.deviceManager.SetFanSpeed(plan.CommandTargetRPM) {
 							if latestFanData != nil {
-								a.logError("智能变频监控下发风扇转速失败", "target_rpm", targetRPM, "avg_temp", avgTemp, "mode", latestFanData.WorkMode, "gear", latestFanData.SetGear)
+								a.logError("智能变频监控下发风扇转速失败", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "avg_temp", avgTemp, "mode", latestFanData.WorkMode, "gear", latestFanData.SetGear)
 							} else {
-								a.logError("智能变频监控下发风扇转速失败", "target_rpm", targetRPM, "avg_temp", avgTemp)
+								a.logError("智能变频监控下发风扇转速失败", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "avg_temp", avgTemp)
 							}
 						}
 					}
