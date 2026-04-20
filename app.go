@@ -747,7 +747,9 @@ func (a *App) stopProcessSwitchMonitor() error {
 	if !a.isMonitorProcessRunning() {
 		return nil
 	}
-	cmd := exec.Command("taskkill", "/F", "/IM", "BS2PRO-Monitor.exe", "/T")
+	// 不带 /T：Monitor 可能刚刚从托盘拉起当前 GUI，
+	// 关闭托盘功能时只应结束 Monitor 自身，不能连带杀掉 GUI 子进程。
+	cmd := exec.Command("taskkill", "/F", "/IM", "BS2PRO-Monitor.exe")
 	platformutil.HideCommandWindow(cmd)
 	return cmd.Run()
 }
