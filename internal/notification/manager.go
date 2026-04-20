@@ -11,7 +11,6 @@ const (
 	TypeDeviceReconnected     = "device_reconnected"
 	TypeConfigImportCompleted = "config_import_completed"
 	TypeConfigExportCompleted = "config_export_completed"
-	TypeServiceReconnected    = "service_reconnected"
 	TypeRGBModeChanged        = "rgb_mode_changed"
 	TypeProcessSwitchChanged  = "process_switch_changed"
 	TypeAutoControlChanged    = "auto_control_changed"
@@ -86,15 +85,6 @@ func (m *Manager) OnConfigExportCompleted(profileCount int) {
 		return
 	}
 	m.emitLocked(newRequest(TypeConfigExportCompleted, "配置导出完成", fmt.Sprintf("配置文件已成功导出，共导出 %d 组配置", profileCount), "config_export_completed", map[string]any{"profileCount": profileCount}))
-}
-
-func (m *Manager) OnServiceReconnected() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.isEnabled() {
-		return
-	}
-	m.emitLocked(newRequest(TypeServiceReconnected, "BS2PRO 后台服务已恢复", "快捷键与控制功能已重新连接", "service_reconnected", nil))
 }
 
 func (m *Manager) OnRGBModeChanged(modeName string) {

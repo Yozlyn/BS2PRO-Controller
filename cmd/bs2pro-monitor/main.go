@@ -39,6 +39,7 @@ var monitorInstance = createSingleInstanceGuard()
 var monitorTrayState = newMonitorTrayState()
 var monitorTrayManager *tray.Manager
 var monitorLogger *logger.CustomLogger
+var monitorNotificationsEnabled atomic.Bool
 var hotkeyEditMode bool
 var lastGUIShowRequest int64
 
@@ -108,12 +109,15 @@ func main() {
 	}
 	configManager := config.NewManager(config.GetInstallDir(), nil)
 	startupCfg := configManager.Load(false)
+	monitorNotificationsEnabled.Store(startupCfg.NotificationsEnabled)
 	syncTrayEnabled(startupCfg.TrayEnabled)
 
 	client := ipc.NewClient(nil)
 	client.SetRole(ipc.RoleMonitorAgent)
 	client.SetEventHandler(handleEvent)
-	serviceState := newServiceStateNotifier()
+	serviceState := newServiceStateNotifier(func() bool {
+		return monitorNotificationsEnabled.Load()
+	})
 
 	for {
 		if err := client.Connect(); err != nil {
@@ -394,15 +398,17 @@ func refreshMonitorTrayState(client *ipc.Client) {
 }
 
 type serviceStateNotifier struct {
-	mu         sync.Mutex
-	lastState  string
-	pending    string
-	timer      *time.Timer
-	lastSentAt time.Time
+	mu            sync.Mutex
+	enabled       func() bool
+	lastState     string
+	pending       string
+	timer         *time.Timer
+	lastSentAt    time.Time
+	seenConnected bool
 }
 
-func newServiceStateNotifier() *serviceStateNotifier {
-	return &serviceStateNotifier{lastState: "connected"}
+func newServiceStateNotifier(enabled func() bool) *serviceStateNotifier {
+	return &serviceStateNotifier{lastState: "connected", enabled: enabled}
 }
 
 func (n *serviceStateNotifier) MarkDisconnected() {
@@ -436,11 +442,20 @@ func (n *serviceStateNotifier) flush(expected string) {
 	}
 	n.pending = ""
 	n.timer = nil
+	if expected == "connected" && !n.seenConnected {
+		n.lastState = expected
+		n.lastSentAt = time.Now()
+		n.seenConnected = true
+		return
+	}
 	if n.lastState == expected && time.Since(n.lastSentAt) < serviceNotifyWindow {
 		return
 	}
 	n.lastState = expected
 	n.lastSentAt = time.Now()
+	if n.enabled != nil && !n.enabled() {
+		return
+	}
 	switch expected {
 	case "disconnected":
 		_ = notification.Send("", "BS2PRO 后台服务已断开", "控制功能暂时不可用，系统正在等待恢复")
@@ -551,6 +566,7 @@ func handleEvent(event ipc.Event) {
 		var cfg types.AppConfig
 		if err := json.Unmarshal(event.Data, &cfg); err == nil {
 			setMonitorDebugMode(cfg.DebugMode)
+			monitorNotificationsEnabled.Store(cfg.NotificationsEnabled)
 			syncTrayEnabled(cfg.TrayEnabled)
 			if cfg.Hotkeys == nil {
 				monitorDebug("config update hotkeys=nil")
