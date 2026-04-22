@@ -571,6 +571,9 @@ func handleGlobalAction(client *ipc.Client, action string) {
 }
 
 func handleEvent(event ipc.Event) {
+	if event.Type == ipc.EventFanDataUpdate || event.Type == ipc.EventTemperatureUpdate {
+		return
+	}
 	monitorDebug("monitor event received", "type", event.Type, "bytes", len(event.Data))
 	if event.Type == ipc.EventConfigUpdate {
 		var cfg types.AppConfig
