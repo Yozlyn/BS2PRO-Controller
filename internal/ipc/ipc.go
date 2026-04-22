@@ -457,6 +457,12 @@ type Client struct {
 	role           string
 }
 
+type serviceEventPayload struct {
+	Timestamp  string `json:"timestamp,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Generation int64  `json:"generation,omitempty"`
+}
+
 // NewClient 创建 IPC 客户端
 func NewClient(logger types.Logger) *Client {
 	return &Client{
@@ -497,10 +503,14 @@ func (c *Client) Connect() error {
 
 	// 触发服务连接事件
 	if c.eventHandler != nil {
+		payload, _ := json.Marshal(serviceEventPayload{
+			Timestamp:  time.Now().Format(time.RFC3339),
+			Generation: gen,
+		})
 		event := Event{
 			IsEvent: true,
 			Type:    EventServiceConnected,
-			Data:    json.RawMessage(`{"timestamp": "` + time.Now().Format(time.RFC3339) + `"}`),
+			Data:    payload,
 		}
 		go c.eventHandler(event)
 	}
@@ -548,10 +558,14 @@ func (c *Client) readLoop(gen int64) {
 
 			// 触发服务断开事件
 			if c.eventHandler != nil {
+				payload, _ := json.Marshal(serviceEventPayload{
+					Reason:     err.Error(),
+					Generation: gen,
+				})
 				event := Event{
 					IsEvent: true,
 					Type:    EventServiceDisconnected,
-					Data:    json.RawMessage(`{"reason": "` + err.Error() + `"}`),
+					Data:    payload,
 				}
 				go c.eventHandler(event)
 			}
@@ -724,6 +738,10 @@ func (c *Client) ConnectionGeneration() int64 {
 	if !c.IsConnected() {
 		return 0
 	}
+	return atomic.LoadInt64(&c.connGeneration)
+}
+
+func (c *Client) LatestConnectionGeneration() int64 {
 	return atomic.LoadInt64(&c.connGeneration)
 }
 

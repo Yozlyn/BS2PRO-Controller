@@ -493,7 +493,8 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 		runtime.EventsEmit(a.ctx, "device-error", errMsg)
 
 	case ipc.EventServiceConnected:
-		logInfo("核心服务连接事件 - UI 刷新")
+		generation := parseServiceEventGeneration(event.Data)
+		logInfo("核心服务连接事件 - UI 刷新", "generation", generation)
 		a.registeredGUIRoleGeneration.Store(0)
 		a.scheduleRegisterGUIClientRole("service-connected")
 		// 服务重连后延迟刷新
@@ -537,7 +538,13 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 		}()
 
 	case ipc.EventServiceDisconnected:
-		logWarn("核心服务断开事件")
+		generation := parseServiceEventGeneration(event.Data)
+		latestGeneration := a.ipcClient.LatestConnectionGeneration()
+		if generation > 0 && latestGeneration > 0 && generation != latestGeneration {
+			logDebug("忽略过期核心服务断开事件", "generation", generation, "latest_generation", latestGeneration)
+			return
+		}
+		logWarn("核心服务断开事件", "generation", generation, "latest_generation", latestGeneration)
 		a.mutex.Lock()
 		a.isConnected = false
 		a.coreRunning = false
@@ -567,6 +574,16 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 			runtime.EventsEmit(a.ctx, ipc.EventHotkeyAction, params.Action)
 		}
 	}
+}
+
+func parseServiceEventGeneration(data []byte) int64 {
+	var payload struct {
+		Generation int64 `json:"generation"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return 0
+	}
+	return payload.Generation
 }
 
 func (a *App) ToggleWindowVisibility() {
