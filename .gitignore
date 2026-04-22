@@ -4,7 +4,5 @@ frontend/out
 frontend/tsconfig.tsbuildinfo
 __pycache__/
 *.exe
-bridge/TempBridge/obj
-bridge/TempBridge/bin
 *.syso
 result

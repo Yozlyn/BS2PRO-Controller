@@ -811,6 +811,12 @@ func (a *CoreApp) SetProcessSwitchEnabled(enabled bool) error {
 		a.safeGo("processSwitchImmediateCheck", func() {
 			a.runProcessSwitchCheck(a.configManager.Get())
 		})
+	} else {
+		a.restoreBaseFanCurveAfterProcessSwitch()
+		a.mutex.Lock()
+		a.activeProcessProfilePath = ""
+		a.lastReportedForegroundProcess = ""
+		a.mutex.Unlock()
 	}
 	if a.notificationManager != nil {
 		a.notificationManager.OnProcessSwitchChanged(enabled)
@@ -896,6 +902,9 @@ func (a *CoreApp) startProcessSwitchMonitoring() {
 }
 
 func (a *CoreApp) handleForegroundProcessReport(processName string) {
+	if !a.configManager.Get().ProcessSwitchEnabled {
+		return
+	}
 	a.mutex.Lock()
 	a.lastReportedForegroundProcess = strings.ToLower(strings.TrimSpace(processName))
 	a.mutex.Unlock()
