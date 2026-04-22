@@ -448,7 +448,9 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 		return
 	}
 
-	logDebug("收到核心事件", "event_type", event.Type)
+	if event.Type != ipc.EventFanDataUpdate && event.Type != ipc.EventTemperatureUpdate {
+		logDebug("收到核心事件", "event_type", event.Type)
+	}
 
 	switch event.Type {
 	case ipc.EventFanDataUpdate:

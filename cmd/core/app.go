@@ -1845,7 +1845,6 @@ func (a *CoreApp) checkDeviceHealth(currentInterval *time.Duration, baseInterval
 		} else {
 			// 设备在线，保持正常的心跳频率
 			*currentInterval = baseInterval
-			a.logDebug("设备Watchdog: 设备连接正常")
 		}
 	}
 }

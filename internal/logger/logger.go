@@ -474,7 +474,10 @@ func normalizeFormat(format Format) Format {
 }
 
 func runtimeLogFilename(prefix string, date string, format Format) string {
-	return fmt.Sprintf("%s.%s.%s.log", prefix, date, format)
+	if normalizeFormat(format) == FormatJSON {
+		return fmt.Sprintf("%s.%s.json.log", prefix, date)
+	}
+	return fmt.Sprintf("%s.%s.log", prefix, date)
 }
 
 func detectProjectSourcePrefix() string {
