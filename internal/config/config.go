@@ -169,6 +169,11 @@ func (m *Manager) GetDefaultConfigDir() string {
 	return filepath.Join(programData, "BS2PRO-Controller")
 }
 
+// GetStateDir 获取运行时状态目录
+func (m *Manager) GetStateDir() string {
+	return filepath.Join(m.GetDefaultConfigDir(), "state")
+}
+
 // Get 获取当前配置
 func (m *Manager) Get() types.AppConfig {
 	return m.config

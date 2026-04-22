@@ -22,6 +22,7 @@ type Controller struct {
 
 	zones              []zoneState
 	learnedMemory      *learnedMemoryStore
+	persistence        *learnedMemoryPersistence
 	lastCurveTemps     []int
 	lastCurveSignature string
 	lastTemp           int
@@ -270,6 +271,49 @@ func New(cfg Config, logger types.Logger) *Controller {
 		lastTempChangedAt: time.Now(),
 		logger:            logger,
 	}
+}
+
+// EnablePersistence 启用长期记忆 journal/snapshot 持久化。
+func (c *Controller) EnablePersistence(baseDir string) error {
+	persistence, err := newLearnedMemoryPersistence(baseDir, c.logger)
+	if err != nil {
+		return err
+	}
+	store, loadErr := persistence.Load()
+	if loadErr != nil {
+		if c.logger != nil {
+			c.logger.Warn("风扇偏移长期记忆加载失败，已回落为空状态", "error", loadErr)
+		}
+		store = newLearnedMemoryStore()
+	}
+
+	c.mu.Lock()
+	c.persistence = persistence
+	if store != nil {
+		c.learnedMemory = store
+	}
+	loaded := 0
+	if c.learnedMemory != nil {
+		loaded = c.learnedMemory.Len()
+	}
+	c.mu.Unlock()
+
+	if loaded > 0 && c.logger != nil {
+		c.logger.Info("风扇偏移长期记忆加载完成", "entries", loaded, "path", baseDir)
+	}
+	return nil
+}
+
+// FlushPersistence 将长期记忆主动压成 snapshot。
+func (c *Controller) FlushPersistence() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.flushPersistenceLocked("manual")
+}
+
+// Close 关闭控制器前刷新持久化状态。
+func (c *Controller) Close() error {
+	return c.FlushPersistence()
 }
 
 // ObserveFanResponse 记录一次目标转速与实际转速反馈，供后续偏置微调使用。
@@ -814,9 +858,11 @@ func (c *Controller) handleHighTempProtectionSettle(zone *zoneState, point *type
 }
 
 func (c *Controller) clearLearnState(zone *zoneState, temp int) {
+	curveSignature := c.storedCurveSignatureLocked()
 	if c.learnedMemory != nil {
-		c.learnedMemory.Delete(c.lastCurveSignature, temp)
+		c.learnedMemory.Delete(curveSignature, temp)
 	}
+	c.persistLearnedDeleteLocked(curveSignature, temp)
 	zone.learnedOffset = 0
 	zone.learnedConfidence = 0
 	zone.learnSuccesses = 0
@@ -1373,6 +1419,7 @@ func (c *Controller) noteLearnSuccess(temp int, zone *zoneState, offset int) {
 	state.confidence = clampFloat(state.confidence+c.config.LearnConfidenceGain, 0, 1)
 	state.successes++
 	c.learnedMemory.Set(key.curveSignature, key.zoneTemp, state)
+	c.persistLearnedStateLocked(key.curveSignature, key.zoneTemp, state)
 	c.applyLearnedStateToZone(zone, state)
 	if c.logger != nil {
 		c.logger.Debug("风扇偏移长期记忆学习成功",
@@ -1400,6 +1447,7 @@ func (c *Controller) noteLearnFailure(temp int, zone *zoneState) {
 	state.confidence = clampFloat(state.confidence-c.config.LearnConfidenceDecay, 0, 1)
 	state.failures++
 	c.learnedMemory.Set(key.curveSignature, key.zoneTemp, state)
+	c.persistLearnedStateLocked(key.curveSignature, key.zoneTemp, state)
 	c.applyLearnedStateToZone(zone, state)
 	if c.logger != nil {
 		c.logger.Debug("风扇偏移长期记忆学习失败",
@@ -1616,10 +1664,11 @@ func (c *Controller) resetForCurveLocked(fanCurve []types.FanCurvePoint, reason 
 	curveSignature := c.curveSignature(fanCurve)
 	previousSignature := c.storedCurveSignatureLocked()
 	hadSeed := c.hasLearnedSeedLocked()
-	cleared := 0
-	if previousSignature != "" && previousSignature != curveSignature {
-		cleared = c.learnedMemory.Len()
-		c.learnedMemory = newLearnedMemoryStore()
+	retained := 0
+	available := 0
+	if previousSignature != "" && previousSignature != curveSignature && c.learnedMemory != nil {
+		retained = c.learnedMemory.CountForCurve(previousSignature)
+		available = c.learnedMemory.CountForCurve(curveSignature)
 	}
 	c.resetRuntimeStateLocked()
 	if previousSignature != "" && previousSignature != curveSignature && c.logger != nil {
@@ -1628,7 +1677,8 @@ func (c *Controller) resetForCurveLocked(fanCurve []types.FanCurvePoint, reason 
 			"has_seed", hadSeed,
 			"previous_curve_signature", previousSignature,
 			"curve_signature", curveSignature,
-			"cleared_memory", cleared)
+			"retained_memory", retained,
+			"available_memory", available)
 	}
 }
 
@@ -1670,18 +1720,17 @@ func (c *Controller) ensureZones(fanCurve []types.FanCurvePoint) {
 	previousSignature := c.storedCurveSignatureLocked()
 	if previousSignature != "" && previousSignature != curveSignature {
 		hadSeed := c.hasLearnedSeedLocked()
-		cleared := c.learnedMemory.CountForCurve(previousSignature)
+		retained := c.learnedMemory.CountForCurve(previousSignature)
+		available := c.learnedMemory.CountForCurve(curveSignature)
 		c.resetRuntimeStateLocked()
-		if cleared > 0 {
-			c.learnedMemory = newLearnedMemoryStore()
-		}
 		if c.logger != nil {
 			c.logger.Info("风扇偏移检测到曲线基线变化",
 				"reason", "curve_signature_changed",
 				"has_seed", hadSeed,
 				"previous_curve_signature", previousSignature,
 				"curve_signature", curveSignature,
-				"cleared_memory", cleared)
+				"retained_memory", retained,
+				"available_memory", available)
 		}
 	}
 	if len(c.zones) == n {
@@ -1861,4 +1910,52 @@ func clampFloat(v, low, high float64) float64 {
 		return high
 	}
 	return v
+}
+
+func (c *Controller) persistLearnedStateLocked(curveSignature string, zoneTemp int, state learnedState) {
+	if c.persistence == nil || curveSignature == "" {
+		return
+	}
+	shouldSnapshot, err := c.persistence.RecordSet(curveSignature, zoneTemp, state)
+	if err != nil {
+		if c.logger != nil {
+			c.logger.Error("风扇偏移长期记忆写入 journal 失败", "curve_signature", curveSignature, "zone_temp", zoneTemp, "error", err)
+		}
+		return
+	}
+	if shouldSnapshot {
+		_ = c.flushPersistenceLocked("journal_threshold")
+	}
+}
+
+func (c *Controller) persistLearnedDeleteLocked(curveSignature string, zoneTemp int) {
+	if c.persistence == nil || curveSignature == "" {
+		return
+	}
+	shouldSnapshot, err := c.persistence.RecordDelete(curveSignature, zoneTemp)
+	if err != nil {
+		if c.logger != nil {
+			c.logger.Error("风扇偏移长期记忆删除 journal 失败", "curve_signature", curveSignature, "zone_temp", zoneTemp, "error", err)
+		}
+		return
+	}
+	if shouldSnapshot {
+		_ = c.flushPersistenceLocked("journal_threshold")
+	}
+}
+
+func (c *Controller) flushPersistenceLocked(reason string) error {
+	if c.persistence == nil || c.learnedMemory == nil {
+		return nil
+	}
+	if err := c.persistence.Snapshot(c.learnedMemory); err != nil {
+		if c.logger != nil {
+			c.logger.Error("风扇偏移长期记忆写入 snapshot 失败", "reason", reason, "error", err)
+		}
+		return err
+	}
+	if c.logger != nil && reason != "manual" {
+		c.logger.Debug("风扇偏移长期记忆完成 snapshot", "reason", reason, "entries", c.learnedMemory.Len())
+	}
+	return nil
 }

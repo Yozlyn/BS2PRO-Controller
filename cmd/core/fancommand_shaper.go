@@ -18,6 +18,16 @@ const (
 	fanCommandDropHotStepRPM  = 100
 	fanCommandCoolingHold     = 12 * time.Second
 	fanCommandResendCooldown  = 1500 * time.Millisecond
+	fanCommandModeRecoveryGap = 4 * time.Second
+	fanCommandHotHoldTemp     = 80
+)
+
+type fanCommandDirection string
+
+const (
+	fanCommandDirectionSteady  fanCommandDirection = "steady"
+	fanCommandDirectionHeating fanCommandDirection = "heating"
+	fanCommandDirectionCooling fanCommandDirection = "cooling"
 )
 
 type fanCommandPlan struct {
@@ -28,14 +38,24 @@ type fanCommandPlan struct {
 	StateChanged     bool
 }
 
+type fanCommandShapeState struct {
+	coolingHoldUntil   time.Time
+	coolingDecayActive bool
+	lastAboveThreshold time.Time
+}
+
 type fanCommandShaper struct {
 	mu sync.Mutex
 
 	lastCommandRPM       int
+	lastCommandTargetRPM int
 	lastThermalTargetRPM int
 	lastTemp             int
 	lastSentAt           time.Time
 	lastShapeReason      string
+	lastModeRecoveryAt   time.Time
+	lastThermalDirection fanCommandDirection
+	lastAboveThresholdAt time.Time
 
 	coolingHoldUntil   time.Time
 	coolingDecayActive bool
@@ -76,10 +96,14 @@ func (s *fanCommandShaper) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastCommandRPM = 0
+	s.lastCommandTargetRPM = 0
 	s.lastThermalTargetRPM = 0
 	s.lastTemp = -1
 	s.lastSentAt = time.Time{}
 	s.lastShapeReason = ""
+	s.lastModeRecoveryAt = time.Time{}
+	s.lastThermalDirection = fanCommandDirectionSteady
+	s.lastAboveThresholdAt = time.Time{}
 	s.coolingHoldUntil = time.Time{}
 	s.coolingDecayActive = false
 }
@@ -98,67 +122,22 @@ func (s *fanCommandShaper) Plan(now time.Time, thermalTargetRPM, currentTemp int
 		referenceRPM = plan.ThermalTargetRPM
 	}
 
-	thermalRising := s.lastThermalTargetRPM > 0 && plan.ThermalTargetRPM > s.lastThermalTargetRPM
-	tempRising := s.lastTemp >= 0 && currentTemp > s.lastTemp
-	if plan.ThermalTargetRPM >= referenceRPM || thermalRising || tempRising {
-		s.coolingHoldUntil = time.Time{}
-		s.coolingDecayActive = false
+	direction := s.thermalDirectionLocked(plan.ThermalTargetRPM, referenceRPM)
+	shapeState := fanCommandShapeState{
+		coolingHoldUntil:   s.coolingHoldUntil,
+		coolingDecayActive: s.coolingDecayActive,
+		lastAboveThreshold: s.lastAboveThresholdAt,
 	}
-
-	plan.CommandTargetRPM = plan.ThermalTargetRPM
-	plan.ShapeReason = "steady"
-
-	switch {
-	case plan.ThermalTargetRPM > referenceRPM:
-		step := fanCommandRiseStepRPM
-		gap := plan.ThermalTargetRPM - referenceRPM
-		switch {
-		case currentTemp >= 90 || gap >= 1800:
-			step = fanCommandCriticalStepRPM
-		case currentTemp >= 85 || gap >= 1200:
-			step = fanCommandBoostStepRPM
-		}
-		plan.CommandTargetRPM = min(plan.ThermalTargetRPM, referenceRPM+step)
-		if plan.CommandTargetRPM < plan.ThermalTargetRPM {
-			plan.ShapeReason = "ramp_up"
-		} else {
-			plan.ShapeReason = "rise_follow"
-		}
-	case plan.ThermalTargetRPM < referenceRPM:
-		if !s.coolingDecayActive {
-			if s.coolingHoldUntil.IsZero() {
-				s.coolingHoldUntil = now.Add(fanCommandCoolingHold)
-			}
-			if now.Before(s.coolingHoldUntil) {
-				plan.CommandTargetRPM = referenceRPM
-				plan.ShapeReason = "cooling_hold"
-				break
-			}
-			s.coolingHoldUntil = time.Time{}
-			s.coolingDecayActive = true
-		}
-
-		dropStep := fanCommandDropStepRPM
-		if currentTemp >= 80 {
-			dropStep = fanCommandDropHotStepRPM
-		}
-		plan.CommandTargetRPM = max(plan.ThermalTargetRPM, referenceRPM-dropStep)
-		if plan.CommandTargetRPM > plan.ThermalTargetRPM {
-			plan.ShapeReason = "ramp_down"
-		} else {
-			plan.ShapeReason = "cool_follow"
-			s.coolingDecayActive = false
-		}
-	default:
-		plan.CommandTargetRPM = referenceRPM
-		plan.ShapeReason = "steady"
-		s.coolingHoldUntil = time.Time{}
-		s.coolingDecayActive = false
-	}
+	plan.CommandTargetRPM, plan.ShapeReason, shapeState = shapeCommandRPM(now, referenceRPM, plan.ThermalTargetRPM, currentTemp, direction, shapeState)
+	s.coolingHoldUntil = shapeState.coolingHoldUntil
+	s.coolingDecayActive = shapeState.coolingDecayActive
+	s.lastAboveThresholdAt = shapeState.lastAboveThreshold
 
 	plan.CommandTargetRPM = normalizeFanCommandRPM(plan.CommandTargetRPM)
-	plan.StateChanged = plan.ShapeReason != s.lastShapeReason
+	plan.StateChanged = plan.ShapeReason != s.lastShapeReason || direction != s.lastThermalDirection || plan.CommandTargetRPM != s.lastCommandTargetRPM
 	s.lastShapeReason = plan.ShapeReason
+	s.lastThermalDirection = direction
+	s.lastCommandTargetRPM = plan.CommandTargetRPM
 	plan.ShouldSend = s.shouldSendLocked(now, plan.CommandTargetRPM, latestFanData)
 	if plan.ShouldSend {
 		s.lastCommandRPM = plan.CommandTargetRPM
@@ -199,6 +178,90 @@ func (s *fanCommandShaper) shouldSendLocked(now time.Time, commandTargetRPM int,
 		return false
 	}
 	return true
+}
+
+func (s *fanCommandShaper) AllowModeRecovery(now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.lastModeRecoveryAt.IsZero() && now.Sub(s.lastModeRecoveryAt) < fanCommandModeRecoveryGap {
+		return false
+	}
+	s.lastModeRecoveryAt = now
+	return true
+}
+
+func (s *fanCommandShaper) thermalDirectionLocked(thermalTargetRPM, referenceRPM int) fanCommandDirection {
+	switch {
+	case thermalTargetRPM > referenceRPM:
+		return fanCommandDirectionHeating
+	case thermalTargetRPM < referenceRPM:
+		return fanCommandDirectionCooling
+	case s.lastThermalTargetRPM > 0 && thermalTargetRPM > s.lastThermalTargetRPM:
+		return fanCommandDirectionHeating
+	case s.lastThermalTargetRPM > 0 && thermalTargetRPM < s.lastThermalTargetRPM:
+		return fanCommandDirectionCooling
+	default:
+		return fanCommandDirectionSteady
+	}
+}
+
+func shapeCommandRPM(now time.Time, referenceRPM, thermalTargetRPM, currentTemp int, direction fanCommandDirection, state fanCommandShapeState) (int, string, fanCommandShapeState) {
+	if currentTemp >= fanCommandHotHoldTemp {
+		state.lastAboveThreshold = now
+	}
+
+	switch direction {
+	case fanCommandDirectionHeating:
+		state.coolingHoldUntil = time.Time{}
+		state.coolingDecayActive = false
+		step := fanCommandRiseStepRPM
+		gap := thermalTargetRPM - referenceRPM
+		switch {
+		case currentTemp >= 90 || gap >= 1800:
+			step = fanCommandCriticalStepRPM
+		case currentTemp >= 85 || gap >= 1200:
+			step = fanCommandBoostStepRPM
+		}
+		commandRPM := min(thermalTargetRPM, referenceRPM+step)
+		if commandRPM < thermalTargetRPM {
+			return commandRPM, "ramp_up", state
+		}
+		return commandRPM, "rise_follow", state
+	case fanCommandDirectionCooling:
+		if !state.coolingDecayActive {
+			holdUntil := state.coolingHoldUntil
+			if holdUntil.IsZero() {
+				holdUntil = now.Add(fanCommandCoolingHold)
+			}
+			if !state.lastAboveThreshold.IsZero() {
+				thresholdHoldUntil := state.lastAboveThreshold.Add(fanCommandCoolingHold)
+				if thresholdHoldUntil.After(holdUntil) {
+					holdUntil = thresholdHoldUntil
+				}
+			}
+			state.coolingHoldUntil = holdUntil
+			if now.Before(state.coolingHoldUntil) {
+				return referenceRPM, "cooling_hold", state
+			}
+			state.coolingHoldUntil = time.Time{}
+			state.coolingDecayActive = true
+		}
+
+		dropStep := fanCommandDropStepRPM
+		if currentTemp >= fanCommandHotHoldTemp {
+			dropStep = fanCommandDropHotStepRPM
+		}
+		commandRPM := max(thermalTargetRPM, referenceRPM-dropStep)
+		if commandRPM > thermalTargetRPM {
+			return commandRPM, "ramp_down", state
+		}
+		state.coolingDecayActive = false
+		return commandRPM, "cool_follow", state
+	default:
+		state.coolingHoldUntil = time.Time{}
+		state.coolingDecayActive = false
+		return referenceRPM, "steady", state
+	}
 }
 
 func normalizeFanCommandRPM(rpm int) int {

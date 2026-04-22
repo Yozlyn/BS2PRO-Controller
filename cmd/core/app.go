@@ -107,6 +107,9 @@ func NewCoreApp(debugMode bool) *CoreApp {
 	procSwitcher := procswitch.New(configMgr.GetDefaultConfigDir(), customLogger)
 
 	fanOffsetCtrl := fanoffset.New(fanoffset.DefaultConfig(), customLogger)
+	if err := fanOffsetCtrl.EnablePersistence(filepath.Join(configMgr.GetStateDir(), "fanoffset")); err != nil {
+		customLogger.Warn("初始化风扇长期记忆持久化失败", "error", err)
+	}
 	commandShaper := newFanCommandShaper()
 
 	app := &CoreApp{
@@ -188,6 +191,11 @@ func (a *CoreApp) Stop() {
 	a.logInfo("Stop路径: cleanup -> DisconnectDevice -> CloseIPC")
 	close(a.processSwitchStop)
 	a.processSwitchWG.Wait()
+	if a.fanOffsetCtrl != nil {
+		if err := a.fanOffsetCtrl.Close(); err != nil {
+			a.logError("停止前刷新风扇长期记忆失败", "error", err)
+		}
+	}
 	a.cleanup()
 	a.DisconnectDevice()
 	if a.asusClient != nil {
@@ -1745,35 +1753,46 @@ func (a *CoreApp) startTemperatureMonitoring() {
 					if latestFanData == nil {
 						latestFanData = a.deviceManager.GetCurrentFanData()
 					}
-					plan := a.planFanCommandTarget(time.Now(), thermalTargetRPM, temp.MaxTemp, latestFanData)
+					now := time.Now()
+					plan := a.planFanCommandTarget(now, thermalTargetRPM, temp.MaxTemp, latestFanData)
 					if latestFanData != nil {
 						rpmError := plan.CommandTargetRPM - int(latestFanData.CurrentRPM)
 						targetGap := int(latestFanData.TargetRPM) - int(latestFanData.CurrentRPM)
 						a.fanOffsetCtrl.ObserveFanResponse(avgTemp, plan.CommandTargetRPM, int(latestFanData.CurrentRPM), int(latestFanData.TargetRPM))
-						if plan.ShouldSend || plan.StateChanged || plan.ShapeReason != "steady" {
+						if plan.ShouldSend || plan.StateChanged {
 							a.logDebug("智能变频监控计算结果", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "avg_temp", avgTemp, "raw_temp", temp.MaxTemp, "curve_points", len(cfg.FanCurve), "current_rpm", latestFanData.CurrentRPM, "device_target_rpm", latestFanData.TargetRPM, "rpm_error", rpmError, "target_gap", targetGap, "mode", latestFanData.WorkMode, "gear", latestFanData.SetGear)
 						}
 					} else {
 						a.fanOffsetCtrl.ObserveFanResponse(avgTemp, 0, 0, 0)
-						if plan.ShouldSend || plan.StateChanged || plan.ShapeReason != "steady" {
+						if plan.ShouldSend || plan.StateChanged {
 							a.logDebug("智能变频监控计算结果", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "avg_temp", avgTemp, "raw_temp", temp.MaxTemp, "curve_points", len(cfg.FanCurve), "current_rpm", "unknown")
 						}
 					}
 					if plan.ShouldSend && plan.CommandTargetRPM > 0 {
+						blockedByModeRecovery := false
 						if latestFanData != nil && latestFanData.WorkMode == "挡位工作模式" {
-							a.logDebug("智能变频监控：设备进入手动模式，重新进入自动模式")
-							if err := a.deviceManager.EnterAutoMode(); err == nil {
-								time.Sleep(100 * time.Millisecond)
+							if a.fanCommandShaper != nil && !a.fanCommandShaper.AllowModeRecovery(now) {
+								blockedByModeRecovery = true
+								if plan.StateChanged {
+									a.logDebug("智能变频监控等待自动模式恢复节流", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "avg_temp", avgTemp)
+								}
 							} else {
-								a.logError("智能变频监控恢复自动模式失败", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "avg_temp", avgTemp, "error", err)
+								a.logDebug("智能变频监控：设备进入手动模式，重新进入自动模式")
+								if err := a.deviceManager.EnterAutoMode(); err == nil {
+									time.Sleep(100 * time.Millisecond)
+								} else {
+									a.logError("智能变频监控恢复自动模式失败", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "avg_temp", avgTemp, "error", err)
+								}
 							}
 						}
-						a.logDebug("智能变频监控下发新风扇转速", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason)
-						if !a.deviceManager.SetFanSpeed(plan.CommandTargetRPM) {
-							if latestFanData != nil {
-								a.logError("智能变频监控下发风扇转速失败", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "avg_temp", avgTemp, "mode", latestFanData.WorkMode, "gear", latestFanData.SetGear)
-							} else {
-								a.logError("智能变频监控下发风扇转速失败", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "avg_temp", avgTemp)
+						if !blockedByModeRecovery {
+							a.logDebug("智能变频监控下发新风扇转速", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason)
+							if !a.deviceManager.SetFanSpeed(plan.CommandTargetRPM) {
+								if latestFanData != nil {
+									a.logError("智能变频监控下发风扇转速失败", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "avg_temp", avgTemp, "mode", latestFanData.WorkMode, "gear", latestFanData.SetGear)
+								} else {
+									a.logError("智能变频监控下发风扇转速失败", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "avg_temp", avgTemp)
+								}
 							}
 						}
 					}
