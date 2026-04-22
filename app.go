@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -832,6 +833,11 @@ type fanCurveProfilesBundle struct {
 	AppSettings fanCurveProfilesAppSettings `json:"appSettings"`
 }
 
+const (
+	fanOffsetSnapshotBundlePath = "state/fanoffset/learned-memory.snapshot.json"
+	fanOffsetJournalBundlePath  = "state/fanoffset/learned-memory.journal"
+)
+
 type fanCurveProfileFile struct {
 	Name     string          `json:"name"`
 	FanCurve []FanCurvePoint `json:"fanCurve"`
@@ -1009,6 +1015,14 @@ func (a *App) ExportFanCurveProfilesZip() error {
 		return err
 	}
 	if _, err := w.Write(data); err != nil {
+		closeWithLog("风扇配置导出压缩流", zw)
+		return err
+	}
+	if err := writeOptionalZipFile(zw, fanOffsetSnapshotBundlePath, filepath.Join(getFanOffsetStateDir(), filepath.Base(fanOffsetSnapshotBundlePath))); err != nil {
+		closeWithLog("风扇配置导出压缩流", zw)
+		return err
+	}
+	if err := writeOptionalZipFile(zw, fanOffsetJournalBundlePath, filepath.Join(getFanOffsetStateDir(), filepath.Base(fanOffsetJournalBundlePath))); err != nil {
 		closeWithLog("风扇配置导出压缩流", zw)
 		return err
 	}
@@ -1272,6 +1286,26 @@ func validateFanProfilesBundle(bundle *fanCurveProfilesBundle) error {
 		}
 	}
 	return nil
+}
+
+func getFanOffsetStateDir() string {
+	return filepath.Join(filepath.Dir(config.GetLogDir()), "state", "fanoffset")
+}
+
+func writeOptionalZipFile(zw *zip.Writer, entryName, sourcePath string) error {
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	w, err := zw.Create(entryName)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(data)
+	return err
 }
 
 func (a *App) CheckProcessSwitchNow() bool {
