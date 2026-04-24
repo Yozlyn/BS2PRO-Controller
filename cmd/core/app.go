@@ -836,14 +836,17 @@ func (a *CoreApp) SetProcessSwitchEnabled(enabled bool) error {
 func (a *CoreApp) SetFanCurve(curve []types.FanCurvePoint) error {
 	a.mutex.Lock()
 	cfg := a.configManager.Get()
-	cfg.FanCurve = curve
+	cfg.FanCurve = cloneFanCurvePoints(curve)
+	for i := range cfg.FanCurve {
+		cfg.FanCurve[i].Offset = 0
+	}
 	err := a.configManager.Update(cfg)
 	a.mutex.Unlock()
 	if err != nil {
 		return err
 	}
 	a.clearRuntimeFanCurve()
-	a.fanOffsetCtrl.ResetForCurve(curve, "set_fan_curve")
+	a.fanOffsetCtrl.ResetForCurve(cfg.FanCurve, "set_fan_curve")
 	a.resetFanCommandShaper()
 	return nil
 }

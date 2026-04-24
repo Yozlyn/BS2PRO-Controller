@@ -876,6 +876,38 @@ func (c *Controller) applyLearnedStateToZone(zone *zoneState, state learnedState
 	zone.learnFailures = state.failures
 }
 
+func (c *Controller) buildMigratedLearnedState(curveSignature string, point types.FanCurvePoint) (learnedState, learnedMemoryCandidate, bool) {
+	if c.learnedMemory == nil || point.Temperature >= c.config.HighTempBoostThreshold {
+		return learnedState{}, learnedMemoryCandidate{}, false
+	}
+	minConfidence := 0.35
+	candidate, ok := c.learnedMemory.BestAlternativeForZone(curveSignature, point.Temperature, point.RPM, minConfidence)
+	if !ok {
+		return learnedState{}, learnedMemoryCandidate{}, false
+	}
+	maxRPMGap := max(c.config.Step*8, 800)
+	if candidate.rpmGap > maxRPMGap {
+		return learnedState{}, learnedMemoryCandidate{}, false
+	}
+	similarity := 1 - float64(candidate.rpmGap)/float64(maxRPMGap)
+	if similarity <= 0 {
+		return learnedState{}, learnedMemoryCandidate{}, false
+	}
+	migratedOffset := int(math.Round(candidate.state.offset*similarity/float64(max(1, c.config.Step)))) * c.config.Step
+	if migratedOffset == 0 {
+		return learnedState{}, learnedMemoryCandidate{}, false
+	}
+	migratedConfidence := clampFloat(0.35+(candidate.state.confidence-0.35)*0.35*similarity, 0.35, 0.45)
+	state := learnedState{
+		offset:     float64(migratedOffset),
+		confidence: migratedConfidence,
+		successes:  0,
+		failures:   0,
+		hasSeed:    false,
+	}
+	return state, candidate, true
+}
+
 func (c *Controller) handleVerifying(zoneIdx int, fanCurve []types.FanCurvePoint, currentTemp, trend int, now time.Time, minRPM, maxRPM int) {
 	zone := &c.zones[zoneIdx]
 	point := &fanCurve[zoneIdx]
@@ -1770,6 +1802,20 @@ func (c *Controller) ensureZones(fanCurve []types.FanCurvePoint) {
 		if p.Temperature < c.config.HighTempBoostThreshold {
 			if learned, ok := c.learnedMemory.Get(curveSignature, p.Temperature); ok {
 				c.applyLearnedStateToZone(&newZones[i], learned)
+			} else if migrated, source, ok := c.buildMigratedLearnedState(curveSignature, p); ok {
+				c.applyLearnedStateToZone(&newZones[i], migrated)
+				if c.logger != nil {
+					c.logger.Debug("风扇偏移短期迁移命中",
+						"zone_temp", p.Temperature,
+						"curve_signature", curveSignature,
+						"source_curve_signature", source.curveSignature,
+						"target_rpm", p.RPM,
+						"source_rpm", source.rpm,
+						"rpm_gap", source.rpmGap,
+						"source_offset", source.state.offset,
+						"migrated_offset", migrated.offset,
+						"migrated_confidence", migrated.confidence)
+				}
 			}
 		}
 	}

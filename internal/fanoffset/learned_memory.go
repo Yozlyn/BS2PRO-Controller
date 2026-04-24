@@ -1,5 +1,17 @@
 package fanoffset
 
+import (
+	"strconv"
+	"strings"
+)
+
+type learnedMemoryCandidate struct {
+	curveSignature string
+	rpm            int
+	state          learnedState
+	rpmGap         int
+}
+
 type learnedMemoryStore struct {
 	byKey map[learnedMemoryKey]learnedState
 }
@@ -67,4 +79,58 @@ func (s *learnedMemoryStore) HasSeedForCurve(curveSignature string) bool {
 		}
 	}
 	return false
+}
+
+func (s *learnedMemoryStore) BestAlternativeForZone(currentCurveSignature string, zoneTemp, targetRPM int, minConfidence float64) (learnedMemoryCandidate, bool) {
+	if s == nil {
+		return learnedMemoryCandidate{}, false
+	}
+	best := learnedMemoryCandidate{}
+	bestFound := false
+	for key, state := range s.byKey {
+		if key.curveSignature == currentCurveSignature || key.zoneTemp != zoneTemp {
+			continue
+		}
+		if !state.hasSeed || state.confidence < minConfidence {
+			continue
+		}
+		rpm, ok := rpmFromCurveSignature(key.curveSignature, zoneTemp)
+		if !ok {
+			continue
+		}
+		gap := targetRPM - rpm
+		if gap < 0 {
+			gap = -gap
+		}
+		candidate := learnedMemoryCandidate{
+			curveSignature: key.curveSignature,
+			rpm:            rpm,
+			state:          state,
+			rpmGap:         gap,
+		}
+		if !bestFound || candidate.rpmGap < best.rpmGap || (candidate.rpmGap == best.rpmGap && candidate.state.confidence > best.state.confidence) {
+			best = candidate
+			bestFound = true
+		}
+	}
+	return best, bestFound
+}
+
+func rpmFromCurveSignature(curveSignature string, zoneTemp int) (int, bool) {
+	if strings.TrimSpace(curveSignature) == "" {
+		return 0, false
+	}
+	zoneKey := strconv.Itoa(zoneTemp)
+	for _, segment := range strings.Split(curveSignature, "|") {
+		parts := strings.SplitN(segment, ":", 2)
+		if len(parts) != 2 || parts[0] != zoneKey {
+			continue
+		}
+		rpm, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return 0, false
+		}
+		return rpm, true
+	}
+	return 0, false
 }
