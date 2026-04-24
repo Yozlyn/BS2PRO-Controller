@@ -231,6 +231,7 @@ const sy = (rpm: number)  => PAD_Y + PLOT_H - ((Math.min(rpmMax.value, Math.max(
 
 // 视图状态数据
 const localCurve = ref<types.FanCurvePoint[]>([])
+const deviceCurveBaseline = ref<types.FanCurvePoint[]>([])
 const hasUnsavedChanges = ref(false)
 const isSaving = ref(false)
 const isApplyingOffset = ref(false)
@@ -272,7 +273,7 @@ function curvesEqual(a: types.FanCurvePoint[], b: types.FanCurvePoint[]) {
 
 function getCurrentProfileBaseline() {
   if (selectedProfileId.value === DEVICE_PROFILE_ID) {
-    return props.config.fanCurve || []
+    return deviceCurveBaseline.value || []
   }
   const target = curveProfiles.value.find(profile => profile.id === selectedProfileId.value)
   return target?.curve || []
@@ -477,6 +478,7 @@ const offsetPath = computed(() => {
 watch(() => props.config.fanCurve, (curve) => {
   if (initialized.value || !curve?.length) return
   const c = cloneCurve(curve)
+  deviceCurveBaseline.value = cloneCurve(c)
   localCurve.value = c
   void initProfiles(c)
   initialized.value = true
@@ -484,10 +486,12 @@ watch(() => props.config.fanCurve, (curve) => {
 
 watch(() => props.config.fanCurve, (curve) => {
   if (!profilesInitialized.value || !curve?.length) return
+  const baseline = cloneCurve(curve)
+  deviceCurveBaseline.value = baseline
   const defaultProfile = curveProfiles.value.find(profile => profile.id === DEVICE_PROFILE_ID)
   if (!defaultProfile) return
-  defaultProfile.curve = cloneCurve(curve)
-  if (selectedProfileId.value === DEVICE_PROFILE_ID && !isDragging.value) {
+  defaultProfile.curve = cloneCurve(baseline)
+  if (selectedProfileId.value === DEVICE_PROFILE_ID && !isDragging.value && !hasUnsavedChanges.value && !isSaving.value && !isApplyingOffset.value) {
     localCurve.value = cloneCurve(defaultProfile.curve)
   }
   refreshUnsavedFlag()
