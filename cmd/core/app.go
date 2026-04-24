@@ -1712,8 +1712,7 @@ func (a *CoreApp) startTemperatureMonitoring() {
 					var effectiveCurve []types.FanCurvePoint
 					var latestFanData *types.FanData
 					if cfg.FanCurveOffsetEnabled && !processSwitchActive {
-						effectiveCurve = make([]types.FanCurvePoint, len(cfg.FanCurve))
-						copy(effectiveCurve, cfg.FanCurve)
+						effectiveCurve = a.visibleFanCurve(cfg.FanCurve)
 					} else {
 						effectiveCurve = cfg.FanCurve
 					}
