@@ -348,7 +348,6 @@ func (a *App) syncMonitorAutoStartFromConfig(reason string) {
 	desired := cfg.MonitorAutoStart
 	actual := a.getAutostartManager().CheckMonitorAutoStart()
 	if actual == desired {
-		logDebug("Monitor 自启动已与配置一致", "reason", reason, "source", source, "enabled", desired)
 		return
 	}
 	if err := a.getAutostartManager().SetMonitorAutoStart(desired); err != nil {
@@ -446,10 +445,6 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 	}()
 	if a.ctx == nil {
 		return
-	}
-
-	if event.Type != ipc.EventFanDataUpdate && event.Type != ipc.EventTemperatureUpdate {
-		logDebug("收到核心事件", "event_type", event.Type)
 	}
 
 	switch event.Type {
@@ -688,23 +683,6 @@ func (a *App) GetConfig() AppConfig {
 	}
 	cfg = normalizeMonitorConfig(cfg)
 	cfg.WindowsAutoStart = a.CheckWindowsAutoStart()
-	logDebug("获取配置成功",
-		"tray", cfg.TrayEnabled,
-		"notifications", cfg.NotificationsEnabled,
-		"hotkeys_enabled", cfg.Hotkeys != nil && cfg.Hotkeys.Enabled,
-		"global_hotkeys", func() int {
-			if cfg.Hotkeys == nil {
-				return 0
-			}
-			return len(cfg.Hotkeys.Global)
-		}(),
-		"inapp_hotkeys", func() int {
-			if cfg.Hotkeys == nil {
-				return 0
-			}
-			return len(cfg.Hotkeys.InApp)
-		}(),
-		"monitor_autostart", cfg.MonitorAutoStart)
 	return cfg
 }
 

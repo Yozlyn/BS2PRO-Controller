@@ -200,7 +200,6 @@ let unsubConnected: (() => void) | null = null
 let unsubDisconnected: (() => void) | null = null
 let unsubConfigUpdate: (() => void) | null = null
 let unsubWindowShown: (() => void) | null = null
-let unsubWindowHidden: (() => void) | null = null
 let unsubHotkeyAction: (() => void) | null = null
 let clearHoverTimer: number | null = null
 let hoverUnlockHandler: ((e: Event) => void) | null = null
@@ -265,7 +264,7 @@ const detachHoverUnlockListeners = () => {
   hoverUnlockHandler = null
 }
 
-const releaseHoverLock = (reason: string) => {
+const releaseHoverLock = () => {
   document.documentElement.classList.remove('disable-hover')
   if (clearHoverTimer) {
     window.clearTimeout(clearHoverTimer)
@@ -274,11 +273,11 @@ const releaseHoverLock = (reason: string) => {
   detachHoverUnlockListeners()
 }
 
-const lockHoverImmediately = (reason: string) => {
+const lockHoverImmediately = () => {
   document.documentElement.classList.add('disable-hover')
 }
 
-const clearStickyHover = (reason: string) => {
+const clearStickyHover = () => {
   detachHoverUnlockListeners()
   document.documentElement.classList.add('disable-hover')
   forceHoverReset()
@@ -289,7 +288,7 @@ const clearStickyHover = (reason: string) => {
       const ev = e as MouseEvent
       if (ev.clientX < 0 || ev.clientY < 0) return
     }
-    releaseHoverLock(`interaction:${e.type}`)
+    releaseHoverLock()
   }
   window.addEventListener('mousemove', hoverUnlockHandler)
   window.addEventListener('mousedown', hoverUnlockHandler)
@@ -298,59 +297,19 @@ const clearStickyHover = (reason: string) => {
 
   if (clearHoverTimer) window.clearTimeout(clearHoverTimer)
   clearHoverTimer = window.setTimeout(() => {
-    releaseHoverLock('timeout')
+    releaseHoverLock()
   }, 3000)
-  uiStateLogger(reason, 'debug')
-}
-
-const uiStateLogger = (reason: string, level: 'info' | 'debug' = 'debug') => {
-  const appRoot = document.getElementById('app')
-  const rect = appRoot?.getBoundingClientRect()
-  const appSize = rect ? `${Math.round(rect.width)}x${Math.round(rect.height)}` : 'nil'
-  const reasonLabel = formatUiReason(reason)
-  const msg = `触发原因=${reasonLabel}，页面隐藏=${document.hidden}，可见状态=${document.visibilityState}，窗口焦点=${document.hasFocus()}，窗口尺寸=${window.innerWidth}x${window.innerHeight}，应用区域=${appSize}，当前视图=${currentView.value}`
-  if (level === 'info') frontendLogger.info('界面状态', msg)
-  else frontendLogger.debug('界面状态', msg)
-}
-
-const formatUiReason = (reason: string) => {
-  const map: Record<string, string> = {
-    'visibility-hidden': '页面不可见',
-    visibilitychange: '可见性变化',
-    focus: '窗口获得焦点',
-    blur: '窗口失去焦点',
-    resize: '窗口尺寸变化',
-    pageshow: '页面显示',
-    'window-shown': '窗口显示',
-    'window-hidden': '窗口隐藏',
-    'window-shown+50ms': '窗口显示后50毫秒',
-    'window-shown+300ms': '窗口显示后300毫秒',
-    mounted: '应用挂载完成',
-    timeout: '悬停锁超时解除',
-    'click-minimize': '点击最小化按钮',
-    'click-close-as-minimize': '点击关闭按钮(映射最小化)',
-  }
-  if (reason.startsWith('interaction:')) {
-    const action = reason.replace('interaction:', '')
-    return `用户交互恢复(${action})`
-  }
-  return map[reason] || reason
 }
 
 const onVisibilityChange = () => {
-  if (document.hidden) lockHoverImmediately('visibility-hidden')
-  uiStateLogger('visibilitychange')
+  if (document.hidden) lockHoverImmediately()
 }
 const onFocus = () => {
-  uiStateLogger('focus')
   void syncWindowMaxState()
 }
-const onBlur = () => uiStateLogger('blur')
 const onResize = () => {
-  uiStateLogger('resize')
   void syncWindowMaxState()
 }
-const onPageShow = () => uiStateLogger('pageshow')
 
 async function syncWindowMaxState() {
   try { isWindowMaximised.value = await WindowIsMaximised() } catch {}
@@ -364,17 +323,12 @@ onMounted(async () => {
   appHotkeyHandler = (e: KeyboardEvent) => handleAppHotkeys(e)
   document.addEventListener('keydown', appHotkeyHandler)
   window.addEventListener('focus', onFocus)
-  window.addEventListener('blur', onBlur)
   window.addEventListener('resize', onResize)
-  window.addEventListener('pageshow', onPageShow)
   attachSystemThemeListener()
 
   unsubWindowShown = apiService.onWindowShown(() => {
-    clearStickyHover('window-shown')
-    setTimeout(() => uiStateLogger('window-shown+50ms', 'debug'), 50)
-    setTimeout(() => uiStateLogger('window-shown+300ms', 'debug'), 300)
+    clearStickyHover()
   })
-  unsubWindowHidden = apiService.onWindowHidden(() => uiStateLogger('window-hidden', 'debug'))
   unsubHotkeyAction = apiService.onHotkeyAction((action) => { void runHotkeyAction(action) })
 
   unsubFanData = apiService.onFanDataUpdate((data) => { fanData.value = data })
@@ -394,7 +348,6 @@ onMounted(async () => {
   unsubConfigUpdate = apiService.onConfigUpdate((cfg) => {
     config.value = cfg
     frontendLogger.setDebugEnabled(!!cfg.debugMode)
-    frontendLogger.debug('配置', '收到配置更新', { debugMode: cfg.debugMode })
   })
 
   try {
@@ -420,13 +373,12 @@ onMounted(async () => {
   } catch (e) { frontendLogger.error('应用初始化', '应用初始化失败', e) }
 
   await syncWindowMaxState()
-  uiStateLogger('mounted', 'debug')
 })
 
 onUnmounted(() => {
   unsubFanData?.(); unsubTemperature?.(); unsubConnected?.()
   unsubDisconnected?.(); unsubConfigUpdate?.()
-  unsubWindowShown?.(); unsubWindowHidden?.(); unsubHotkeyAction?.()
+  unsubWindowShown?.(); unsubHotkeyAction?.()
   if (clearHoverTimer) {
     window.clearTimeout(clearHoverTimer)
     clearHoverTimer = null
@@ -436,9 +388,7 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', onVisibilityChange)
   if (appHotkeyHandler) document.removeEventListener('keydown', appHotkeyHandler)
   window.removeEventListener('focus', onFocus)
-  window.removeEventListener('blur', onBlur)
   window.removeEventListener('resize', onResize)
-  window.removeEventListener('pageshow', onPageShow)
   detachSystemThemeListener()
 })
 
@@ -583,7 +533,7 @@ const handleConnect = async () => {
 
 const minimizeWindow = () => {
   frontendLogger.info('窗口', '点击最小化')
-  lockHoverImmediately('click-minimize')
+  lockHoverImmediately()
   HideWindow().catch((e) => frontendLogger.error('窗口', '最小化失败', e))
 }
 const toggleMaximize = () => {
@@ -592,7 +542,7 @@ const toggleMaximize = () => {
 }
 const closeWindow = () => {
   frontendLogger.info('窗口', '点击关闭(直接退出 GUI)')
-  lockHoverImmediately('click-close-as-minimize')
+  lockHoverImmediately()
   QuitApp().catch((e) => frontendLogger.error('窗口', '关闭 GUI 失败', e))
 }
 </script>
