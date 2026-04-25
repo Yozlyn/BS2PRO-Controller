@@ -1,5 +1,6 @@
 <template>
-  <div class="h-screen w-screen text-slate-900 dark:text-white font-sans transition-colors duration-300 overflow-hidden flex flex-col app-mica-surface">
+  <div class="h-screen w-screen text-slate-900 dark:text-white font-sans transition-colors duration-300 overflow-hidden flex flex-col app-mica-surface"
+       :class="bootstrapResolved ? 'opacity-100' : 'opacity-0 pointer-events-none'">
     <header class="h-12 shrink-0 flex items-center justify-between bg-transparent window-drag">
       <div class="flex items-center gap-3 window-no-drag pl-6"
            @mouseenter="headerFanSpeed = isConnected ? '1.2s' : '10s'"
@@ -173,6 +174,7 @@ applyTheme(isDark.value)
 const isCollapsed = ref(true)
 const currentView = ref('dashboard')
 const isConnected = ref(false)
+const bootstrapResolved = ref(false)
 const deviceModel = ref('BS2PRO')
 const deviceProductId = ref('')
 const appVersion = ref('')
@@ -199,6 +201,8 @@ let unsubTemperature: (() => void) | null = null
 let unsubConnected: (() => void) | null = null
 let unsubDisconnected: (() => void) | null = null
 let unsubConfigUpdate: (() => void) | null = null
+let unsubCoreServiceConnected: (() => void) | null = null
+let unsubCoreServiceError: (() => void) | null = null
 let unsubWindowShown: (() => void) | null = null
 let unsubHotkeyAction: (() => void) | null = null
 let clearHoverTimer: number | null = null
@@ -315,6 +319,31 @@ async function syncWindowMaxState() {
   try { isWindowMaximised.value = await WindowIsMaximised() } catch {}
 }
 
+function applyDeviceStatus(raw: any) {
+  const s = raw || {}
+  isConnected.value = !!s.connected
+  deviceModel.value = (s.model || 'BS2PRO').toString()
+  deviceProductId.value = (s.productId || '').toString()
+}
+
+function resolveBootstrap() {
+  bootstrapResolved.value = true
+}
+
+async function refreshBootstrapStatus() {
+  try {
+    const status = await apiService.getDeviceStatus()
+    applyDeviceStatus(status)
+    if (isConnected.value) {
+      const [td, fd] = await Promise.allSettled([apiService.getTemperature(), apiService.getCurrentFanData()])
+      if (td.status === 'fulfilled') temperature.value = td.value
+      if (fd.status === 'fulfilled') fanData.value = fd.value
+    }
+    resolveBootstrap()
+  } catch {
+  }
+}
+
 onMounted(async () => {
   applyTheme(resolveInitialDarkMode())
   void syncThemePreferenceToNative()
@@ -334,12 +363,14 @@ onMounted(async () => {
   unsubFanData = apiService.onFanDataUpdate((data) => { fanData.value = data })
   unsubTemperature = apiService.onTemperatureUpdate((data) => { temperature.value = data })
   unsubConnected = apiService.onDeviceConnected((data: any) => {
+    resolveBootstrap()
     isConnected.value = true
     deviceModel.value = (data?.model || 'BS2PRO').toString()
     deviceProductId.value = (data?.productId || '').toString()
     loadConfig()
   })
   unsubDisconnected = apiService.onDeviceDisconnected(() => {
+    resolveBootstrap()
     isConnected.value = false
     deviceModel.value = 'BS2PRO'
     deviceProductId.value = ''
@@ -348,6 +379,12 @@ onMounted(async () => {
   unsubConfigUpdate = apiService.onConfigUpdate((cfg) => {
     config.value = cfg
     frontendLogger.setDebugEnabled(!!cfg.debugMode)
+  })
+  unsubCoreServiceConnected = apiService.onCoreServiceConnected(() => {
+    if (!bootstrapResolved.value) void refreshBootstrapStatus()
+  })
+  unsubCoreServiceError = apiService.onCoreServiceError(() => {
+    resolveBootstrap()
   })
 
   try {
@@ -359,17 +396,13 @@ onMounted(async () => {
       frontendLogger.setDebugEnabled(!!cfg.value.debugMode)
     }
     if (ver.status === 'fulfilled') appVersion.value = ver.value
-    if (status.status === 'fulfilled') {
-      const s = (status.value as any) || {}
-      isConnected.value = !!s.connected
-      deviceModel.value = (s.model || 'BS2PRO').toString()
-      deviceProductId.value = (s.productId || '').toString()
-    }
+    if (status.status === 'fulfilled') applyDeviceStatus(status.value)
     if (isConnected.value) {
       const [td, fd] = await Promise.allSettled([apiService.getTemperature(), apiService.getCurrentFanData()])
       if (td.status === 'fulfilled') temperature.value = td.value
       if (fd.status === 'fulfilled') fanData.value = fd.value
     }
+    if (status.status === 'fulfilled') resolveBootstrap()
   } catch (e) { frontendLogger.error('应用初始化', '应用初始化失败', e) }
 
   await syncWindowMaxState()
@@ -377,7 +410,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   unsubFanData?.(); unsubTemperature?.(); unsubConnected?.()
-  unsubDisconnected?.(); unsubConfigUpdate?.()
+  unsubDisconnected?.(); unsubConfigUpdate?.(); unsubCoreServiceConnected?.(); unsubCoreServiceError?.()
   unsubWindowShown?.(); unsubHotkeyAction?.()
   if (clearHoverTimer) {
     window.clearTimeout(clearHoverTimer)

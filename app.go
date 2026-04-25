@@ -178,40 +178,9 @@ func (a *App) startup(ctx context.Context) {
 	} else {
 		logInfo("已成功连接到核心服务 IPC 管道")
 		a.scheduleRegisterGUIClientRole("startup-connect")
-
-		// 启动时主动拉取一次配置，同步状态
-		cfg := a.GetConfig()
-		setGUIDebugMode(cfg.DebugMode)
-		status := a.GetDeviceStatus()
-		logDebug("启动阶段状态快照",
-			"config_tray", cfg.TrayEnabled,
-			"config_notifications", cfg.NotificationsEnabled,
-			"config_hotkeys", hotkeysRequireMonitor(cfg),
-			"config_monitor_autostart", cfg.MonitorAutoStart,
-			"status_connected", status["connected"],
-			"status_model", status["model"],
-			"status_product_id", status["productId"])
-		cfg.WindowsAutoStart = a.autostartManager.CheckWindowsAutoStart()
-		a.syncMonitorAutoStartFromConfig("startup-connect")
-
 		a.mutex.Lock()
-		a.autoControlState = cfg.AutoControl
 		a.coreRunning = true
-		if connected, ok := status["connected"].(bool); ok {
-			a.isConnected = connected
-		}
-		if paused, ok := status["paused"].(bool); ok {
-			a.coreRunning = !paused
-		} else {
-			a.coreRunning = true
-		}
 		a.mutex.Unlock()
-		go func() {
-			runtime.EventsEmit(ctx, "config-update", cfg)
-			if a.isConnected {
-				runtime.EventsEmit(ctx, "device-connected", status["currentData"])
-			}
-		}()
 	}
 
 	// 启动连接健康检查
@@ -702,7 +671,6 @@ func (a *App) UpdateConfig(cfg AppConfig) error {
 	if oldCfg.ProcessSwitchEnabled != cfg.ProcessSwitchEnabled {
 		a.syncProcessSwitchMonitor(cfg.ProcessSwitchEnabled)
 	}
-	a.syncMonitorAutoStartFromConfig("update-config")
 	if oldCfg.MonitorAutoStart != cfg.MonitorAutoStart {
 		a.syncMonitorAgentState()
 	}

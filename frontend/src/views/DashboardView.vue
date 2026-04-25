@@ -78,8 +78,8 @@
                    :has-dot="true" :dot-color="isConnected ? 'bg-emerald-500' : 'bg-slate-400'"
                    :value-color="isConnected ? 'text-emerald-500' : 'text-slate-400'" />
           <InfoRow label="当前挡位"
-                   :value="isConnected ? maxSupportedGearText : '--'"
-                   :value-color="isConnected ? gearColor : 'text-slate-400'"
+                    :value="isConnected ? maxSupportedGearText : '--'"
+                    :value-color="isConnected ? gearColor : 'text-slate-400'"
                    :has-dot="isConnected" :dot-color="gearDot" value-bold />
           <InfoRow label="最高转速"
                    :value="isConnected ? `${fanMaxRpm} RPM` : '--'"
