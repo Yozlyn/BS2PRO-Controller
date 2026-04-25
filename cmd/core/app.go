@@ -1677,6 +1677,9 @@ func (a *CoreApp) startTemperatureMonitoring() {
 
 				// 原有的风扇速度控制
 				if cfg.AutoControl && temp.MaxTemp > 0 {
+					if !a.deviceManager.IsConnected() {
+						continue
+					}
 					newSampleCount := max(cfg.TempSampleCount, 1)
 					// 偏移开启时，平滑采样至少3次，确保趋势数据不受噪声干扰
 					if cfg.FanCurveOffsetEnabled && !processSwitchActive && newSampleCount < 3 {
