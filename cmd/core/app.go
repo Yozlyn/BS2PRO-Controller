@@ -1763,12 +1763,12 @@ func (a *CoreApp) startTemperatureMonitoring() {
 					if latestFanData != nil {
 						rpmError := plan.CommandTargetRPM - int(latestFanData.CurrentRPM)
 						targetGap := int(latestFanData.TargetRPM) - int(latestFanData.CurrentRPM)
-						a.fanOffsetCtrl.ObserveFanResponse(avgTemp, plan.CommandTargetRPM, int(latestFanData.CurrentRPM), int(latestFanData.TargetRPM))
+						a.fanOffsetCtrl.ObserveFanResponse(avgTemp, int(latestFanData.CurrentRPM), int(latestFanData.TargetRPM))
 						if plan.ShouldSend || plan.StateChanged {
 							a.logDebug("智能变频监控计算结果", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "avg_temp", avgTemp, "raw_temp", temp.MaxTemp, "curve_points", len(cfg.FanCurve), "current_rpm", latestFanData.CurrentRPM, "device_target_rpm", latestFanData.TargetRPM, "rpm_error", rpmError, "target_gap", targetGap, "mode", latestFanData.WorkMode, "gear", latestFanData.SetGear)
 						}
 					} else {
-						a.fanOffsetCtrl.ObserveFanResponse(avgTemp, 0, 0, 0)
+						a.fanOffsetCtrl.ObserveFanResponse(avgTemp, 0, 0)
 						if plan.ShouldSend || plan.StateChanged {
 							a.logDebug("智能变频监控计算结果", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "avg_temp", avgTemp, "raw_temp", temp.MaxTemp, "curve_points", len(cfg.FanCurve), "current_rpm", "unknown")
 						}
@@ -1798,6 +1798,8 @@ func (a *CoreApp) startTemperatureMonitoring() {
 								} else {
 									a.logError("智能变频监控下发风扇转速失败", "thermal_target_rpm", plan.ThermalTargetRPM, "target_rpm", plan.CommandTargetRPM, "shape_reason", plan.ShapeReason, "avg_temp", avgTemp)
 								}
+							} else {
+								a.fanOffsetCtrl.ObserveFanCommand(plan.CommandTargetRPM)
 							}
 						}
 					}
