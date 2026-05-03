@@ -15,11 +15,19 @@ const (
 	fanCommandBoostStepRPM    = 700
 	fanCommandCriticalStepRPM = 900
 	fanCommandDropStepRPM     = 200
+	fanCommandDropBoostRPM    = 400
+	fanCommandDropFastRPM     = 700
 	fanCommandDropHotStepRPM  = 100
 	fanCommandCoolingHold     = 12 * time.Second
+	fanCommandCoolingSoftHold = 6 * time.Second
+	fanCommandCoolingFastHold = 3 * time.Second
 	fanCommandResendCooldown  = 1500 * time.Millisecond
 	fanCommandModeRecoveryGap = 4 * time.Second
 	fanCommandHotHoldTemp     = 80
+	fanCommandWarmHoldTemp    = 76
+	fanCommandFastCoolTemp    = 70
+	fanCommandSoftCoolGapRPM  = 900
+	fanCommandFastCoolGapRPM  = 1600
 )
 
 type fanCommandDirection string
@@ -229,11 +237,12 @@ func shapeCommandRPM(now time.Time, referenceRPM, thermalTargetRPM, currentTemp 
 		return commandRPM, "rise_follow", state
 	case fanCommandDirectionCooling:
 		if !state.coolingDecayActive {
+			holdDuration := fanCommandCoolingDuration(referenceRPM, thermalTargetRPM, currentTemp)
 			holdUntil := state.coolingHoldUntil
 			if holdUntil.IsZero() {
-				holdUntil = now.Add(fanCommandCoolingHold)
+				holdUntil = now.Add(holdDuration)
 			}
-			if !state.lastAboveThreshold.IsZero() {
+			if !state.lastAboveThreshold.IsZero() && shouldExtendFanCommandThresholdHold(referenceRPM, thermalTargetRPM, currentTemp) {
 				thresholdHoldUntil := state.lastAboveThreshold.Add(fanCommandCoolingHold)
 				if thresholdHoldUntil.After(holdUntil) {
 					holdUntil = thresholdHoldUntil
@@ -247,10 +256,7 @@ func shapeCommandRPM(now time.Time, referenceRPM, thermalTargetRPM, currentTemp 
 			state.coolingDecayActive = true
 		}
 
-		dropStep := fanCommandDropStepRPM
-		if currentTemp >= fanCommandHotHoldTemp {
-			dropStep = fanCommandDropHotStepRPM
-		}
+		dropStep := fanCommandCoolingDropStep(referenceRPM, thermalTargetRPM, currentTemp)
 		commandRPM := max(thermalTargetRPM, referenceRPM-dropStep)
 		if commandRPM > thermalTargetRPM {
 			return commandRPM, "ramp_down", state
@@ -261,6 +267,39 @@ func shapeCommandRPM(now time.Time, referenceRPM, thermalTargetRPM, currentTemp 
 		state.coolingHoldUntil = time.Time{}
 		state.coolingDecayActive = false
 		return referenceRPM, "steady", state
+	}
+}
+
+func fanCommandCoolingDuration(referenceRPM, thermalTargetRPM, currentTemp int) time.Duration {
+	gap := max(0, referenceRPM-thermalTargetRPM)
+	switch {
+	case currentTemp >= fanCommandHotHoldTemp:
+		return fanCommandCoolingHold
+	case currentTemp <= fanCommandFastCoolTemp && gap >= fanCommandFastCoolGapRPM:
+		return fanCommandCoolingFastHold
+	case currentTemp <= fanCommandWarmHoldTemp || gap >= fanCommandSoftCoolGapRPM:
+		return fanCommandCoolingSoftHold
+	default:
+		return fanCommandCoolingHold
+	}
+}
+
+func shouldExtendFanCommandThresholdHold(referenceRPM, thermalTargetRPM, currentTemp int) bool {
+	gap := max(0, referenceRPM-thermalTargetRPM)
+	return currentTemp >= fanCommandWarmHoldTemp || gap < fanCommandSoftCoolGapRPM
+}
+
+func fanCommandCoolingDropStep(referenceRPM, thermalTargetRPM, currentTemp int) int {
+	gap := max(0, referenceRPM-thermalTargetRPM)
+	switch {
+	case currentTemp >= fanCommandHotHoldTemp:
+		return fanCommandDropHotStepRPM
+	case gap >= fanCommandFastCoolGapRPM:
+		return fanCommandDropFastRPM
+	case gap >= fanCommandSoftCoolGapRPM:
+		return fanCommandDropBoostRPM
+	default:
+		return fanCommandDropStepRPM
 	}
 }
 
