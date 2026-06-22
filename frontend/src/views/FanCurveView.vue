@@ -232,12 +232,14 @@ const sy = (rpm: number)  => PAD_Y + PLOT_H - ((Math.min(rpmMax.value, Math.max(
 // 视图状态数据
 const localCurve = ref<types.FanCurvePoint[]>([])
 const deviceCurveBaseline = ref<types.FanCurvePoint[]>([])
+const visibleCurve = ref<types.FanCurvePoint[]>([])
 const hasUnsavedChanges = ref(false)
 const isSaving = ref(false)
 const isApplyingOffset = ref(false)
 const clickedButton = ref<string | null>(null)
 let buttonAnimTimer: ReturnType<typeof setTimeout> | null = null
 let transferMsgTimer: ReturnType<typeof setTimeout> | null = null
+let unsubFanCurveUpdate: (() => void) | null = null
 const initialized = ref(false)
 const profilesInitialized = ref(false)
 const chartContainer = ref<HTMLElement | null>(null)
@@ -281,6 +283,20 @@ function getCurrentProfileBaseline() {
 
 function refreshUnsavedFlag() {
   hasUnsavedChanges.value = !curvesEqual(ensureCurve(localCurve.value), ensureCurve(getCurrentProfileBaseline()))
+}
+
+async function refreshVisibleCurve() {
+  try {
+    visibleCurve.value = cloneCurve(await apiService.getFanCurve())
+  } catch (e) {
+    frontendLogger.error('风扇曲线', '获取当前可见曲线失败', e)
+  }
+}
+
+function clearLocalOffsets() {
+  localCurve.value = localCurve.value.map((p) =>
+    (p.offset || 0) === 0 ? p : { ...p, offset: 0 },
+  )
 }
 
 function onShortcutSave(event: Event) {
@@ -482,6 +498,7 @@ watch(() => props.config.fanCurve, (curve) => {
   localCurve.value = c
   void initProfiles(c)
   initialized.value = true
+  if (props.config.fanCurveOffsetEnabled) void refreshVisibleCurve()
 }, { immediate: true })
 
 watch(() => props.config.fanCurve, (curve) => {
@@ -495,15 +512,25 @@ watch(() => props.config.fanCurve, (curve) => {
     localCurve.value = cloneCurve(defaultProfile.curve)
   }
   refreshUnsavedFlag()
+  if (props.config.fanCurveOffsetEnabled) void refreshVisibleCurve()
 }, { deep: true })
 
-watch(() => props.config.fanCurve, (curve) => {
-  if (!initialized.value || !props.config.fanCurveOffsetEnabled) return
+watch(visibleCurve, (curve) => {
+  if (!initialized.value || !props.config.fanCurveOffsetEnabled || !curve?.length) return
   localCurve.value = localCurve.value.map((p, i) => {
     const cfgOffset = curve[i]?.offset ?? 0
     return p.offset === cfgOffset ? p : { ...p, offset: cfgOffset }
   })
 }, { deep: true })
+
+watch(() => props.config.fanCurveOffsetEnabled, (enabled) => {
+  if (!initialized.value) return
+  if (!enabled) {
+    clearLocalOffsets()
+    return
+  }
+  void refreshVisibleCurve()
+}, { immediate: true })
 
 // 计算悬停吸附点
 function computeHoverSnap(clientX: number, clientY: number): HoverSnap | null {
@@ -577,11 +604,15 @@ function handleMouseUp() {
 }
 function globalMouseUp() { if (isDragging.value) handleMouseUp() }
 onMounted(() => {
+  unsubFanCurveUpdate = apiService.onFanCurveUpdate((curve) => {
+    visibleCurve.value = cloneCurve(curve)
+  })
   document.addEventListener('mouseup', globalMouseUp)
   document.addEventListener('app-shortcut-save', onShortcutSave as EventListener)
   document.addEventListener('app-shortcut-escape', onShortcutEscape as EventListener)
 })
 onUnmounted(() => {
+  unsubFanCurveUpdate?.()
   document.removeEventListener('mouseup', globalMouseUp)
   document.removeEventListener('app-shortcut-save', onShortcutSave as EventListener)
   document.removeEventListener('app-shortcut-escape', onShortcutEscape as EventListener)

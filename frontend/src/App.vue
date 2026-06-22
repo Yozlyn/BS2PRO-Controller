@@ -116,8 +116,10 @@
         <SystemSettingsView v-else-if="currentView === 'system-settings'"
           :is-dark="isDark" :is-connected="isConnected"
           :follow-system-theme="followSystemTheme"
+          :core-paused="corePaused"
           :config="config"
           @config-change="handleConfigChange"
+          @core-paused-change="handleCorePausedChange"
           @follow-system-theme-change="handleFollowSystemThemeChange" />
         <AboutView v-else-if="currentView === 'about'" :is-dark="isDark" />
       </main>
@@ -174,6 +176,7 @@ applyTheme(isDark.value)
 const isCollapsed = ref(true)
 const currentView = ref('dashboard')
 const isConnected = ref(false)
+const corePaused = ref(false)
 const bootstrapResolved = ref(false)
 const deviceModel = ref('BS2PRO')
 const deviceProductId = ref('')
@@ -203,6 +206,7 @@ let unsubDisconnected: (() => void) | null = null
 let unsubConfigUpdate: (() => void) | null = null
 let unsubCoreServiceConnected: (() => void) | null = null
 let unsubCoreServiceError: (() => void) | null = null
+let unsubCoreStatusUpdate: (() => void) | null = null
 let unsubWindowShown: (() => void) | null = null
 let unsubHotkeyAction: (() => void) | null = null
 let clearHoverTimer: number | null = null
@@ -322,6 +326,7 @@ async function syncWindowMaxState() {
 function applyDeviceStatus(raw: any) {
   const s = raw || {}
   isConnected.value = !!s.connected
+  corePaused.value = !!s.paused
   deviceModel.value = (s.model || 'BS2PRO').toString()
   deviceProductId.value = (s.productId || '').toString()
 }
@@ -386,6 +391,14 @@ onMounted(async () => {
   unsubCoreServiceError = apiService.onCoreServiceError(() => {
     resolveBootstrap()
   })
+  unsubCoreStatusUpdate = apiService.onCoreStatusUpdate((status) => {
+    applyDeviceStatus(status)
+    if (status.paused) {
+      fanData.value = null
+      return
+    }
+    void refreshBootstrapStatus()
+  })
 
   try {
     const [cfg, ver, status] = await Promise.allSettled([
@@ -411,7 +424,7 @@ onMounted(async () => {
 onUnmounted(() => {
   unsubFanData?.(); unsubTemperature?.(); unsubConnected?.()
   unsubDisconnected?.(); unsubConfigUpdate?.(); unsubCoreServiceConnected?.(); unsubCoreServiceError?.()
-  unsubWindowShown?.(); unsubHotkeyAction?.()
+  unsubCoreStatusUpdate?.(); unsubWindowShown?.(); unsubHotkeyAction?.()
   if (clearHoverTimer) {
     window.clearTimeout(clearHoverTimer)
     clearHoverTimer = null
@@ -458,6 +471,15 @@ const handleFollowSystemThemeChange = (enabled: boolean) => {
 const toggleSidebar = () => { isCollapsed.value = !isCollapsed.value }
 const setCurrentView = (view: string) => { currentView.value = view }
 const handleConfigChange = (newConfig: types.AppConfig) => { config.value = newConfig }
+const handleCorePausedChange = (paused: boolean) => {
+  corePaused.value = paused
+  if (paused) {
+    isConnected.value = false
+    fanData.value = null
+    return
+  }
+  void refreshBootstrapStatus()
+}
 
 const appViewActionMap: Record<string, string> = {
   'navigate-dashboard': 'dashboard',

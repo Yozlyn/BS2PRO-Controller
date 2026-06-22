@@ -26,6 +26,9 @@
         <div class="h-px bg-slate-50 dark:bg-white/6 mx-6" />
         <SettingItem title="跟随系统主题" desc="启用后界面亮暗外观将自动跟随 Windows 系统主题切换"
                      :active="followSystemTheme" @toggle="handleFollowSystemTheme" />
+        <div class="h-px bg-slate-50 dark:bg-white/6 mx-6" />
+        <SettingItem title="暂停核心控制" desc="暂停后停止设备连接、自动温控与进程联动；保留界面与恢复入口"
+                     :active="corePaused" @toggle="handleCorePaused" />
       </div>
 
       <!-- 连接设置 -->
@@ -202,10 +205,11 @@ interface Props {
   isDark: boolean
   isConnected: boolean
   followSystemTheme: boolean
+  corePaused: boolean
   config: types.AppConfig
 }
 const props = defineProps<Props>()
-const emit = defineEmits<{ 'config-change': [config: types.AppConfig], 'follow-system-theme-change': [enabled: boolean] }>()
+const emit = defineEmits<{ 'config-change': [config: types.AppConfig], 'follow-system-theme-change': [enabled: boolean], 'core-paused-change': [paused: boolean] }>()
 
 const appVersion = ref('')
 const debugInfo = ref<any>(null)
@@ -317,6 +321,16 @@ function closeAlertDialog() {
 
 function handleFollowSystemTheme() {
   emit('follow-system-theme-change', !props.followSystemTheme)
+}
+
+async function handleCorePaused() {
+  const paused = !props.corePaused
+  try {
+    const ok = await apiService.setCorePaused(paused)
+    if (ok) emit('core-paused-change', paused)
+  } catch (e) {
+    frontendLogger.error('系统设置', '设置核心暂停状态失败', e)
+  }
 }
 
 async function handleGearLight() {

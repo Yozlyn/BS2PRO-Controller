@@ -496,6 +496,7 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 				// 发送恢复事件
 				runtime.EventsEmit(a.ctx, "core-service-connected", nil)
 				runtime.EventsEmit(a.ctx, "config-update", cfg)
+				runtime.EventsEmit(a.ctx, ipc.EventFanCurveUpdate, a.GetFanCurve())
 
 				// 设备在线时同步通知前端
 				if a.isConnected {
@@ -533,6 +534,29 @@ func (a *App) handleCoreEvent(event ipc.Event) {
 			a.autoControlState = cfg.AutoControl
 			a.mutex.Unlock()
 			runtime.EventsEmit(a.ctx, "config-update", cfg)
+		}
+
+	case ipc.EventFanCurveUpdate:
+		var curve []types.FanCurvePoint
+		if err := json.Unmarshal(event.Data, &curve); err == nil {
+			runtime.EventsEmit(a.ctx, ipc.EventFanCurveUpdate, curve)
+		}
+
+	case ipc.EventCoreStatusUpdate:
+		var status map[string]any
+		if err := json.Unmarshal(event.Data, &status); err == nil {
+			a.mutex.Lock()
+			if connected, ok := status["connected"].(bool); ok {
+				a.isConnected = connected
+			}
+			if paused, ok := status["paused"].(bool); ok {
+				a.coreRunning = !paused
+			}
+			a.mutex.Unlock()
+			runtime.EventsEmit(a.ctx, ipc.EventCoreStatusUpdate, status)
+			if paused, ok := status["paused"].(bool); ok && paused {
+				runtime.EventsEmit(a.ctx, "device-disconnected", nil)
+			}
 		}
 
 	case ipc.EventHotkeyAction:
@@ -1575,6 +1599,7 @@ func (a *App) StopCoreService() bool {
 		a.coreRunning = false
 		a.isConnected = false
 		a.mutex.Unlock()
+		runtime.EventsEmit(a.ctx, "device-disconnected", nil)
 		logInfo("核心服务已切换为暂停态")
 		return true
 	} else {

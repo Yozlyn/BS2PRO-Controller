@@ -593,6 +593,28 @@ func handleEvent(event ipc.Event) {
 		}
 		return
 	}
+	if event.Type == ipc.EventCoreStatusUpdate {
+		var deviceStatus map[string]any
+		if err := json.Unmarshal(event.Data, &deviceStatus); err != nil {
+			monitorWarn("core status update parse failed", "error", err)
+			return
+		}
+		status := monitorTrayState.GetStatus()
+		if connected, ok := deviceStatus["connected"].(bool); ok {
+			status.Connected = connected
+		}
+		if paused, ok := deviceStatus["paused"].(bool); ok {
+			status.CoreRunning = !paused
+		}
+		if !status.CoreRunning {
+			status.Connected = false
+			status.CPUTemp = 0
+			status.GPUTemp = 0
+			status.CurrentRPM = 0
+		}
+		monitorTrayState.SetStatus(status)
+		return
+	}
 	if event.Type == ipc.EventHotkeyEditMode {
 		var params ipc.SetBoolParams
 		if err := json.Unmarshal(event.Data, &params); err == nil {

@@ -31,7 +31,9 @@ import {
   CheckWindowsAutoStart,
   CheckProcessSwitchNow,
   ListRunningProcessNames,
+  ResumeCoreService,
   SetWindowsAutoStart,
+  StopCoreService,
   SaveFanCurveProfileConfigs,
   LogFrontendError,
 } from '../../wailsjs/go/main/App';
@@ -102,6 +104,10 @@ class ApiService {
   // 智能变频
   async setAutoControl(enabled: boolean): Promise<void> {
     return await SetAutoControl(enabled);
+  }
+
+  async setCorePaused(paused: boolean): Promise<boolean> {
+    return paused ? await StopCoreService() : await ResumeCoreService();
   }
 
   // 自定义转速
@@ -218,6 +224,11 @@ class ApiService {
     return () => EventsOff('config-update');
   }
 
+  onFanCurveUpdate(callback: (curve: types.FanCurvePoint[]) => void): () => void {
+    EventsOn('fan-curve-update', callback);
+    return () => EventsOff('fan-curve-update');
+  }
+
   // 核心服务连接状态事件
   onCoreServiceError(callback: (msg: string) => void): () => void {
     EventsOn('core-service-error', callback);
@@ -227,6 +238,11 @@ class ApiService {
   onCoreServiceConnected(callback: () => void): () => void {
     EventsOn('core-service-connected', callback);
     return () => EventsOff('core-service-connected');
+  }
+
+  onCoreStatusUpdate(callback: (status: { paused?: boolean; connected?: boolean }) => void): () => void {
+    EventsOn('core-status-update', callback);
+    return () => EventsOff('core-status-update');
   }
 
   onWindowShown(callback: () => void): () => void {
