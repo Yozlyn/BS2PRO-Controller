@@ -117,6 +117,8 @@ const (
 	EventDeviceDisconnected  = "device-disconnected"
 	EventDeviceError         = "device-error"
 	EventConfigUpdate        = "config-update"
+	EventFanCurveUpdate      = "fan-curve-update"
+	EventCoreStatusUpdate    = "core-status-update"
 	EventServiceConnected    = "service-connected"
 	EventServiceDisconnected = "service-disconnected"
 	EventNotificationRequest = "notification-request"

@@ -38,24 +38,18 @@ func (a *CoreApp) visibleFanCurve(base []types.FanCurvePoint) []types.FanCurvePo
 	return cloneFanCurvePoints(base)
 }
 
-func (a *CoreApp) configWithRuntimeCurve(cfg types.AppConfig) types.AppConfig {
-	a.mutex.RLock()
-	defer a.mutex.RUnlock()
-	return a.configWithRuntimeCurveLocked(cfg)
-}
-
-func (a *CoreApp) configWithRuntimeCurveLocked(cfg types.AppConfig) types.AppConfig {
-	if len(a.runtimeFanCurve) > 0 {
-		cfg.FanCurve = cloneFanCurvePoints(a.runtimeFanCurve)
-	}
-	return cfg
-}
-
 func (a *CoreApp) broadcastConfigUpdate(cfg types.AppConfig) {
 	if a.ipcServer == nil {
 		return
 	}
-	a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, a.configWithRuntimeCurve(cfg))
+	a.ipcServer.BroadcastEvent(ipc.EventConfigUpdate, cfg)
+}
+
+func (a *CoreApp) broadcastVisibleFanCurve(base []types.FanCurvePoint) {
+	if a.ipcServer == nil {
+		return
+	}
+	a.ipcServer.BroadcastEvent(ipc.EventFanCurveUpdate, a.visibleFanCurve(base))
 }
 
 func fanCurvesEqual(a, b []types.FanCurvePoint) bool {
